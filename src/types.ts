@@ -2,6 +2,16 @@ export type DiffSection = {
   binary: boolean;
   id: string;
   kind: 'commit' | 'staged' | 'unstaged';
+  newFile?: {
+    cacheKey?: string;
+    contents: string;
+    name: string;
+  };
+  oldFile?: {
+    cacheKey?: string;
+    contents: string;
+    name: string;
+  };
   patch: string;
 };
 
@@ -42,4 +52,8 @@ export type RepositoryState = {
   launchPath: string;
   root: string;
   source: ReviewSource;
+};
+
+export type CodiffPreferences = {
+  showWhitespace: boolean;
 };

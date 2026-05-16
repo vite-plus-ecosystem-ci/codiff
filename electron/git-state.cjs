@@ -16,6 +16,38 @@ const git = async (repoPath, args, options = {}) => {
   return stdout;
 };
 
+const gitBuffer = async (repoPath, args) => {
+  const { stdout } = await execFileAsync('git', ['-C', repoPath, ...args], {
+    encoding: 'buffer',
+    maxBuffer: 1024 * 1024 * 64,
+  });
+  return stdout;
+};
+
+const fileSort = (left, right) => {
+  const leftParts = left.path.split('/');
+  const rightParts = right.path.split('/');
+  const length = Math.min(leftParts.length, rightParts.length);
+
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = leftParts[index];
+    const rightPart = rightParts[index];
+    if (leftPart === rightPart) {
+      continue;
+    }
+
+    const leftIsDirectory = index < leftParts.length - 1;
+    const rightIsDirectory = index < rightParts.length - 1;
+    if (leftIsDirectory !== rightIsDirectory) {
+      return leftIsDirectory ? -1 : 1;
+    }
+
+    return leftPart.localeCompare(rightPart);
+  }
+
+  return leftParts.length - rightParts.length;
+};
+
 const parseStatus = (raw) => {
   const parts = raw.split('\0').filter(Boolean);
   const files = new Map();
@@ -63,10 +95,76 @@ const parseStatus = (raw) => {
     files.set(path, current);
   }
 
-  return [...files.values()].sort((left, right) => left.path.localeCompare(right.path));
+  return [...files.values()].sort(fileSort);
 };
 
 const isBinaryBuffer = (buffer) => buffer.includes(0);
+
+const bufferToTextFile = (name, buffer, cacheKey) => {
+  if (isBinaryBuffer(buffer)) {
+    return {
+      binary: true,
+      file: undefined,
+    };
+  }
+
+  return {
+    binary: false,
+    file: {
+      cacheKey,
+      contents: buffer.toString('utf8'),
+      name,
+    },
+  };
+};
+
+const readGitFile = async (repoRoot, ref, path) => {
+  try {
+    const buffer = await gitBuffer(repoRoot, ['show', `${ref}:${path}`]);
+    return bufferToTextFile(path, buffer, `${ref}:${path}`);
+  } catch {
+    return {
+      binary: false,
+      file: {
+        cacheKey: `${ref}:${path}:empty`,
+        contents: '',
+        name: path,
+      },
+    };
+  }
+};
+
+const readIndexFile = async (repoRoot, path) => {
+  try {
+    const buffer = await gitBuffer(repoRoot, ['show', `:${path}`]);
+    return bufferToTextFile(path, buffer, `index:${path}`);
+  } catch {
+    return {
+      binary: false,
+      file: {
+        cacheKey: `index:${path}:empty`,
+        contents: '',
+        name: path,
+      },
+    };
+  }
+};
+
+const readWorkingTreeFile = async (repoRoot, path) => {
+  try {
+    const buffer = await fs.readFile(join(repoRoot, path));
+    return bufferToTextFile(path, buffer, `worktree:${path}:${buffer.length}`);
+  } catch {
+    return {
+      binary: false,
+      file: {
+        cacheKey: `worktree:${path}:empty`,
+        contents: '',
+        name: path,
+      },
+    };
+  }
+};
 
 const createUntrackedPatch = async (repoRoot, path) => {
   const absolutePath = join(repoRoot, path);
@@ -119,6 +217,41 @@ const getPatch = async (repoRoot, path, kind, untracked) => {
   };
 };
 
+const getWorkingTreeContents = async (repoRoot, item, kind) => {
+  if (kind === 'staged') {
+    const oldFile = await readGitFile(repoRoot, 'HEAD', item.oldPath || item.path);
+    const newFile = await readIndexFile(repoRoot, item.path);
+
+    return {
+      binary: oldFile.binary || newFile.binary,
+      newFile: newFile.file,
+      oldFile: oldFile.file,
+    };
+  }
+
+  if (item.untracked) {
+    const newFile = await readWorkingTreeFile(repoRoot, item.path);
+    return {
+      binary: newFile.binary,
+      newFile: newFile.file,
+      oldFile: {
+        cacheKey: `empty:${item.path}`,
+        contents: '',
+        name: item.path,
+      },
+    };
+  }
+
+  const oldFile = await readIndexFile(repoRoot, item.oldPath || item.path);
+  const newFile = await readWorkingTreeFile(repoRoot, item.path);
+
+  return {
+    binary: oldFile.binary || newFile.binary,
+    newFile: newFile.file,
+    oldFile: oldFile.file,
+  };
+};
+
 const normalizeStatus = (statusCode) =>
   statusCode === 'A'
     ? 'added'
@@ -153,7 +286,7 @@ const parseCommitNameStatus = (raw) => {
     }
   }
 
-  return files.sort((left, right) => left.path.localeCompare(right.path));
+  return files.sort(fileSort);
 };
 
 const readWorkingTreeState = async (launchPath) => {
@@ -166,26 +299,39 @@ const readWorkingTreeState = async (launchPath) => {
 
     if (item.staged) {
       const staged = await getPatch(repoRoot, item.path, 'staged', false);
+      const contents = await getWorkingTreeContents(repoRoot, item, 'staged');
       sections.push({
-        binary: staged.binary,
+        binary: staged.binary || contents.binary,
         id: `${item.path}:staged`,
         kind: 'staged',
+        newFile: contents.newFile,
+        oldFile: contents.oldFile,
         patch: staged.patch,
       });
     }
 
     if (item.unstaged) {
       const unstaged = await getPatch(repoRoot, item.path, 'unstaged', item.untracked);
+      const contents = await getWorkingTreeContents(repoRoot, item, 'unstaged');
       sections.push({
-        binary: unstaged.binary,
+        binary: unstaged.binary || contents.binary,
         id: `${item.path}:unstaged`,
         kind: 'unstaged',
+        newFile: contents.newFile,
+        oldFile: contents.oldFile,
         patch: unstaged.patch,
       });
     }
 
     const fingerprint = getFingerprint(
-      `${item.status}\n${item.oldPath || ''}\n${sections.map((section) => section.patch).join('\n')}`,
+      `${item.status}\n${item.oldPath || ''}\n${sections
+        .map(
+          (section) =>
+            `${section.binary ? 'binary' : 'text'}\n${section.patch}\n${
+              section.oldFile?.contents || ''
+            }\n${section.newFile?.contents || ''}`,
+        )
+        .join('\n')}`,
     );
 
     files.push({
@@ -236,16 +382,24 @@ const readCommitState = async (launchPath, ref) => {
       '--',
       item.path,
     ]);
+    const oldFile = await readGitFile(repoRoot, `${commit}^`, item.oldPath || item.path);
+    const newFile = await readGitFile(repoRoot, commit, item.path);
 
     files.push({
-      fingerprint: getFingerprint(`${commit}\n${item.oldPath || ''}\n${patch}`),
+      fingerprint: getFingerprint(
+        `${commit}\n${item.oldPath || ''}\n${patch}\n${oldFile.file?.contents || ''}\n${
+          newFile.file?.contents || ''
+        }`,
+      ),
       oldPath: item.oldPath,
       path: item.path,
       sections: [
         {
-          binary: /Binary files .* differ/.test(patch),
+          binary: /Binary files .* differ/.test(patch) || oldFile.binary || newFile.binary,
           id: `${item.path}:${commit}`,
           kind: 'commit',
+          newFile: newFile.file,
+          oldFile: oldFile.file,
           patch,
         },
       ],

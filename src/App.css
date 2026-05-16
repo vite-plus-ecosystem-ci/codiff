@@ -107,7 +107,7 @@
   border-bottom: 1px solid var(--sidebar-border);
   flex: none;
   min-width: 0;
-  padding: 0 14px 10px;
+  padding: 0 14px;
 }
 
 .sidebar-path-row {
@@ -129,12 +129,32 @@
   white-space: nowrap;
 }
 
-.sidebar-title {
+.sidebar-search-row {
+  border-bottom: 1px solid var(--sidebar-border);
+  flex: none;
+  padding: 10px 12px;
+}
+
+.sidebar-search {
+  -webkit-app-region: no-drag;
+  background: rgb(127 127 127 / 0.1);
+  border: 0;
+  border-radius: 15px;
+  color: var(--sidebar-text);
+  corner-shape: squircle;
+  font: 13px/1.35 var(--font-sans);
+  height: 30px;
+  outline: none;
+  padding: 0 11px;
+  width: 100%;
+}
+
+.sidebar-search:focus {
+  box-shadow: 0 0 0 2px rgb(61 135 245 / 0.32);
+}
+
+.sidebar-search::placeholder {
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: uppercase;
 }
 
 .file-tree-shell,
@@ -186,8 +206,8 @@
   color: var(--text);
   display: grid;
   gap: 10px;
-  grid-template-columns: 30px minmax(0, 1fr) auto auto auto;
   height: 54px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   padding: 9px 10px;
 }
 
@@ -213,7 +233,7 @@
   color: var(--muted);
 }
 
-.codiff-icon-button,
+.codiff-header-toggle,
 .codiff-viewed-button {
   -webkit-app-region: no-drag;
   align-items: center;
@@ -225,14 +245,31 @@
   justify-content: center;
 }
 
-.codiff-icon-button {
+.codiff-header-toggle {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  justify-content: stretch;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.codiff-header-toggle:hover {
+  color: var(--text);
+}
+
+.codiff-chevron-box {
+  align-items: center;
   border-radius: 15px;
   corner-shape: squircle;
+  display: inline-flex;
   height: 30px;
+  justify-content: center;
   width: 30px;
 }
 
-.codiff-icon-button:hover,
+.codiff-header-toggle:hover .codiff-chevron-box,
 .codiff-viewed-button:hover {
   background: rgb(127 127 127 / 0.11);
 }
@@ -241,7 +278,7 @@
   border-bottom: 2px solid currentColor;
   border-right: 2px solid currentColor;
   height: 8px;
-  transform: rotate(45deg) translateY(-2px);
+  transform: rotate(45deg) translate(-1px, -2px);
   transition: transform 160ms ease;
   width: 8px;
 }
@@ -256,6 +293,7 @@
 
 .codiff-file-path,
 .codiff-file-old-path {
+  display: block;
   font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -384,7 +422,7 @@
   }
 
   .codiff-file-header {
-    grid-template-columns: 30px minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .codiff-section-badge,

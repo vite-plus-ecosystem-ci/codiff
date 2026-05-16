@@ -1,10 +1,17 @@
-import type { RepositoryHistory, RepositoryState, ReviewSource } from './types.ts';
+import type {
+  CodiffPreferences,
+  RepositoryHistory,
+  RepositoryState,
+  ReviewSource,
+} from './types.ts';
 
 declare global {
   interface Window {
     codiff: {
+      getPreferences: () => Promise<CodiffPreferences>;
       getRepositoryHistory: (limit?: number) => Promise<RepositoryHistory>;
       getRepositoryState: (source?: ReviewSource) => Promise<RepositoryState>;
+      onPreferencesChanged: (callback: (preferences: CodiffPreferences) => void) => () => void;
       showInFolder: (path: string) => Promise<void>;
     };
   }

@@ -1,4 +1,4 @@
-const { existsSync } = require('node:fs');
+const { existsSync, readFileSync, writeFileSync } = require('node:fs');
 const { dirname, join, relative, resolve } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { app, BrowserWindow, ipcMain, Menu, nativeTheme, screen, shell } = require('electron');
@@ -6,8 +6,77 @@ const { listRepositoryHistory, readRepositoryState } = require('./git-state.cjs'
 
 const root = dirname(__dirname);
 const windowRepositories = new Map();
+let preferences = {
+  showWhitespace: false,
+};
 
 const getLaunchPath = () => resolve(process.env.CODIFF_REPOSITORY_PATH || process.cwd());
+
+const getPreferencesPath = () => join(app.getPath('userData'), 'preferences.json');
+
+const readPreferences = () => {
+  try {
+    return {
+      ...preferences,
+      ...JSON.parse(readFileSync(getPreferencesPath(), 'utf8')),
+    };
+  } catch {
+    return preferences;
+  }
+};
+
+const writePreferences = () => {
+  writeFileSync(getPreferencesPath(), JSON.stringify(preferences, null, 2));
+};
+
+const sendPreferencesChanged = () => {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) {
+      window.webContents.send('codiff:preferencesChanged', preferences);
+    }
+  }
+};
+
+const buildApplicationMenu = () =>
+  Menu.buildFromTemplate([
+    ...(process.platform === 'darwin'
+      ? [
+          {
+            label: app.name,
+            submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'quit' }],
+          },
+        ]
+      : []),
+    {
+      label: 'File',
+      submenu: [process.platform === 'darwin' ? { role: 'close' } : { role: 'quit' }],
+    },
+    {
+      label: 'View',
+      submenu: [
+        {
+          checked: preferences.showWhitespace,
+          click: (menuItem) => {
+            preferences = {
+              ...preferences,
+              showWhitespace: menuItem.checked,
+            };
+            writePreferences();
+            sendPreferencesChanged();
+          },
+          label: 'Show Whitespace',
+          type: 'checkbox',
+        },
+        { type: 'separator' },
+        { role: 'reload' },
+        {
+          accelerator: 'CommandOrControl+Alt+J',
+          click: (_menuItem, browserWindow) => browserWindow?.webContents.toggleDevTools(),
+          label: 'Toggle Developer Tools',
+        },
+      ],
+    },
+  ]);
 
 const createWindow = (repositoryPath) => {
   const display = screen.getPrimaryDisplay();
@@ -50,39 +119,16 @@ if (!lock) {
   app.quit();
 } else {
   app.setName('Codiff');
-  Menu.setApplicationMenu(
-    Menu.buildFromTemplate([
-      ...(process.platform === 'darwin'
-        ? [
-            {
-              label: app.name,
-              submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'quit' }],
-            },
-          ]
-        : []),
-      {
-        label: 'File',
-        submenu: [process.platform === 'darwin' ? { role: 'close' } : { role: 'quit' }],
-      },
-      {
-        label: 'View',
-        submenu: [
-          { role: 'reload' },
-          {
-            accelerator: 'CommandOrControl+Alt+J',
-            click: (_menuItem, browserWindow) => browserWindow?.webContents.toggleDevTools(),
-            label: 'Toggle Developer Tools',
-          },
-        ],
-      },
-    ]),
-  );
 
   app.on('second-instance', (event, commandLine, workingDirectory, additionalData) => {
     createWindow(resolve(additionalData?.repositoryPath || workingDirectory));
   });
 
-  app.on('ready', () => createWindow(getLaunchPath()));
+  app.on('ready', () => {
+    preferences = readPreferences();
+    Menu.setApplicationMenu(buildApplicationMenu());
+    createWindow(getLaunchPath());
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -104,6 +150,8 @@ ipcMain.handle('codiff:getRepositoryHistory', async (event, limit) => {
   const repositoryPath = windowRepositories.get(event.sender.id) || getLaunchPath();
   return listRepositoryHistory(repositoryPath, limit);
 });
+
+ipcMain.handle('codiff:getPreferences', () => preferences);
 
 ipcMain.handle('codiff:showInFolder', async (event, filePath) => {
   const repositoryPath = windowRepositories.get(event.sender.id) || getLaunchPath();

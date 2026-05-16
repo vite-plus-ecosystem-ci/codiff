@@ -1,4 +1,5 @@
 import {
+  parseDiffFromFile,
   parsePatchFiles,
   registerCustomTheme,
   type CodeViewItem,
@@ -10,7 +11,13 @@ import { FileTree, useFileTree } from '@pierre/trees/react';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import dunkelTheme from './themes/dunkel.json' with { type: 'json' };
 import lichtTheme from './themes/licht.json' with { type: 'json' };
-import type { ChangedFile, DiffSection, GitFileStatus, RepositoryState } from './types.ts';
+import type {
+  ChangedFile,
+  CodiffPreferences,
+  DiffSection,
+  GitFileStatus,
+  RepositoryState,
+} from './types.ts';
 
 type CodeViewInstance = NonNullable<ReturnType<CodeViewHandle<undefined>['getInstance']>>;
 
@@ -69,6 +76,15 @@ const workerHighlighterOptions = {
 
 const maxWorkerThreads = 3;
 
+const fileTreeSort = (
+  left: { isDirectory: boolean; path: string; segments?: ReadonlyArray<string> },
+  right: { isDirectory: boolean; path: string; segments?: ReadonlyArray<string> },
+) => compareTreePaths(left.path, right.path);
+
+const defaultPreferences: CodiffPreferences = {
+  showWhitespace: false,
+};
+
 const codeViewUnsafeCSS = `
   :host {
     --diffs-font-family: var(--font-mono);
@@ -110,6 +126,51 @@ const compactPath = (path: string) => {
   return `${prefix}${first}/${middle ? `${middle}/` : ''}${last}`;
 };
 
+function compareTreePaths(leftPath: string, rightPath: string) {
+  const leftParts = leftPath.split('/');
+  const rightParts = rightPath.split('/');
+  const length = Math.min(leftParts.length, rightParts.length);
+
+  for (let index = 0; index < length; index += 1) {
+    const left = leftParts[index];
+    const right = rightParts[index];
+    if (left === right) {
+      continue;
+    }
+
+    const leftIsDirectory = index < leftParts.length - 1;
+    const rightIsDirectory = index < rightParts.length - 1;
+    if (leftIsDirectory !== rightIsDirectory) {
+      return leftIsDirectory ? -1 : 1;
+    }
+
+    return left.localeCompare(right);
+  }
+
+  return leftParts.length - rightParts.length;
+}
+
+const sortFiles = (files: ReadonlyArray<ChangedFile>) =>
+  [...files].sort((left, right) => compareTreePaths(left.path, right.path));
+
+const fuzzyMatches = (path: string, query: string) => {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return true;
+  }
+
+  const normalizedPath = path.toLowerCase();
+  let pathIndex = 0;
+  for (const character of normalizedQuery) {
+    pathIndex = normalizedPath.indexOf(character, pathIndex);
+    if (pathIndex === -1) {
+      return false;
+    }
+    pathIndex += 1;
+  }
+  return true;
+};
+
 const getViewedKey = (root: string) => `codiff:viewed:${root}`;
 
 const readViewed = (root: string): Record<string, string> => {
@@ -125,6 +186,15 @@ const writeViewed = (root: string, viewed: Record<string, string>) => {
 };
 
 const getItemId = (section: DiffSection) => `diff:${section.id}`;
+
+const getItemVersion = (value: string) => {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash << 5) - hash + value.charCodeAt(index);
+    hash |= 0;
+  }
+  return hash >>> 0;
+};
 
 type CodeViewItemMetadata = {
   file: ChangedFile;
@@ -176,31 +246,88 @@ const createBinaryFileDiff = (file: ChangedFile, section: DiffSection): FileDiff
   unifiedLineCount: 1,
 });
 
-const parseSectionDiff = (file: ChangedFile, section: DiffSection): FileDiffMetadata => {
+const createEmptyFileDiff = (file: ChangedFile, section: DiffSection): FileDiffMetadata => ({
+  additionLines: section.newFile?.contents.split('\n') ?? [],
+  cacheKey: `empty:${file.fingerprint}:${section.id}`,
+  deletionLines: section.oldFile?.contents.split('\n') ?? [],
+  hunks: [],
+  isPartial: false,
+  name: section.newFile?.name ?? file.path,
+  prevName: section.oldFile?.name ?? file.oldPath,
+  splitLineCount: 0,
+  type: file.status === 'deleted' ? 'deleted' : file.status === 'added' ? 'new' : 'change',
+  unifiedLineCount: 0,
+});
+
+const parsedDiffCache = new Map<string, FileDiffMetadata>();
+
+const parseSectionDiffWithOptions = (
+  file: ChangedFile,
+  section: DiffSection,
+  showWhitespace: boolean,
+): FileDiffMetadata => {
+  const cacheKey = `${file.fingerprint}:${section.id}:${showWhitespace ? 'ws' : 'ignore-ws'}`;
+  const cached = parsedDiffCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  let fileDiff: FileDiffMetadata;
   if (section.binary) {
-    return createBinaryFileDiff(file, section);
+    fileDiff = createBinaryFileDiff(file, section);
+  } else if (section.oldFile && section.newFile) {
+    try {
+      fileDiff = {
+        ...parseDiffFromFile(section.oldFile, section.newFile, {
+          ignoreWhitespace: !showWhitespace,
+        }),
+        cacheKey,
+      };
+    } catch {
+      fileDiff = createEmptyFileDiff(file, section);
+    }
+  } else {
+    const parsedFileDiff = parsePatchFiles(section.patch)[0]?.files[0];
+    fileDiff = parsedFileDiff
+      ? {
+          ...parsedFileDiff,
+          cacheKey,
+        }
+      : createBinaryFileDiff(file, section);
   }
 
-  const fileDiff = parsePatchFiles(section.patch)[0]?.files[0];
-  if (!fileDiff) {
-    return createBinaryFileDiff(file, section);
-  }
-
-  return {
-    ...fileDiff,
-    cacheKey: `${file.fingerprint}:${section.id}`,
-  };
+  parsedDiffCache.set(cacheKey, fileDiff);
+  return fileDiff;
 };
+
+const fileHasVisibleDiff = (file: ChangedFile, showWhitespace: boolean) =>
+  file.sections.some((section) => {
+    if (section.binary) {
+      return true;
+    }
+
+    return parseSectionDiffWithOptions(file, section, showWhitespace).hunks.length > 0;
+  });
+
+const getFirstVisibleSection = (file: ChangedFile, showWhitespace: boolean) =>
+  file.sections.find(
+    (section) =>
+      section.binary || parseSectionDiffWithOptions(file, section, showWhitespace).hunks.length > 0,
+  );
 
 function Sidebar({
   files,
   onActivatePath,
+  onSearchQueryChange,
   onSelectPath,
+  searchQuery,
   selectedPath,
 }: {
   files: ReadonlyArray<ChangedFile>;
   onActivatePath: (path: string) => void;
+  onSearchQueryChange: (query: string) => void;
   onSelectPath: (path: string) => void;
+  searchQuery: string;
   selectedPath: string | null;
 }) {
   const allowSelectionScroll = useRef(false);
@@ -243,6 +370,7 @@ function Sidebar({
       }
     },
     paths,
+    sort: fileTreeSort,
     unsafeCSS: `
       :host {
         color: var(--sidebar-text);
@@ -255,6 +383,11 @@ function Sidebar({
       }
     `,
   });
+
+  useEffect(() => {
+    model.resetPaths(paths);
+    model.setGitStatus(status);
+  }, [model, paths, status]);
 
   const scrollPathIntoView = useCallback(
     (path: string) => {
@@ -292,6 +425,15 @@ function Sidebar({
     [filePathSet, onActivatePath],
   );
 
+  useEffect(
+    () => () => {
+      if (allowSelectionScrollTimer.current != null) {
+        window.clearTimeout(allowSelectionScrollTimer.current);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!selectedPath) {
       return;
@@ -314,9 +456,22 @@ function Sidebar({
   }, [model, scrollPathIntoView, selectedPath]);
 
   return (
-    <div className="file-tree-shell" ref={treeHostRef}>
-      <FileTree className="file-tree" model={model} onClick={handleTreeClick} />
-    </div>
+    <>
+      <div className="sidebar-search-row">
+        <input
+          aria-label="Filter changed files"
+          className="sidebar-search"
+          onChange={(event) => onSearchQueryChange(event.currentTarget.value)}
+          placeholder="Filter files"
+          spellCheck={false}
+          type="search"
+          value={searchQuery}
+        />
+      </div>
+      <div className="file-tree-shell" ref={treeHostRef}>
+        <FileTree className="file-tree" model={model} onClick={handleTreeClick} />
+      </div>
+    </>
   );
 }
 
@@ -338,21 +493,26 @@ function CodeViewHeader({
       }${isViewed ? ' viewed' : ''}`}
     >
       <button
+        aria-expanded={!isCollapsed}
         aria-label={isCollapsed ? 'Expand file' : 'Collapse file'}
-        className="codiff-icon-button"
+        className="codiff-header-toggle"
         onClick={() => onToggleCollapsed(file, isCollapsed)}
         title={isCollapsed ? 'Expand' : 'Collapse'}
         type="button"
       >
-        <span className={isCollapsed ? 'codiff-chevron collapsed' : 'codiff-chevron'} />
+        <span className="codiff-chevron-box">
+          <span className={isCollapsed ? 'codiff-chevron collapsed' : 'codiff-chevron'} />
+        </span>
+        <span className="codiff-file-heading">
+          <span className="codiff-file-path">{file.path}</span>
+          {file.oldPath ? <span className="codiff-file-old-path">{file.oldPath}</span> : null}
+        </span>
+        {sectionCount > 1 ? (
+          <span className={`codiff-section-badge ${section.kind}`}>
+            {sectionLabel[section.kind]}
+          </span>
+        ) : null}
       </button>
-      <div className="codiff-file-heading">
-        <div className="codiff-file-path">{file.path}</div>
-        {file.oldPath ? <div className="codiff-file-old-path">{file.oldPath}</div> : null}
-      </div>
-      {sectionCount > 1 ? (
-        <div className={`codiff-section-badge ${section.kind}`}>{sectionLabel[section.kind]}</div>
-      ) : null}
       <div className={`codiff-status-badge ${file.status}`}>{statusLabel[file.status]}</div>
       <button
         aria-pressed={isViewed}
@@ -376,6 +536,7 @@ function ReviewCodeView({
   onToggleViewed,
   scrollTarget,
   selectedPath,
+  showWhitespace,
   viewed,
 }: {
   collapsed: ReadonlySet<string>;
@@ -386,6 +547,7 @@ function ReviewCodeView({
   onToggleViewed: (file: ChangedFile, isViewed: boolean) => void;
   scrollTarget: { path: string; request: number } | null;
   selectedPath: string | null;
+  showWhitespace: boolean;
   viewed: Record<string, string>;
 }) {
   const codeViewRef = useRef<CodeViewHandle<undefined>>(null);
@@ -399,9 +561,15 @@ function ReviewCodeView({
     for (const file of files) {
       const isViewed = viewed[file.path] === file.fingerprint;
       const isCollapsed = collapsed.has(file.path);
-      const sections = isCollapsed ? file.sections.slice(0, 1) : file.sections;
+      const visibleSections = file.sections
+        .map((section) => ({
+          fileDiff: parseSectionDiffWithOptions(file, section, showWhitespace),
+          section,
+        }))
+        .filter(({ fileDiff, section }) => section.binary || fileDiff.hunks.length > 0);
+      const sections = isCollapsed ? visibleSections.slice(0, 1) : visibleSections;
 
-      for (const section of sections) {
+      for (const [index, { fileDiff, section }] of sections.entries()) {
         const id = getItemId(section);
         nextItemMetadata.set(id, {
           file,
@@ -414,10 +582,16 @@ function ReviewCodeView({
         nextFirstItemByPath.set(file.path, nextFirstItemByPath.get(file.path) ?? id);
         nextItems.push({
           collapsed: isCollapsed,
-          fileDiff: parseSectionDiff(file, section),
+          fileDiff,
           id,
           type: 'diff',
-          version: itemVersionByPath[file.path] ?? 0,
+          version: getItemVersion(
+            `${itemVersionByPath[file.path] ?? 0}:${file.fingerprint}:${section.id}:${
+              isCollapsed ? 'collapsed' : 'open'
+            }:${isViewed ? 'viewed' : 'pending'}:${index}:${
+              selectedPath === file.path ? 'selected' : 'idle'
+            }:${showWhitespace ? 'ws' : 'ignore-ws'}`,
+          ),
         });
       }
     }
@@ -427,7 +601,7 @@ function ReviewCodeView({
       itemMetadata: nextItemMetadata,
       items: nextItems,
     };
-  }, [collapsed, files, itemVersionByPath, selectedPath, viewed]);
+  }, [collapsed, files, itemVersionByPath, selectedPath, showWhitespace, viewed]);
 
   const codeViewOptions: CodeViewOptions<undefined> = useMemo(
     () =>
@@ -560,7 +734,9 @@ export default function App() {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const [itemVersionByPath, setItemVersionByPath] = useState<Record<string, number>>({});
+  const [preferences, setPreferences] = useState<CodiffPreferences>(defaultPreferences);
   const [scrollTarget, setScrollTarget] = useState<{ path: string; request: number } | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [state, setState] = useState<RepositoryState | null>(null);
   const [viewed, setViewed] = useState<Record<string, string>>({});
@@ -577,20 +753,24 @@ export default function App() {
           return;
         }
 
-        const nextViewed = readViewed(nextState.root);
+        const orderedState = {
+          ...nextState,
+          files: sortFiles(nextState.files),
+        };
+        const nextViewed = readViewed(orderedState.root);
 
-        setState(nextState);
+        setState(orderedState);
         setError(null);
         setCollapsed(
           new Set(
-            nextState.files
+            orderedState.files
               .filter((file) => nextViewed[file.path] === file.fingerprint)
               .map((file) => file.path),
           ),
         );
         setItemVersionByPath({});
         setViewed(nextViewed);
-        setSelectedPath((current) => current ?? nextState.files[0]?.path ?? null);
+        setSelectedPath((current) => current ?? orderedState.files[0]?.path ?? null);
       })
       .catch((error: unknown) => {
         if (!canceled) {
@@ -603,6 +783,25 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    let canceled = false;
+
+    window.codiff.getPreferences().then((nextPreferences) => {
+      if (!canceled) {
+        setPreferences(nextPreferences);
+      }
+    });
+
+    const removeListener = window.codiff.onPreferencesChanged((nextPreferences) => {
+      setPreferences(nextPreferences);
+    });
+
+    return () => {
+      canceled = true;
+      removeListener();
+    };
+  }, []);
+
   useEffect(
     () => () => {
       if (programmaticScrollTimerRef.current != null) {
@@ -610,6 +809,18 @@ export default function App() {
       }
     },
     [],
+  );
+
+  const showWhitespace = preferences.showWhitespace;
+  const visibleFiles = useMemo(
+    () =>
+      state
+        ? sortFiles(state.files).filter(
+            (file) =>
+              fuzzyMatches(file.path, searchQuery) && fileHasVisibleDiff(file, showWhitespace),
+          )
+        : [],
+    [searchQuery, showWhitespace, state],
   );
 
   const selectPath = useCallback((path: string) => {
@@ -658,17 +869,18 @@ export default function App() {
 
   const updateSelectedPathFromScroll = useCallback(
     (viewer: CodeViewInstance) => {
-      if (!state?.files.length) {
+      if (!visibleFiles.length) {
         return;
       }
 
       const scrollTop = viewer.getScrollTop();
       const activationTop = scrollTop + DEFAULT_PADDING;
-      let nextPath = state.files[0]?.path ?? null;
+      let nextPath = visibleFiles[0]?.path ?? null;
       let nextDistance = Number.NEGATIVE_INFINITY;
 
-      for (const file of state.files) {
-        const itemId = file.sections[0] ? getItemId(file.sections[0]) : null;
+      for (const file of visibleFiles) {
+        const section = getFirstVisibleSection(file, showWhitespace);
+        const itemId = section ? getItemId(section) : null;
         const itemTop = itemId ? viewer.getTopForItem(itemId) : undefined;
         if (itemTop == null) {
           continue;
@@ -698,7 +910,7 @@ export default function App() {
         setSelectedPath((current) => (current === nextPath ? current : nextPath));
       }
     },
-    [state],
+    [showWhitespace, visibleFiles],
   );
 
   const toggleViewed = useCallback(
@@ -754,6 +966,11 @@ export default function App() {
     return <main className="loading">Loading</main>;
   }
 
+  const visibleSelectedPath =
+    selectedPath && visibleFiles.some((file) => file.path === selectedPath)
+      ? selectedPath
+      : (visibleFiles[0]?.path ?? null);
+
   return (
     <div className="app-shell">
       <aside className="sidebar squircle">
@@ -763,13 +980,14 @@ export default function App() {
               {compactPath(state.root)}
             </div>
           </div>
-          <div className="sidebar-title">Changed Files</div>
         </div>
         <Sidebar
-          files={state.files}
+          files={visibleFiles}
           onActivatePath={activatePath}
+          onSearchQueryChange={setSearchQuery}
           onSelectPath={selectPath}
-          selectedPath={selectedPath}
+          searchQuery={searchQuery}
+          selectedPath={visibleSelectedPath}
         />
       </aside>
       <main className="review">
@@ -780,16 +998,26 @@ export default function App() {
               <span>{state.root}</span>
             </div>
           </div>
+        ) : visibleFiles.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-panel squircle">
+              <strong>No matching files</strong>
+              <span>
+                {searchQuery || (showWhitespace ? state.root : 'Whitespace-only changes hidden')}
+              </span>
+            </div>
+          </div>
         ) : (
           <ReviewCodeView
             collapsed={collapsed}
-            files={state.files}
+            files={visibleFiles}
             itemVersionByPath={itemVersionByPath}
             onSelectPathFromScroll={updateSelectedPathFromScroll}
             onToggleCollapsed={toggleCollapsed}
             onToggleViewed={toggleViewed}
             scrollTarget={scrollTarget}
-            selectedPath={selectedPath}
+            selectedPath={visibleSelectedPath}
+            showWhitespace={showWhitespace}
             viewed={viewed}
           />
         )}
