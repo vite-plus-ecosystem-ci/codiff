@@ -8,8 +8,8 @@ import {
   getVisibleDiffSections,
   isDiffSearchShortcut,
   shouldDiscardReviewCommentOnEscape,
-} from './App.tsx';
-import type { ChangedFile } from './types.ts';
+} from '../App.tsx';
+import type { ChangedFile } from '../types.ts';
 
 test('pure renames are visible without content hunks', () => {
   const file = {

@@ -3,7 +3,7 @@ import { expect, test } from 'vite-plus/test';
 
 const require = createRequire(import.meta.url);
 const { DEFAULT_OPENAI_MODEL, isOpenAIModelAvailabilityError, normalizeOpenAIModel } =
-  require('./codex.cjs') as {
+  require('../codex.cjs') as {
     DEFAULT_OPENAI_MODEL: string;
     isOpenAIModelAvailabilityError: (value: string) => boolean;
     normalizeOpenAIModel: (value: unknown) => string;

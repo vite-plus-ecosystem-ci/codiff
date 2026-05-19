@@ -10,7 +10,7 @@ import type {
   DiffSectionContentRequest,
   RepositoryState,
   ReviewSource,
-} from './types.ts';
+} from '../types.ts';
 
 type StatusEntry = {
   oldPath?: string;
@@ -53,7 +53,7 @@ const {
   readRepositoryChangeSignature,
   readRepositoryState,
   readWorkingTreeState,
-} = require('../electron/git-state.cjs') as GitStateModule;
+} = require('../../electron/git-state.cjs') as GitStateModule;
 
 const git = async (repo: string, args: ReadonlyArray<string>) => {
   const { stdout } = await execFileAsync('git', ['-C', repo, ...args], {

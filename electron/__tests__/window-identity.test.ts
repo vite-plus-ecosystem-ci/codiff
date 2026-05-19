@@ -8,7 +8,7 @@ import { expect, test } from 'vite-plus/test';
 
 const require = createRequire(import.meta.url);
 const { findMatchingWindowIdentity, getWindowIdentity, parseGitHubPullRequestUrl } =
-  require('./window-identity.cjs') as {
+  require('../window-identity.cjs') as {
     findMatchingWindowIdentity: (
       identity: { key: string } | null,
       existingIdentities: ReadonlyMap<number, { key: string } | null>,

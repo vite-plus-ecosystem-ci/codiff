@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { expect, test } from 'vite-plus/test';
-import { parseArguments, resolvePullRequestUrl } from '../bin/arguments.js';
+import { parseArguments, resolvePullRequestUrl } from '../../bin/arguments.js';
 
 const execFileAsync = promisify(execFile);
 

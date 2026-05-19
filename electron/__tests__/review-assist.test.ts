@@ -3,7 +3,7 @@ import { expect, test } from 'vite-plus/test';
 
 const require = createRequire(import.meta.url);
 const { buildReviewAssistantInput, normalizeReviewAssistantReply } =
-  require('./review-assist.cjs') as {
+  require('../review-assist.cjs') as {
     buildReviewAssistantInput: (
       state: unknown,
       request: unknown,
