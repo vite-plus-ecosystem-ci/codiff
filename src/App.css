@@ -563,6 +563,26 @@
   color: var(--muted);
 }
 
+.sidebar-total-row {
+  align-items: center;
+  border-top: 1px solid var(--sidebar-border);
+  color: var(--muted);
+  display: flex;
+  flex: none;
+  font: 600 11px/1 var(--font-sans);
+  justify-content: space-between;
+  min-height: 30px;
+  padding: 0 12px;
+}
+
+.sidebar-total-line-count {
+  display: inline-flex;
+  flex: none;
+  font-family: var(--font-mono);
+  gap: 8px;
+  white-space: nowrap;
+}
+
 .file-tree-shell,
 .file-tree {
   flex: 1;

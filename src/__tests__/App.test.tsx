@@ -4,6 +4,7 @@ import { getDiffSearchResult } from '../lib/diff-search.ts';
 import {
   getDiffLineCount,
   getMarkdownPreviewContents,
+  getTotalDiffLineCount,
   getVisibleDiffSections,
   fileHasVisibleDiff,
 } from '../lib/diff.ts';
@@ -226,6 +227,46 @@ test('diff line counts omit binary summary rows', () => {
   } satisfies ChangedFile;
 
   expect(getDiffLineCount(file, false)).toEqual({
+    additions: 0,
+    countable: false,
+    deletions: 0,
+  });
+});
+
+test('total diff line counts sum countable files only', () => {
+  expect(
+    getTotalDiffLineCount([
+      {
+        additions: 3,
+        countable: true,
+        deletions: 1,
+      },
+      {
+        additions: 10,
+        countable: false,
+        deletions: 10,
+      },
+      {
+        additions: 2,
+        countable: true,
+        deletions: 4,
+      },
+    ]),
+  ).toEqual({
+    additions: 5,
+    countable: true,
+    deletions: 5,
+  });
+
+  expect(
+    getTotalDiffLineCount([
+      {
+        additions: 0,
+        countable: false,
+        deletions: 0,
+      },
+    ]),
+  ).toEqual({
     additions: 0,
     countable: false,
     deletions: 0,

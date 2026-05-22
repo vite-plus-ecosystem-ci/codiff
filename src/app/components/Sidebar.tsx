@@ -16,6 +16,7 @@ import {
   formatTreeLineCount,
   getDiffLineCount,
   getDiffLineCountTitle,
+  getTotalDiffLineCount,
 } from '../../lib/diff.ts';
 import { fileTreeSort, statusForTree } from '../../lib/files.ts';
 import { isNativeInputTarget } from '../../lib/keyboard.ts';
@@ -85,6 +86,11 @@ export function Sidebar({
     () => new Map(files.map((file) => [file.path, getDiffLineCount(file, showWhitespace)])),
     [files, showWhitespace],
   );
+  const totalLineCount = useMemo(
+    () => getTotalDiffLineCount(lineCountsByPath.values()),
+    [lineCountsByPath],
+  );
+  const showTotalLineCount = mode !== 'history' && totalLineCount.countable;
   const lineCountsByPathRef = useRef(lineCountsByPath);
   const renderTreeRowDecoration = useCallback<FileTreeRowDecorationRenderer>(({ item }) => {
     const lineCount = lineCountsByPathRef.current.get(item.path);
@@ -328,6 +334,16 @@ export function Sidebar({
           <FileTree className="file-tree" model={model} onClick={handleTreeClick} />
         </div>
       )}
+      {showTotalLineCount ? (
+        <div className="sidebar-total-row">
+          <span>Total</span>
+          <DiffLineCountBadge
+            ariaLabelPrefix="Total change"
+            className="sidebar-total-line-count"
+            lineCount={totalLineCount}
+          />
+        </div>
+      ) : null}
     </>
   );
 }
@@ -614,9 +630,11 @@ function WalkthroughSidebar({
 }
 
 export function DiffLineCountBadge({
+  ariaLabelPrefix,
   className = 'codiff-line-count',
   lineCount,
 }: {
+  ariaLabelPrefix?: string;
   className?: string;
   lineCount: DiffLineCount;
 }) {
@@ -624,11 +642,13 @@ export function DiffLineCountBadge({
     return null;
   }
 
+  const title = getDiffLineCountTitle(lineCount);
+
   return (
     <span
-      aria-label={getDiffLineCountTitle(lineCount)}
+      aria-label={ariaLabelPrefix ? `${ariaLabelPrefix}: ${title}` : title}
       className={className}
-      title={getDiffLineCountTitle(lineCount)}
+      title={ariaLabelPrefix ? `${ariaLabelPrefix}: ${title}` : title}
     >
       <span className="codiff-line-count-added">+{formatLineCountNumber(lineCount.additions)}</span>
       <span className="codiff-line-count-deleted">

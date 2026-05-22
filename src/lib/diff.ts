@@ -110,6 +110,30 @@ export const getDiffLineCountFromVisibleSections = (
 export const getDiffLineCount = (file: ChangedFile, showWhitespace: boolean): DiffLineCount =>
   getDiffLineCountFromVisibleSections(getVisibleDiffSections(file, showWhitespace));
 
+export const getTotalDiffLineCount = (lineCounts: Iterable<DiffLineCount>): DiffLineCount => {
+  let additions = 0;
+  let countable = false;
+  let deletions = 0;
+
+  for (const lineCount of lineCounts) {
+    if (!lineCount.countable) {
+      continue;
+    }
+
+    additions += lineCount.additions;
+    countable = true;
+    deletions += lineCount.deletions;
+  }
+
+  return countable
+    ? {
+        additions,
+        countable,
+        deletions,
+      }
+    : emptyDiffLineCount;
+};
+
 export const formatLineCountNumber = (value: number) => value.toLocaleString('en-US');
 
 export const formatCompactLineCountNumber = (value: number) => {
