@@ -7,6 +7,7 @@ const {
   readCommitState,
 } = require('./git-state/commit.cjs');
 const {
+  createPullRequestHistoryFetchRefspecs,
   listPullRequestHistory,
   normalizeGitHubPullRequestCommit,
   normalizeGitHubReviewComment,
@@ -57,6 +58,7 @@ const readDiffSectionContent = async (launchPath, request) =>
     : readWorkingTreeDiffSectionContent(launchPath, request);
 
 module.exports = {
+  createPullRequestHistoryFetchRefspecs,
   listRepositoryHistory: readRepositoryHistory,
   normalizeGitHubPullRequestCommit,
   normalizeGitHubReviewComment,

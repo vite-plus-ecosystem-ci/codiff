@@ -11,9 +11,9 @@ const { createSummary, getFingerprint, git, gitOrEmpty } = require('./common.cjs
  * @typedef {import('../../src/types.ts').SubmitPullRequestCommentRequest} SubmitPullRequestCommentRequest
  * @typedef {import('../../src/types.ts').SubmitPullRequestReviewRequest} SubmitPullRequestReviewRequest
  * @typedef {{number: number; owner: string; repo: string; url: string}} PullRequestReference
- * @typedef {{owner: string; repo: string}} GitHubRemote
+ * @typedef {{direction: 'fetch' | 'push'; name: string; owner: string; repo: string}} GitHubRemote
  * @typedef {{filename: string; patch?: string; previous_filename?: string; status: string}} GitHubPullRequestFile
- * @typedef {{base?: {sha?: string}; head?: {sha?: string}; title?: string}} GitHubPullRequestMetadata
+ * @typedef {{base?: {ref?: string; sha?: string}; head?: {sha?: string}; title?: string}} GitHubPullRequestMetadata
  * @typedef {{author?: {avatar_url?: string}; commit?: {author?: {date?: string; email?: string; name?: string}; message?: string}; parents?: ReadonlyArray<{sha?: string}>; sha?: string}} GitHubCommit
  * @typedef {{[key: string]: any}} GitHubReviewComment
  */
@@ -79,30 +79,70 @@ const readLocalGitHubRemotes = async (repoRoot) => {
   const raw = await gitOrEmpty(repoRoot, ['remote', '-v']);
   const remotes = [];
   for (const line of raw.split('\n')) {
-    const match = line.match(/^\S+\s+(\S+)\s+\((?:fetch|push)\)$/);
-    const remote = match ? parseGitHubRemoteUrl(match[1]) : null;
+    const match = line.match(/^(\S+)\s+(\S+)\s+\((fetch|push)\)$/);
+    const remote = match ? parseGitHubRemoteUrl(match[2]) : null;
     if (remote) {
-      remotes.push(remote);
+      remotes.push({
+        direction: /** @type {'fetch' | 'push'} */ (match[3]),
+        name: match[1],
+        ...remote,
+      });
     }
   }
   return remotes;
 };
 
-/** @param {string} repoRoot @param {PullRequestReference} pullRequest */
-const assertPullRequestMatchesRepository = async (repoRoot, pullRequest) => {
-  const remotes = await readLocalGitHubRemotes(repoRoot);
-  const matches = remotes.some(
-    (remote) =>
-      remote.owner.toLowerCase() === pullRequest.owner.toLowerCase() &&
-      remote.repo.toLowerCase() === pullRequest.repo.toLowerCase(),
-  );
+/** @param {GitHubRemote} remote */
+const getRemotePriority = (remote) =>
+  remote.name === 'origin'
+    ? remote.direction === 'fetch'
+      ? 0
+      : 1
+    : remote.direction === 'fetch'
+      ? 2
+      : 3;
 
-  if (!matches) {
+/** @param {string} repoRoot @param {PullRequestReference} pullRequest @returns {Promise<GitHubRemote>} */
+const selectPullRequestRemote = async (repoRoot, pullRequest) => {
+  const remotes = await readLocalGitHubRemotes(repoRoot);
+  const remote = remotes
+    .filter(
+      (remote) =>
+        remote.owner.toLowerCase() === pullRequest.owner.toLowerCase() &&
+        remote.repo.toLowerCase() === pullRequest.repo.toLowerCase(),
+    )
+    .sort((left, right) => getRemotePriority(left) - getRemotePriority(right))[0];
+
+  if (!remote) {
     throw new Error(
       `Pull request ${pullRequest.owner}/${pullRequest.repo} does not match a GitHub remote in this repository.`,
     );
   }
+
+  return remote;
 };
+
+/** @param {string} repoRoot @param {PullRequestReference} pullRequest */
+const assertPullRequestMatchesRepository = async (repoRoot, pullRequest) => {
+  await selectPullRequestRemote(repoRoot, pullRequest);
+};
+
+/** @param {PullRequestReference} pullRequest @param {GitHubPullRequestMetadata} metadata */
+const createPullRequestHistoryFetchRefspecs = (pullRequest, metadata) => [
+  `+refs/pull/${pullRequest.number}/head:refs/codiff/pull-requests/${pullRequest.number}/head`,
+  ...(metadata.base?.ref
+    ? [`+refs/heads/${metadata.base.ref}:refs/codiff/pull-requests/${pullRequest.number}/base`]
+    : []),
+];
+
+/** @param {string} repoRoot @param {GitHubRemote} remote @param {PullRequestReference} pullRequest @param {GitHubPullRequestMetadata} metadata */
+const fetchPullRequestHistoryRefs = (repoRoot, remote, pullRequest, metadata) =>
+  git(repoRoot, [
+    'fetch',
+    '--no-tags',
+    remote.name,
+    ...createPullRequestHistoryFetchRefspecs(pullRequest, metadata),
+  ]);
 
 /**
  * @param {string} repoRoot
@@ -282,11 +322,12 @@ const normalizeGitHubPullRequestCommit = (commit) => normalizeGitHubCommit(commi
 const listPullRequestHistory = async (launchPath, source, limit = 200) => {
   const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
   const pullRequest = parseGitHubPullRequestUrl(source.url);
-  await assertPullRequestMatchesRepository(repoRoot, pullRequest);
+  const remote = await selectPullRequestRemote(repoRoot, pullRequest);
   const [metadata, commits] = await Promise.all([
     readPullRequestMetadata(repoRoot, pullRequest),
     readPullRequestCommits(repoRoot, pullRequest),
   ]);
+  await fetchPullRequestHistoryRefs(repoRoot, remote, pullRequest, metadata);
   const baseCommits = metadata.base?.sha
     ? await readRepositoryCommits(repoRoot, pullRequest, metadata.base.sha, limit)
     : [];
@@ -499,6 +540,7 @@ const submitPullRequestReview = async (launchPath, request) => {
 
 module.exports = {
   createPatchFromPullRequestFile,
+  createPullRequestHistoryFetchRefspecs,
   createPullRequestSource,
   listPullRequestHistory,
   normalizeGitHubCommit,

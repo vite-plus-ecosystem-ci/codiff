@@ -22,6 +22,10 @@ type StatusEntry = {
 };
 
 type GitStateModule = {
+  createPullRequestHistoryFetchRefspecs: (
+    pullRequest: { number: number; owner: string; repo: string; url: string },
+    metadata: { base?: { ref?: string; sha?: string } },
+  ) => ReadonlyArray<string>;
   listRepositoryHistory: (
     launchPath: string,
     limit?: number,
@@ -50,6 +54,7 @@ type GitStateModule = {
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const {
+  createPullRequestHistoryFetchRefspecs,
   listRepositoryHistory,
   normalizeGitHubPullRequestCommit,
   normalizeGitHubReviewComment,
@@ -118,6 +123,28 @@ test('parseGitHubPullRequestUrl reads canonical pull request URLs', () => {
     repo: 'codiff',
     url: 'https://github.com/nkzw-tech/codiff/pull/3',
   });
+});
+
+test('createPullRequestHistoryFetchRefspecs fetches PR and base refs into Codiff refs', () => {
+  expect(
+    createPullRequestHistoryFetchRefspecs(
+      {
+        number: 25,
+        owner: 'nkzw-tech',
+        repo: 'codiff',
+        url: 'https://github.com/nkzw-tech/codiff/pull/25',
+      },
+      {
+        base: {
+          ref: 'main',
+          sha: 'base-sha',
+        },
+      },
+    ),
+  ).toEqual([
+    '+refs/pull/25/head:refs/codiff/pull-requests/25/head',
+    '+refs/heads/main:refs/codiff/pull-requests/25/base',
+  ]);
 });
 
 test('normalizeGitHubReviewComment preserves multi-line ranges', () => {
