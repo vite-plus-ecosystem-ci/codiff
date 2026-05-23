@@ -13,6 +13,17 @@ export const canRenderImagePreview = (path: string, section: DiffSection) =>
   isImageFilePath(path) &&
   (section.binary || section.loadState === 'deferred' || section.loadState === 'too-large');
 
+export const isPatchOnlyDiffSection = (section: DiffSection) =>
+  section.loadState === 'ready' &&
+  !section.binary &&
+  section.patch.trim().length > 0 &&
+  section.oldFile == null &&
+  section.newFile == null;
+
+export const shouldLoadDiffSectionContents = (section: DiffSection) =>
+  section.summary?.canLoad !== false &&
+  (section.loadState === 'deferred' || isPatchOnlyDiffSection(section));
+
 const joinDiffLines = (lines: ReadonlyArray<string>) =>
   lines.some((line) => line.includes('\n')) ? lines.join('') : lines.join('\n');
 

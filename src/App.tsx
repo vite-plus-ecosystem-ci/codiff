@@ -41,7 +41,13 @@ import {
 import { DEFAULT_PADDING } from './lib/code-view-options.ts';
 import { type Command, createCommandRegistry } from './lib/command-registry.ts';
 import { getDiffSearchResult } from './lib/diff-search.ts';
-import { fileHasVisibleDiff, getFirstVisibleSection, getItemId } from './lib/diff.ts';
+import {
+  fileHasVisibleDiff,
+  getFirstVisibleSection,
+  getItemId,
+  isPatchOnlyDiffSection,
+  shouldLoadDiffSectionContents,
+} from './lib/diff.ts';
 import { compactPath, fuzzyMatches, sortFiles } from './lib/files.ts';
 import {
   buildReviewCommentsMarkdown,
@@ -76,7 +82,26 @@ import type {
   ReviewSource,
   TerminalHelperStatus,
   Walkthrough,
+  DiffSection,
 } from './types.ts';
+
+const getFailedSectionLoadState = (section: DiffSection): DiffSection =>
+  isPatchOnlyDiffSection(section)
+    ? {
+        ...section,
+        summary: {
+          canLoad: false,
+          reason: 'Codiff could not load full file context.',
+        },
+      }
+    : {
+        ...section,
+        loadState: 'error',
+        summary: {
+          canLoad: false,
+          reason: 'Codiff could not load this file.',
+        },
+      };
 
 export default function App() {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -383,18 +408,16 @@ export default function App() {
       return;
     }
 
-    const deferredSections = selectedFile.sections.filter(
-      (section) => section.loadState === 'deferred' && section.summary?.canLoad !== false,
-    );
+    const loadableSections = selectedFile.sections.filter(shouldLoadDiffSectionContents);
 
-    if (!deferredSections.length) {
+    if (!loadableSections.length) {
       return;
     }
 
     let canceled = false;
     const sourceKey = getSourceKey(state.source);
 
-    for (const section of deferredSections) {
+    for (const section of loadableSections) {
       const key = `${state.root}:${section.id}`;
       if (loadingSectionKeysRef.current.has(key)) {
         continue;
@@ -457,14 +480,7 @@ export default function App() {
                         ...file,
                         sections: file.sections.map((candidate) =>
                           candidate.id === section.id
-                            ? {
-                                ...candidate,
-                                loadState: 'error',
-                                summary: {
-                                  canLoad: false,
-                                  reason: 'Codiff could not load this file.',
-                                },
-                              }
+                            ? getFailedSectionLoadState(candidate)
                             : candidate,
                         ),
                       }
@@ -496,12 +512,10 @@ export default function App() {
         fileHasVisibleDiff(file, preferences.showWhitespace),
     );
     const requests = searchableFiles.flatMap((file) =>
-      file.sections
-        .filter((section) => section.loadState === 'deferred' && section.summary?.canLoad !== false)
-        .map((section) => ({
-          file,
-          section,
-        })),
+      file.sections.filter(shouldLoadDiffSectionContents).map((section) => ({
+        file,
+        section,
+      })),
     );
 
     if (!requests.length) {
@@ -583,14 +597,7 @@ export default function App() {
                       ...file,
                       sections: file.sections.map((candidate) =>
                         candidate.id === request.section.id
-                          ? {
-                              ...candidate,
-                              loadState: 'error',
-                              summary: {
-                                canLoad: false,
-                                reason: 'Codiff could not load this file.',
-                              },
-                            }
+                          ? getFailedSectionLoadState(candidate)
                           : candidate,
                       ),
                     }

@@ -8,6 +8,7 @@ import {
   getTotalDiffLineCount,
   getVisibleDiffSections,
   fileHasVisibleDiff,
+  shouldLoadDiffSectionContents,
 } from '../lib/diff.ts';
 import { isDiffSearchShortcut } from '../lib/keyboard.ts';
 import { renderMarkdown } from '../lib/markdown.tsx';
@@ -67,6 +68,50 @@ test('pure renames are visible without content hunks', () => {
   expect(visibleSections).toHaveLength(1);
   expect(visibleSections[0].fileDiff.hunks).toHaveLength(0);
   expect(fileHasVisibleDiff(file, false)).toBe(true);
+});
+
+test('patch-only text sections are loadable for full context expansion', () => {
+  expect(
+    shouldLoadDiffSectionContents({
+      binary: false,
+      id: 'src/app.ts:unstaged',
+      kind: 'unstaged',
+      loadState: 'ready',
+      patch: 'diff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n',
+    }),
+  ).toBe(true);
+
+  expect(
+    shouldLoadDiffSectionContents({
+      binary: false,
+      id: 'src/app.ts:unstaged',
+      kind: 'unstaged',
+      loadState: 'ready',
+      newFile: {
+        contents: 'new\n',
+        name: 'src/app.ts',
+      },
+      oldFile: {
+        contents: 'old\n',
+        name: 'src/app.ts',
+      },
+      patch: 'diff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n',
+    }),
+  ).toBe(false);
+
+  expect(
+    shouldLoadDiffSectionContents({
+      binary: false,
+      id: 'src/app.ts:unstaged',
+      kind: 'unstaged',
+      loadState: 'ready',
+      patch: 'diff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n',
+      summary: {
+        canLoad: false,
+        reason: 'Codiff could not load full file context.',
+      },
+    }),
+  ).toBe(false);
 });
 
 test('mode-only changes are visible without content hunks', () => {
