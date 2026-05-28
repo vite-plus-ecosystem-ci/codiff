@@ -1,7 +1,9 @@
+import { execFile } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { expect, test } from 'vite-plus/test';
 
 const require = createRequire(import.meta.url);
@@ -12,7 +14,10 @@ const { getInitialRepositoryPath, parseCommandLineArguments, parseGitHubRemoteUr
       launchOptions: {
         codexSessionId?: string;
         repositoryPathProvided: boolean;
-        source?: { ref: string; type: 'commit' } | { type: 'pull-request'; url: string };
+        source?:
+          | { ref: string; type: 'branch' }
+          | { ref: string; type: 'commit' }
+          | { type: 'pull-request'; url: string };
         walkthrough: boolean;
         walkthroughContext?: unknown;
       },
@@ -23,7 +28,10 @@ const { getInitialRepositoryPath, parseCommandLineArguments, parseGitHubRemoteUr
       launchOptions: {
         codexSessionId?: string;
         repositoryPathProvided: boolean;
-        source?: { ref: string; type: 'commit' } | { type: 'pull-request'; url: string };
+        source?:
+          | { ref: string; type: 'branch' }
+          | { ref: string; type: 'commit' }
+          | { type: 'pull-request'; url: string };
         walkthrough: boolean;
         walkthroughContext?: unknown;
       };
@@ -32,6 +40,12 @@ const { getInitialRepositoryPath, parseCommandLineArguments, parseGitHubRemoteUr
     };
     parseGitHubRemoteUrl: (value: string) => { owner: string; repo: string } | null;
   };
+
+const execFileAsync = promisify(execFile);
+
+const git = async (repo: string, args: ReadonlyArray<string>) => {
+  await execFileAsync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+};
 
 const defaultLaunchOptions = {
   repositoryPathProvided: false,
@@ -81,6 +95,82 @@ test('parses positional HEAD revisions as commit sources', () => {
     pullRequestNumber: null,
     repositoryPath: '/repo',
   });
+});
+
+test('parses plain refs as branch sources', async () => {
+  const repositoryPath = await mkdtemp(join(tmpdir(), 'codiff-branch-ref-'));
+  const previousCwd = process.cwd();
+
+  try {
+    await git(repositoryPath, ['init']);
+    await git(repositoryPath, ['config', 'user.email', 'codiff@example.com']);
+    await git(repositoryPath, ['config', 'user.name', 'Codiff Test']);
+    await git(repositoryPath, ['commit', '--allow-empty', '-m', 'initial commit']);
+    await git(repositoryPath, ['checkout', '-b', 'feature']);
+    process.chdir(repositoryPath);
+
+    expect(parseCommandLineArguments(['codiff', 'feature'])).toEqual({
+      launchOptions: {
+        repositoryPathProvided: false,
+        source: {
+          ref: 'feature',
+          type: 'branch',
+        },
+        walkthrough: false,
+      },
+      pullRequestNumber: null,
+      repositoryPath: null,
+    });
+
+    expect(parseCommandLineArguments(['codiff', 'feature', repositoryPath])).toEqual({
+      launchOptions: {
+        repositoryPathProvided: true,
+        source: {
+          ref: 'feature',
+          type: 'branch',
+        },
+        walkthrough: false,
+      },
+      pullRequestNumber: null,
+      repositoryPath,
+    });
+  } finally {
+    process.chdir(previousCwd);
+    await rm(repositoryPath, { force: true, recursive: true });
+  }
+});
+
+test('parses hex-like refs as commits before branches', async () => {
+  const repositoryPath = await mkdtemp(join(tmpdir(), 'codiff-hex-ref-'));
+  const previousCwd = process.cwd();
+
+  try {
+    await git(repositoryPath, ['init']);
+    await git(repositoryPath, ['config', 'user.email', 'codiff@example.com']);
+    await git(repositoryPath, ['config', 'user.name', 'Codiff Test']);
+    await git(repositoryPath, ['commit', '--allow-empty', '-m', 'initial commit']);
+    const { stdout } = await execFileAsync('git', ['-C', repositoryPath, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+    });
+    const shortHash = stdout.trim().slice(0, 8);
+    await git(repositoryPath, ['branch', shortHash]);
+    process.chdir(repositoryPath);
+
+    expect(parseCommandLineArguments(['codiff', shortHash]).launchOptions.source).toEqual({
+      ref: shortHash,
+      type: 'commit',
+    });
+
+    expect(
+      parseCommandLineArguments(['codiff', '--branch', shortHash]).launchOptions.source,
+    ).toEqual({
+      ref: shortHash,
+      type: 'branch',
+    });
+  } finally {
+    process.chdir(previousCwd);
+    await rm(repositoryPath, { force: true, recursive: true });
+  }
 });
 
 test('parses Codex walkthrough seed command-line options', async () => {

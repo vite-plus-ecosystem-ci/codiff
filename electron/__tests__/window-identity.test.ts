@@ -18,6 +18,7 @@ const { findMatchingWindowIdentity, getWindowIdentity, parseGitHubPullRequestUrl
       launchOptions?: {
         source?:
           | { type: 'working-tree' }
+          | { ref: string; type: 'branch' }
           | { ref: string; type: 'commit' }
           | {
               number?: number;
@@ -84,6 +85,22 @@ test('window identities resolve commit refs to the same commit sha', async () =>
         source: { ref: 'HEAD', type: 'commit' },
       })?.key,
     );
+  } finally {
+    await rm(repositoryPath, { force: true, recursive: true });
+  }
+});
+
+test('window identities distinguish branch history launches', async () => {
+  const repositoryPath = await createRepository();
+
+  try {
+    await git(repositoryPath, ['checkout', '-b', 'feature']);
+
+    expect(
+      getWindowIdentity(repositoryPath, {
+        source: { ref: 'feature', type: 'branch' },
+      })?.sourceKey,
+    ).toBe('branch:feature');
   } finally {
     await rm(repositoryPath, { force: true, recursive: true });
   }

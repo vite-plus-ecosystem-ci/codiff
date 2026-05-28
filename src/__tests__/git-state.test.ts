@@ -45,6 +45,7 @@ type GitStateModule = {
   listRepositoryHistory: (
     launchPath: string,
     limit?: number,
+    source?: ReviewSource,
   ) => Promise<{ entries: ReadonlyArray<unknown>; root: string }>;
   normalizeGitHubPullRequestCommit: (commit: Record<string, unknown>) => unknown;
   normalizeGitHubReviewComment: (comment: Record<string, unknown>) => unknown;
@@ -471,6 +472,37 @@ test('readRepositoryState and history handle fresh repositories', async () => {
     });
     expect(state.root).toBe(repo);
     expect(state.files.map((file) => file.path)).toEqual(['notes/todo.txt']);
+  });
+});
+
+test('readRepositoryState opens branch refs as history-focused sources', async () => {
+  await withRepo(async (repo) => {
+    await writeRepoFile(repo, 'file.txt', 'base\n');
+    await commitAll(repo, 'initial commit');
+    const baseBranch = (await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+
+    await git(repo, ['checkout', '-b', 'feature']);
+    await writeRepoFile(repo, 'file.txt', 'feature one\n');
+    await commitAll(repo, 'feature one');
+    await writeRepoFile(repo, 'file.txt', 'feature two\n');
+    await commitAll(repo, 'feature two');
+
+    await git(repo, ['checkout', baseBranch]);
+    await writeRepoFile(repo, 'file.txt', 'main change\n');
+    await commitAll(repo, 'main change');
+
+    const [state, history] = await Promise.all([
+      readRepositoryState(repo, { ref: 'feature', type: 'branch' }),
+      listRepositoryHistory(repo, 10, { ref: 'feature', type: 'branch' }),
+    ]);
+
+    expect(state.files).toEqual([]);
+    expect(state.source).toEqual({ ref: 'feature', type: 'branch' });
+    expect(history.entries.map((entry) => (entry as { subject: string }).subject)).toEqual([
+      'feature two',
+      'feature one',
+      'initial commit',
+    ]);
   });
 });
 

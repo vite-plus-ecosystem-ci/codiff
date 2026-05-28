@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
 export const flagDefinitions = [
+  { argument: '<ref>', description: 'Open branch history.', name: 'branch', type: 'string' },
   { argument: '<ref>', description: 'Review a specific commit.', name: 'commit', type: 'string' },
   {
     argument: '<id>',
@@ -35,6 +36,7 @@ export const flagDefinitions = [
 export const usageExamples = [
   { command: 'codiff', description: 'Review staged and unstaged changes.' },
   { command: 'codiff /path/to/repo', description: 'Review changes in a specific repository.' },
+  { command: 'codiff branch-name', description: 'Review a branch history.' },
   { command: 'codiff a1b2c3d', description: 'Review a specific commit.' },
   { command: "codiff '#75'", description: 'Review pull request #75.' },
   { command: 'codiff pr 75', description: 'Review pull request #75 (alternate syntax).' },
@@ -96,6 +98,36 @@ const isCommitRefArgument = (arg) =>
   (commitHashPattern.test(arg) ||
     headCommitRefPattern.test(arg) ||
     revisionSyntaxPattern.test(arg));
+
+const isExplicitPathArgument = (arg) =>
+  arg.startsWith('/') || arg.startsWith('./') || arg.startsWith('../');
+
+const gitSucceeds = (repositoryPath, args) => {
+  try {
+    execFileSync('git', ['-C', repositoryPath, ...args], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const isBranchRef = (repositoryPath, ref) =>
+  gitSucceeds(repositoryPath, ['show-ref', '--verify', '--quiet', `refs/heads/${ref}`]) ||
+  gitSucceeds(repositoryPath, ['show-ref', '--verify', '--quiet', `refs/remotes/${ref}`]);
+
+const isCommitRef = (repositoryPath, ref) =>
+  gitSucceeds(repositoryPath, ['rev-parse', '--verify', `${ref}^{commit}`]);
+
+const resolveSourceCandidate = (repositoryPath, ref) =>
+  isCommitRefArgument(ref) && isCommitRef(repositoryPath, ref)
+    ? { commitRef: ref }
+    : isBranchRef(repositoryPath, ref)
+      ? { branchRef: ref }
+      : isCommitRef(repositoryPath, ref) || isCommitRefArgument(ref)
+        ? { commitRef: ref }
+        : null;
 
 const parsePullRequestNumberArgument = (arg) => {
   const match = arg.match(pullRequestNumberPattern);
@@ -211,11 +243,13 @@ export const parseArguments = (args) => {
   });
 
   let commitRef = typeof values.commit === 'string' ? values.commit : null;
+  let branchRef = typeof values.branch === 'string' ? values.branch : null;
   const codexSessionId =
     typeof values['codex-session'] === 'string' ? values['codex-session'] : null;
   let pullRequestNumber = null;
   let pullRequestUrl = null;
   let requestedPath = null;
+  let sourceCandidate = null;
   const walkthroughContextPath =
     typeof values['walkthrough-context'] === 'string' ? values['walkthrough-context'] : null;
 
@@ -243,15 +277,28 @@ export const parseArguments = (args) => {
       }
     }
 
-    if (!commitRef && isCommitRefArgument(arg)) {
-      commitRef = arg;
+    if (!commitRef && !branchRef && !sourceCandidate && !isExplicitPathArgument(arg)) {
+      sourceCandidate = arg;
     } else if (requestedPath == null) {
       requestedPath = arg;
     }
   }
 
+  const repositoryPath = resolve(requestedPath ?? process.cwd());
+  if (!commitRef && !branchRef && sourceCandidate) {
+    const source = resolveSourceCandidate(repositoryPath, sourceCandidate);
+    if (source?.branchRef) {
+      branchRef = source.branchRef;
+    } else if (source?.commitRef) {
+      commitRef = source.commitRef;
+    } else if (requestedPath == null) {
+      requestedPath = sourceCandidate;
+    }
+  }
+
   return {
     ...(codexSessionId ? { codexSessionId } : {}),
+    ...(branchRef ? { branchRef } : {}),
     commitRef,
     help: values.help === true,
     pullRequestNumber,

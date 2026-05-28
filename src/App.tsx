@@ -32,7 +32,6 @@ import {
 import {
   type CodeViewInstance,
   type DiffSearchResult,
-  type PullRequestSource,
   type RepositoryLoadError,
   type ReviewComment,
   type SidebarMode,
@@ -120,8 +119,7 @@ export default function App() {
   const [historyHasMore, setHistoryHasMore] = useState(true);
   const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyPullRequestSource, setHistoryPullRequestSource] =
-    useState<PullRequestSource | null>(null);
+  const [historySource, setHistorySource] = useState<ReviewSource | null>(null);
   const [itemVersionByPath, setItemVersionByPath] = useState<Record<string, number>>({});
   const [localChangesDetected, setLocalChangesDetected] = useState(false);
   const [launchOptions, setLaunchOptions] = useState<CodiffLaunchOptions>(defaultLaunchOptions);
@@ -231,7 +229,9 @@ export default function App() {
       };
       const history = await window.codiff.getRepositoryHistory(
         HISTORY_PAGE_SIZE,
-        orderedState.source.type === 'pull-request' ? orderedState.source : undefined,
+        orderedState.source.type === 'pull-request' || orderedState.source.type === 'branch'
+          ? orderedState.source
+          : undefined,
       );
 
       if (canceled) {
@@ -240,7 +240,8 @@ export default function App() {
 
       const shouldLoadWalkthrough = nextLaunchOptions.walkthrough && orderedState.files.length > 0;
       const shouldStartInHistory =
-        orderedState.source.type === 'working-tree' && orderedState.files.length === 0;
+        (orderedState.source.type === 'working-tree' || orderedState.source.type === 'branch') &&
+        orderedState.files.length === 0;
 
       setLaunchOptions({
         ...nextLaunchOptions,
@@ -280,8 +281,10 @@ export default function App() {
       setHistoryEntries(history.entries);
       setHistoryHasMore(history.entries.length >= HISTORY_PAGE_SIZE);
       setHistoryLimit(HISTORY_PAGE_SIZE);
-      setHistoryPullRequestSource(
-        orderedState.source.type === 'pull-request' ? orderedState.source : null,
+      setHistorySource(
+        orderedState.source.type === 'pull-request' || orderedState.source.type === 'branch'
+          ? orderedState.source
+          : null,
       );
       setState(orderedState);
       setLoadError(null);
@@ -816,7 +819,7 @@ export default function App() {
     historyRequestRef.current = request;
     setHistoryLoading(true);
     window.codiff
-      .getRepositoryHistory(nextLimit, historyPullRequestSource ?? undefined)
+      .getRepositoryHistory(nextLimit, historySource ?? undefined)
       .then((history) => {
         if (historyRequestRef.current !== request) {
           return;
@@ -836,7 +839,7 @@ export default function App() {
           setHistoryLoading(false);
         }
       });
-  }, [historyHasMore, historyLimit, historyLoading, historyPullRequestSource]);
+  }, [historyHasMore, historyLimit, historyLoading, historySource]);
 
   const moveDiffSearchMatch = useCallback(
     (direction: 1 | -1) => {
@@ -923,8 +926,11 @@ export default function App() {
             );
 
           setState(orderedState);
-          if (orderedState.source.type === 'pull-request') {
-            setHistoryPullRequestSource(orderedState.source);
+          if (
+            orderedState.source.type === 'pull-request' ||
+            orderedState.source.type === 'branch'
+          ) {
+            setHistorySource(orderedState.source);
           }
           setCollapsed(new Set(nextCollapsed));
           setItemVersionByPath({});
@@ -1795,6 +1801,7 @@ export default function App() {
           </div>
         </div>
         <Sidebar
+          branchSource={historySource?.type === 'branch' ? historySource : null}
           currentSource={pendingSource ?? state.source}
           files={visibleFiles}
           historyEntries={historyEntries}
@@ -1810,7 +1817,7 @@ export default function App() {
           }
           onSelectPath={selectPath}
           onSelectSource={selectSource}
-          pullRequestSource={historyPullRequestSource}
+          pullRequestSource={historySource?.type === 'pull-request' ? historySource : null}
           searchQuery={sidebarMode === 'history' ? historySearchQuery : fileSearchQuery}
           selectedPath={visibleSelectedPath}
           showWhitespace={showWhitespace}
@@ -1836,10 +1843,16 @@ export default function App() {
           <div className="empty-state">
             <div className="empty-panel squircle">
               <strong>
-                {state.source.type === 'commit' ? 'No changes in commit' : 'No local changes'}
+                {state.source.type === 'commit'
+                  ? 'No changes in commit'
+                  : state.source.type === 'branch'
+                    ? 'Branch history'
+                    : 'No local changes'}
               </strong>
               {state.source.type === 'commit' ? (
                 <span>{getShortRef(state.source.ref)}</span>
+              ) : state.source.type === 'branch' ? (
+                <span>{state.source.ref}</span>
               ) : (
                 <code className="walkthrough-inline-code" title={state.root}>
                   {compactPath(state.root)}

@@ -25,6 +25,41 @@ const isCommitRefArgument = (arg) =>
     revisionSyntaxPattern.test(arg));
 
 /** @param {string} arg */
+const isExplicitPathArgument = (arg) =>
+  arg.startsWith('/') || arg.startsWith('./') || arg.startsWith('../');
+
+/** @param {string} repositoryPath @param {ReadonlyArray<string>} args */
+const gitSucceeds = (repositoryPath, args) => {
+  try {
+    execFileSync('git', ['-C', repositoryPath, ...args], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** @param {string} repositoryPath @param {string} ref */
+const isBranchRef = (repositoryPath, ref) =>
+  gitSucceeds(repositoryPath, ['show-ref', '--verify', '--quiet', `refs/heads/${ref}`]) ||
+  gitSucceeds(repositoryPath, ['show-ref', '--verify', '--quiet', `refs/remotes/${ref}`]);
+
+/** @param {string} repositoryPath @param {string} ref */
+const isCommitRef = (repositoryPath, ref) =>
+  gitSucceeds(repositoryPath, ['rev-parse', '--verify', `${ref}^{commit}`]);
+
+/** @param {string} repositoryPath @param {string} ref */
+const resolveSourceCandidate = (repositoryPath, ref) =>
+  isCommitRefArgument(ref) && isCommitRef(repositoryPath, ref)
+    ? { commitRef: ref }
+    : isBranchRef(repositoryPath, ref)
+      ? { branchRef: ref }
+      : isCommitRef(repositoryPath, ref) || isCommitRefArgument(ref)
+        ? { commitRef: ref }
+        : null;
+
+/** @param {string} arg */
 const parsePullRequestNumberArgument = (arg) => {
   const match = arg.match(pullRequestNumberPattern);
   return match ? Number(match[1]) : null;
@@ -152,6 +187,9 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
       commit: {
         type: 'string',
       },
+      branch: {
+        type: 'string',
+      },
       walkthrough: {
         short: 'w',
         type: 'boolean',
@@ -167,9 +205,11 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
   });
 
   let commitRef = typeof values.commit === 'string' ? values.commit : null;
+  let branchRef = typeof values.branch === 'string' ? values.branch : null;
   let pullRequestNumber = null;
   let pullRequestUrl = null;
   let repositoryPath = null;
+  let sourceCandidate = null;
 
   for (let index = 0; index < positionals.length; index += 1) {
     const arg = positionals[index];
@@ -195,14 +235,29 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
       }
     }
 
-    if (!commitRef && isCommitRefArgument(arg)) {
-      commitRef = arg;
+    if (!commitRef && !branchRef && !sourceCandidate && !isExplicitPathArgument(arg)) {
+      sourceCandidate = arg;
     } else if (repositoryPath == null) {
       repositoryPath = arg;
     }
   }
 
+  if (!commitRef && !branchRef && sourceCandidate) {
+    const source = resolveSourceCandidate(
+      resolve(repositoryPath || process.cwd()),
+      sourceCandidate,
+    );
+    if (source?.branchRef) {
+      branchRef = source.branchRef;
+    } else if (source?.commitRef) {
+      commitRef = source.commitRef;
+    } else if (repositoryPath == null) {
+      repositoryPath = sourceCandidate;
+    }
+  }
+
   const envCommitRef = useEnvironment ? process.env.CODIFF_COMMIT_REF || '' : '';
+  const envBranchRef = useEnvironment ? process.env.CODIFF_BRANCH_REF || '' : '';
   const envPullRequestNumber = useEnvironment
     ? parsePullRequestNumberValue(process.env.CODIFF_PULL_REQUEST_NUMBER || '')
     : null;
@@ -221,6 +276,7 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
     undefined;
   const sourcePullRequestNumber = envPullRequestNumber ?? pullRequestNumber;
   const sourceRef = envCommitRef || commitRef;
+  const sourceBranchRef = envBranchRef || branchRef;
   const sourcePullRequestUrl = envPullRequestUrl || pullRequestUrl;
   const repositoryPathProvided = Boolean(
     repositoryPath || (useEnvironment && process.env.CODIFF_REPOSITORY_PATH),
@@ -239,7 +295,12 @@ const parseCommandLineArguments = (commandLine = process.argv) => {
               ref: sourceRef,
               type: 'commit',
             }
-          : undefined,
+          : sourceBranchRef && sourcePullRequestNumber == null
+            ? {
+                ref: sourceBranchRef,
+                type: 'branch',
+              }
+            : undefined,
       walkthrough:
         (useEnvironment && process.env.CODIFF_WALKTHROUGH === '1') || values.walkthrough === true,
       ...(walkthroughContextPath

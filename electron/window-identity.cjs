@@ -98,6 +98,10 @@ const getSourceKey = (repositoryRoot, source = { type: 'working-tree' }) => {
     return commit ? `commit:${commit}` : null;
   }
 
+  if (source.type === 'branch') {
+    return resolveCommitRef(repositoryRoot, source.ref) ? `branch:${source.ref}` : null;
+  }
+
   if (source.type === 'pull-request') {
     return getPullRequestSourceKey(source);
   }

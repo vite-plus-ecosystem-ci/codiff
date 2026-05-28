@@ -27,6 +27,7 @@ import type { ChangedFile, HistoryEntry, ReviewSource, Walkthrough } from '../..
 import { Gravatar } from './Gravatar.tsx';
 
 export function Sidebar({
+  branchSource,
   currentSource,
   files,
   historyEntries,
@@ -51,6 +52,7 @@ export function Sidebar({
   walkthroughSummary,
   walkthroughUnread,
 }: {
+  branchSource: Extract<ReviewSource, { type: 'branch' }> | null;
   currentSource: ReviewSource;
   files: ReadonlyArray<ChangedFile>;
   historyEntries: ReadonlyArray<HistoryEntry>;
@@ -291,6 +293,7 @@ export function Sidebar({
       </div>
       {mode === 'history' ? (
         <HistorySidebar
+          branchSource={branchSource}
           currentSource={currentSource}
           entries={historyEntries}
           hasMore={historyHasMore}
@@ -368,6 +371,7 @@ const shortDate = (timestamp: number) => {
 };
 
 function HistorySidebar({
+  branchSource,
   currentSource,
   entries,
   hasMore,
@@ -377,6 +381,7 @@ function HistorySidebar({
   pullRequestSource,
   searchQuery,
 }: {
+  branchSource: Extract<ReviewSource, { type: 'branch' }> | null;
   currentSource: ReviewSource;
   entries: ReadonlyArray<HistoryEntry>;
   hasMore: boolean;
@@ -438,6 +443,25 @@ function HistorySidebar({
       ].filter((row): row is NonNullable<typeof row> => row != null);
     }
 
+    if (branchSource) {
+      const localRows = commitRows.filter(matchesQuery);
+      return [
+        !normalizedQuery
+          ? {
+              author: null,
+              committedAt: null,
+              gravatarUrl: undefined,
+              key: getSourceKey(branchSource),
+              kind: 'entry' as const,
+              ref: branchSource.ref,
+              source: branchSource satisfies ReviewSource,
+              subject: 'Branch history',
+            }
+          : null,
+        ...localRows,
+      ].filter((row): row is NonNullable<typeof row> => row != null);
+    }
+
     const localRows = commitRows.filter(matchesQuery);
     return [
       !normalizedQuery
@@ -454,7 +478,7 @@ function HistorySidebar({
         : null,
       ...localRows,
     ].filter((row): row is NonNullable<typeof row> => row != null);
-  }, [entries, normalizedQuery, pullRequestSource]);
+  }, [branchSource, entries, normalizedQuery, pullRequestSource]);
   const maybeLoadMore = useCallback(() => {
     const element = listRef.current;
     if (!element || loading || !hasMore || normalizedQuery) {
@@ -490,7 +514,7 @@ function HistorySidebar({
             <span className="history-entry-ref">
               {row.source.type === 'commit'
                 ? getShortRef(row.source.ref)
-                : row.source.type === 'pull-request'
+                : row.source.type === 'pull-request' || row.source.type === 'branch'
                   ? row.ref
                   : 'local'}
             </span>

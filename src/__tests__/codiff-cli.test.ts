@@ -48,6 +48,66 @@ test('parseArguments treats HEAD positional revisions as commit refs', () => {
   });
 });
 
+test('parseArguments treats plain branch refs as branch refs', async () => {
+  const repositoryPath = await realpath(await mkdtemp(join(tmpdir(), 'codiff-cli-')));
+  const previousCwd = process.cwd();
+
+  try {
+    await git(repositoryPath, ['init']);
+    await git(repositoryPath, ['config', 'user.email', 'codiff@example.com']);
+    await git(repositoryPath, ['config', 'user.name', 'Codiff Test']);
+    await git(repositoryPath, ['commit', '--allow-empty', '-m', 'initial commit']);
+    await git(repositoryPath, ['checkout', '-b', 'feature']);
+    process.chdir(repositoryPath);
+
+    expect(parseArguments(['feature'])).toEqual({
+      branchRef: 'feature',
+      commitRef: null,
+      help: false,
+      pullRequestNumber: null,
+      pullRequestUrl: null,
+      requestedPath: repositoryPath,
+      version: false,
+      walkthrough: false,
+    });
+  } finally {
+    process.chdir(previousCwd);
+    await rm(repositoryPath, { force: true, recursive: true });
+  }
+});
+
+test('parseArguments treats hex-like refs as commits before branches', async () => {
+  const repositoryPath = await realpath(await mkdtemp(join(tmpdir(), 'codiff-cli-')));
+  const previousCwd = process.cwd();
+
+  try {
+    await git(repositoryPath, ['init']);
+    await git(repositoryPath, ['config', 'user.email', 'codiff@example.com']);
+    await git(repositoryPath, ['config', 'user.name', 'Codiff Test']);
+    await git(repositoryPath, ['commit', '--allow-empty', '-m', 'initial commit']);
+    const { stdout } = await execFileAsync('git', ['-C', repositoryPath, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+    });
+    const shortHash = stdout.trim().slice(0, 8);
+    await git(repositoryPath, ['branch', shortHash]);
+    process.chdir(repositoryPath);
+
+    expect(parseArguments([shortHash])).toMatchObject({
+      commitRef: shortHash,
+      requestedPath: repositoryPath,
+    });
+
+    expect(parseArguments(['--branch', shortHash])).toMatchObject({
+      branchRef: shortHash,
+      commitRef: null,
+      requestedPath: repositoryPath,
+    });
+  } finally {
+    process.chdir(previousCwd);
+    await rm(repositoryPath, { force: true, recursive: true });
+  }
+});
+
 test('parseArguments keeps existing hash-like paths as repository paths', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codiff-cli-'));
   const repositoryPath = join(directory, 'deadbeef');
@@ -223,6 +283,98 @@ test('packaged terminal helper forwards HEAD^1 to Electron as a commit', async (
       '--commit',
       'HEAD^1',
       process.cwd(),
+    ]);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test('packaged terminal helper forwards branch names to Electron as branches', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codiff-app-helper-'));
+  const fakeBin = join(directory, 'bin');
+  const logPath = join(directory, 'open-args.txt');
+  const openPath = join(fakeBin, 'open');
+  const repositoryPath = join(directory, 'repo');
+
+  try {
+    await mkdir(fakeBin);
+    await mkdir(repositoryPath);
+    const realRepositoryPath = await realpath(repositoryPath);
+    await git(repositoryPath, ['init']);
+    await git(repositoryPath, ['config', 'user.email', 'codiff@example.com']);
+    await git(repositoryPath, ['config', 'user.name', 'Codiff Test']);
+    await git(repositoryPath, ['commit', '--allow-empty', '-m', 'initial commit']);
+    await git(repositoryPath, ['checkout', '-b', 'feature']);
+    await writeFile(
+      openPath,
+      '#!/bin/sh\nfor arg in "$@"; do\n  printf "%s\\n" "$arg" >> "$OPEN_ARGS_FILE"\ndone\n',
+    );
+    await chmod(openPath, 0o755);
+
+    await execFileAsync(resolve('bin/codiff-app'), ['feature'], {
+      cwd: realRepositoryPath,
+      env: {
+        ...process.env,
+        OPEN_ARGS_FILE: logPath,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+      },
+    });
+
+    expect((await readFile(logPath, 'utf8')).trim().split('\n')).toEqual([
+      '-n',
+      resolve('bin/../../../..'),
+      '--args',
+      '--branch',
+      'feature',
+      realRepositoryPath,
+    ]);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test('packaged terminal helper forwards hex refs to Electron as commits', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codiff-app-helper-'));
+  const fakeBin = join(directory, 'bin');
+  const logPath = join(directory, 'open-args.txt');
+  const openPath = join(fakeBin, 'open');
+  const repositoryPath = join(directory, 'repo');
+
+  try {
+    await mkdir(fakeBin);
+    await mkdir(repositoryPath);
+    const realRepositoryPath = await realpath(repositoryPath);
+    await git(repositoryPath, ['init']);
+    await git(repositoryPath, ['config', 'user.email', 'codiff@example.com']);
+    await git(repositoryPath, ['config', 'user.name', 'Codiff Test']);
+    await git(repositoryPath, ['commit', '--allow-empty', '-m', 'initial commit']);
+    const { stdout } = await execFileAsync('git', ['-C', repositoryPath, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+    });
+    const shortHash = stdout.trim().slice(0, 8);
+    await git(repositoryPath, ['branch', shortHash]);
+    await writeFile(
+      openPath,
+      '#!/bin/sh\nfor arg in "$@"; do\n  printf "%s\\n" "$arg" >> "$OPEN_ARGS_FILE"\ndone\n',
+    );
+    await chmod(openPath, 0o755);
+
+    await execFileAsync(resolve('bin/codiff-app'), [shortHash], {
+      cwd: realRepositoryPath,
+      env: {
+        ...process.env,
+        OPEN_ARGS_FILE: logPath,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+      },
+    });
+
+    expect((await readFile(logPath, 'utf8')).trim().split('\n')).toEqual([
+      '-n',
+      resolve('bin/../../../..'),
+      '--args',
+      '--commit',
+      shortHash,
+      realRepositoryPath,
     ]);
   } finally {
     await rm(directory, { force: true, recursive: true });

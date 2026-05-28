@@ -31,6 +31,7 @@ show_help() {
   printf '%s\n' "${blue_bold}Usage:${reset} ${gray}codiff [options] [<ref> | <pr> | <url>] [path]${reset}"
   printf '\n'
   printf '%s\n' "${blue_bold}Options:${reset}"
+  printf '  %-22s%s%s%s\n' "--branch <ref>" "$gray" "Open branch history." "$reset"
   printf '  %-22s%s%s%s\n' "--commit <ref>" "$gray" "Review a specific commit." "$reset"
   printf '  %-22s%s%s%s\n' "--codex-session <id>" "$gray" "Attach Codex session metadata to a walkthrough." "$reset"
   printf '  %-22s%s%s%s\n' "--help, -h" "$gray" "Show this help message and exit." "$reset"
@@ -41,6 +42,7 @@ show_help() {
   printf '%s\n' "${blue_bold}Examples:${reset}"
   printf '  %-22s%s%s%s\n' "codiff" "$gray" "Review staged and unstaged changes." "$reset"
   printf '  %-22s%s%s%s\n' "codiff /path/to/repo" "$gray" "Review changes in a specific repository." "$reset"
+  printf '  %-22s%s%s%s\n' "codiff branch-name" "$gray" "Review a branch history." "$reset"
   printf '  %-22s%s%s%s\n' "codiff a1b2c3d" "$gray" "Review a specific commit." "$reset"
   printf '  %-22s%s%s%s\n' "codiff '#75'" "$gray" "Review pull request #75." "$reset"
   printf '  %-22s%s%s%s\n' "codiff pr 75" "$gray" "Review pull request #75 (alternate syntax)." "$reset"
@@ -50,10 +52,13 @@ show_help() {
 
 repository_path=""
 codex_session_id=""
+branch_ref=""
 commit_ref=""
 pull_request_source=""
+source_ref=""
 walkthrough_context_path=""
 expect_codex_session=0
+expect_branch_ref=0
 expect_commit_ref=0
 expect_pull_request_number=0
 expect_walkthrough_context=0
@@ -81,10 +86,33 @@ is_commit_ref_arg() {
   return 1
 }
 
+is_explicit_path_arg() {
+  case "$1" in
+    /*|./*|../*) return 0 ;;
+  esac
+
+  return 1
+}
+
+is_git_branch_ref() {
+  git -C "$1" show-ref --verify --quiet "refs/heads/$2" 2>/dev/null ||
+    git -C "$1" show-ref --verify --quiet "refs/remotes/$2" 2>/dev/null
+}
+
+is_git_commit_ref() {
+  git -C "$1" rev-parse --verify "$2^{commit}" >/dev/null 2>&1
+}
+
 for arg in "$@"; do
   if [ "$expect_codex_session" -eq 1 ]; then
     codex_session_id="$arg"
     expect_codex_session=0
+    continue
+  fi
+
+  if [ "$expect_branch_ref" -eq 1 ]; then
+    branch_ref="$arg"
+    expect_branch_ref=0
     continue
   fi
 
@@ -127,6 +155,12 @@ for arg in "$@"; do
     --codex-session=*)
       codex_session_id="${arg#--codex-session=}"
       ;;
+    --branch)
+      expect_branch_ref=1
+      ;;
+    --branch=*)
+      branch_ref="${arg#--branch=}"
+      ;;
     --commit)
       expect_commit_ref=1
       ;;
@@ -148,14 +182,32 @@ for arg in "$@"; do
         pull_request_source="$arg"
       elif [ -z "$pull_request_source" ] && printf '%s' "$arg" | grep -Eq '^https://github\.com/[^/]+/[^/]+/pull/[0-9]+/?$'; then
         pull_request_source="$arg"
-      elif [ -z "$commit_ref" ] && is_commit_ref_arg "$arg"; then
-        commit_ref="$arg"
+      elif [ -z "$commit_ref" ] && [ -z "$branch_ref" ] && [ -z "$source_ref" ] && ! is_explicit_path_arg "$arg"; then
+        source_ref="$arg"
       elif [ -z "$repository_path" ]; then
         repository_path="$arg"
       fi
       ;;
   esac
 done
+
+if [ -n "$source_ref" ] && [ -z "$commit_ref" ] && [ -z "$branch_ref" ]; then
+  repository_context="${repository_path:-$PWD}"
+  case "$repository_context" in
+    /*) ;;
+    *) repository_context="$PWD/$repository_context" ;;
+  esac
+
+  if is_commit_ref_arg "$source_ref" && is_git_commit_ref "$repository_context" "$source_ref"; then
+    commit_ref="$source_ref"
+  elif is_git_branch_ref "$repository_context" "$source_ref"; then
+    branch_ref="$source_ref"
+  elif is_git_commit_ref "$repository_context" "$source_ref" || is_commit_ref_arg "$source_ref"; then
+    commit_ref="$source_ref"
+  elif [ -z "$repository_path" ]; then
+    repository_path="$source_ref"
+  fi
+fi
 
 repository_path="${repository_path:-$PWD}"
 
@@ -191,6 +243,10 @@ elif [ -n "$commit_ref" ] && [ "$walkthrough" -eq 1 ]; then
   open_codiff --walkthrough --commit "$commit_ref" "$repository_path"
 elif [ -n "$commit_ref" ]; then
   open_codiff --commit "$commit_ref" "$repository_path"
+elif [ -n "$branch_ref" ] && [ "$walkthrough" -eq 1 ]; then
+  open_codiff --walkthrough --branch "$branch_ref" "$repository_path"
+elif [ -n "$branch_ref" ]; then
+  open_codiff --branch "$branch_ref" "$repository_path"
 elif [ "$walkthrough" -eq 1 ]; then
   open_codiff --walkthrough "$repository_path"
 else

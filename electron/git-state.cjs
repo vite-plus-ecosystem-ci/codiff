@@ -3,6 +3,7 @@
 const { gitOrEmpty, parseStatus, validateRepositoryPath } = require('./git-state/common.cjs');
 const {
   listRepositoryHistory,
+  readBranchState,
   readCommitImageContent,
   readCommitSectionContent,
   readCommitState,
@@ -46,7 +47,9 @@ const readRepositoryState = async (launchPath, source = { type: 'working-tree' }
       ? await readPullRequestState(launchPath, source)
       : source.type === 'commit'
         ? await readCommitState(launchPath, source.ref)
-        : await readWorkingTreeState(launchPath, { eagerContents: false });
+        : source.type === 'branch'
+          ? await readBranchState(launchPath, source.ref)
+          : await readWorkingTreeState(launchPath, { eagerContents: false });
   const branch = (await gitOrEmpty(state.root, ['symbolic-ref', '--short', 'HEAD'])).trim() || null;
   return { ...state, branch };
 };
@@ -55,7 +58,7 @@ const readRepositoryState = async (launchPath, source = { type: 'working-tree' }
 const readRepositoryHistory = (launchPath, limit, source) =>
   source?.type === 'pull-request'
     ? listPullRequestHistory(launchPath, source, limit)
-    : listRepositoryHistory(launchPath, limit);
+    : listRepositoryHistory(launchPath, limit, source?.type === 'branch' ? source.ref : undefined);
 
 /** @param {string} launchPath @param {DiffSectionContentRequest} request */
 const readDiffSectionContent = async (launchPath, request) =>
@@ -84,6 +87,7 @@ module.exports = {
   parseStatus,
   parseGitHubPullRequestUrl,
   selectUnresolvedReviewComments,
+  readBranchState,
   readDiffSectionContent,
   readDiffImageContent,
   readGitIdentity,

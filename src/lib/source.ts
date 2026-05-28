@@ -4,9 +4,11 @@ import type { RepositoryLoadError } from './app-types.ts';
 export const getSourceKey = (source: ReviewSource) =>
   source.type === 'commit'
     ? `commit:${source.ref}`
-    : source.type === 'pull-request'
-      ? `pull-request:${source.owner ?? ''}/${source.repo ?? ''}#${source.number ?? source.url}`
-      : 'working-tree';
+    : source.type === 'branch'
+      ? `branch:${source.ref}`
+      : source.type === 'pull-request'
+        ? `pull-request:${source.owner ?? ''}/${source.repo ?? ''}#${source.number ?? source.url}`
+        : 'working-tree';
 
 const getErrorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
@@ -30,8 +32,10 @@ export const getShortRef = (ref: string) => ref.slice(0, 7);
 export const getSourceLabel = (source: ReviewSource) =>
   source.type === 'commit'
     ? getShortRef(source.ref)
-    : source.type === 'pull-request'
-      ? source.number
-        ? `PR #${source.number}`
-        : 'Pull request'
-      : 'Uncommitted';
+    : source.type === 'branch'
+      ? source.ref
+      : source.type === 'pull-request'
+        ? source.number
+          ? `PR #${source.number}`
+          : 'Pull request'
+        : 'Uncommitted';

@@ -24,6 +24,7 @@ const run = () => {
   }
 
   const {
+    branchRef,
     codexSessionId,
     commitRef,
     pullRequestNumber,
@@ -51,6 +52,7 @@ const run = () => {
     detached: true,
     env: {
       ...process.env,
+      CODIFF_BRANCH_REF: branchRef ?? '',
       CODIFF_COMMIT_REF: commitRef ?? '',
       CODIFF_CODEX_SESSION_ID: codexSessionId ?? '',
       CODIFF_PULL_REQUEST_URL: pullRequestUrl ?? '',

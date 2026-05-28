@@ -576,19 +576,38 @@ const readCommitImageContent = async (launchPath, ref, requestedPath) => {
   }
 };
 
+/** @param {string} launchPath @param {string} ref @returns {Promise<RepositoryState>} */
+const readBranchState = async (launchPath, ref) => {
+  const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
+  await git(repoRoot, ['rev-parse', '--verify', `${ref}^{commit}`]);
+
+  return {
+    files: [],
+    generatedAt: Date.now(),
+    launchPath,
+    root: repoRoot,
+    source: {
+      ref,
+      type: 'branch',
+    },
+  };
+};
+
 /** @param {string} launchPath @param {ReviewSource} [source] @returns {Promise<RepositoryState>} */
 const readRepositoryState = async (launchPath, source = { type: 'working-tree' }) =>
   source.type === 'pull-request'
     ? readPullRequestState(launchPath, source)
     : source.type === 'commit'
       ? readCommitState(launchPath, source.ref)
-      : readWorkingTreeState(launchPath);
+      : source.type === 'branch'
+        ? readBranchState(launchPath, source.ref)
+        : readWorkingTreeState(launchPath);
 
-/** @param {string} launchPath @param {number} [limit] */
-const listRepositoryHistory = async (launchPath, limit = 200) => {
+/** @param {string} launchPath @param {number} [limit] @param {string} [ref] */
+const listRepositoryHistory = async (launchPath, limit = 200, ref = 'HEAD') => {
   const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
   try {
-    await git(repoRoot, ['rev-parse', '--verify', 'HEAD']);
+    await git(repoRoot, ['rev-parse', '--verify', `${ref}^{commit}`]);
   } catch {
     return {
       entries: [],
@@ -600,6 +619,7 @@ const listRepositoryHistory = async (launchPath, limit = 200) => {
     'log',
     `--max-count=${limit}`,
     '--format=%H%x1f%P%x1f%ct%x1f%s%x1f%aN%x1f%aE%x1e',
+    ref,
   ]);
   const entries = [];
 
@@ -632,6 +652,7 @@ const listRepositoryHistory = async (launchPath, limit = 200) => {
 module.exports = {
   listRepositoryHistory,
   parseCommitNameStatus,
+  readBranchState,
   readCommitImageContent,
   readCommitSectionContent,
   readCommitState,
