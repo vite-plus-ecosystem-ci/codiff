@@ -1173,7 +1173,7 @@ export function ReviewCodeView({
 
           createCommentForRange(range, context);
         },
-        onPostRender: (node, _instance, context) => {
+        onPostRender: (node, _instance, _phase, context) => {
           const metadata = itemMetadata.get(context.item.id);
           node.classList.toggle(
             'codiff-markdown-preview-item',

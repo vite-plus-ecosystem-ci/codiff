@@ -2,44 +2,44 @@ import { File as CodeFile } from '@pierre/diffs/react';
 import type { ReactNode } from 'react';
 import { markdownCodeBlockOptions } from './code-view-options.ts';
 
+const renderText = (value: string, keyPrefix: string): Array<ReactNode> => {
+  const textNodes: Array<ReactNode> = [];
+  const emphasisPattern =
+    /\*\*([^*\n]+)\*\*|(?<![\w_])_([^_\n]+)_(?![\w_])|(?<![\w*])\*([^*\n]+)\*(?![\w*])/g;
+  let textLastIndex = 0;
+  let emphasisMatch: RegExpExecArray | null;
+
+  while ((emphasisMatch = emphasisPattern.exec(value))) {
+    if (emphasisMatch.index > textLastIndex) {
+      textNodes.push(value.slice(textLastIndex, emphasisMatch.index));
+    }
+
+    if (emphasisMatch[1] != null) {
+      textNodes.push(
+        <strong key={`${keyPrefix}:bold:${emphasisMatch.index}`}>{emphasisMatch[1]}</strong>,
+      );
+    } else {
+      textNodes.push(
+        <em key={`${keyPrefix}:italic:${emphasisMatch.index}`}>
+          {emphasisMatch[2] ?? emphasisMatch[3]}
+        </em>,
+      );
+    }
+    textLastIndex = emphasisPattern.lastIndex;
+  }
+
+  if (textLastIndex < value.length) {
+    textNodes.push(value.slice(textLastIndex));
+  }
+
+  return textNodes.length > 0 ? textNodes : [value];
+};
+
 export const renderInlineMarkdown = (text: string): ReactNode => {
   const nodes: Array<ReactNode> = [];
   const pattern = /`([^`\n]+)`/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
-
-  const renderText = (value: string, keyPrefix: string): Array<ReactNode> => {
-    const textNodes: Array<ReactNode> = [];
-    const emphasisPattern =
-      /\*\*([^*\n]+)\*\*|(?<![\w_])_([^_\n]+)_(?![\w_])|(?<![\w*])\*([^*\n]+)\*(?![\w*])/g;
-    let textLastIndex = 0;
-    let emphasisMatch: RegExpExecArray | null;
-
-    while ((emphasisMatch = emphasisPattern.exec(value))) {
-      if (emphasisMatch.index > textLastIndex) {
-        textNodes.push(value.slice(textLastIndex, emphasisMatch.index));
-      }
-
-      if (emphasisMatch[1] != null) {
-        textNodes.push(
-          <strong key={`${keyPrefix}:bold:${emphasisMatch.index}`}>{emphasisMatch[1]}</strong>,
-        );
-      } else {
-        textNodes.push(
-          <em key={`${keyPrefix}:italic:${emphasisMatch.index}`}>
-            {emphasisMatch[2] ?? emphasisMatch[3]}
-          </em>,
-        );
-      }
-      textLastIndex = emphasisPattern.lastIndex;
-    }
-
-    if (textLastIndex < value.length) {
-      textNodes.push(value.slice(textLastIndex));
-    }
-
-    return textNodes.length > 0 ? textNodes : [value];
-  };
 
   while ((match = pattern.exec(text))) {
     if (match.index > lastIndex) {
