@@ -125,6 +125,8 @@ const createRepo = async () => {
   const repo = await mkdtemp(join(tmpdir(), 'codiff-git-state-'));
   await git(repo, ['init']);
   await git(repo, ['config', 'core.excludesfile', '/dev/null']);
+  await git(repo, ['config', 'commit.gpgSign', 'false']);
+  await git(repo, ['config', 'tag.gpgSign', 'false']);
   await git(repo, ['config', 'user.email', 'codiff@example.com']);
   await git(repo, ['config', 'user.name', 'Codiff Test']);
   return realpath(repo);
