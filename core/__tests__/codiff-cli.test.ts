@@ -661,6 +661,49 @@ test('Codex skill launcher does not override explicit repository targets', async
   }
 });
 
+test('Codex skill launcher delegates share requests without opening Electron', async () => {
+  const logger = await createFakeCommandLogger('codiff-share-launcher-', 'share-codiff');
+  const repositoryPath = join(logger.directory, 'repo');
+  const walkthroughFile = join(logger.directory, 'walkthrough.json');
+
+  try {
+    await mkdir(repositoryPath, { recursive: true });
+    await writeFile(walkthroughFile, '{}');
+
+    await execFileAsync(
+      process.execPath,
+      [
+        resolve('codex/skills/codiff/scripts/open-codiff.mjs'),
+        '--share',
+        '--open',
+        '--file',
+        walkthroughFile,
+        'HEAD',
+      ],
+      {
+        cwd: resolve('codex/skills/codiff'),
+        env: {
+          ...logger.env,
+          CODEX_SESSION_CWD: repositoryPath,
+          CODEX_THREAD_ID: '',
+          CODIFF_SHARE_COMMAND: logger.commandPath,
+        },
+      },
+    );
+
+    expect(await logger.readArgs()).toEqual([
+      '--file',
+      walkthroughFile,
+      '--agent',
+      'codex',
+      '--open',
+      'HEAD',
+    ]);
+  } finally {
+    await logger.cleanup();
+  }
+});
+
 test('Claude skill launcher uses the session cwd and forwards --agent claude', async () => {
   const logger = await createFakeCommandLogger('codiff-claude-launcher-', 'codiff');
   const home = join(logger.directory, 'home');

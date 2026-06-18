@@ -143,6 +143,7 @@ function CopyFilePathButton({ path }: { path: string }) {
 }
 
 function CodeViewHeader({
+  allowViewedToggle,
   isSectionLoading,
   meta,
   onLoadSection,
@@ -152,6 +153,7 @@ function CodeViewHeader({
   onToggleViewed,
   readOnly,
 }: {
+  allowViewedToggle: boolean;
   isSectionLoading: boolean;
   meta: CodeViewItemMetadata;
   onLoadSection: (file: ChangedFile, section: DiffSection) => void;
@@ -247,28 +249,28 @@ function CodeViewHeader({
         </button>
       ) : null}
       {!readOnly ? (
-        <>
-          <button
-            className="codiff-open-button"
-            disabled={!canOpenFile}
-            onClick={() => onOpenFile(file)}
-            title={canOpenFile ? 'Open file in editor' : 'Deleted files cannot be opened'}
-            type="button"
-          >
-            Open
-          </button>
-          <button
-            aria-pressed={isViewed}
-            className={`codiff-viewed-button${isViewed ? ' active' : ''}`}
-            onClick={() => onToggleViewed(file, isViewed, reviewIdentity)}
-            type="button"
-          >
-            <span aria-hidden className="codiff-viewed-checkbox">
-              {isViewed ? <Check className="codiff-viewed-check" size={10} weight="bold" /> : null}
-            </span>
-            Viewed
-          </button>
-        </>
+        <button
+          className="codiff-open-button"
+          disabled={!canOpenFile}
+          onClick={() => onOpenFile(file)}
+          title={canOpenFile ? 'Open file in editor' : 'Deleted files cannot be opened'}
+          type="button"
+        >
+          Open
+        </button>
+      ) : null}
+      {!readOnly || allowViewedToggle ? (
+        <button
+          aria-pressed={isViewed}
+          className={`codiff-viewed-button${isViewed ? ' active' : ''}`}
+          onClick={() => onToggleViewed(file, isViewed, reviewIdentity)}
+          type="button"
+        >
+          <span aria-hidden className="codiff-viewed-checkbox">
+            {isViewed ? <Check className="codiff-viewed-check" size={10} weight="bold" /> : null}
+          </span>
+          Viewed
+        </button>
       ) : null}
     </div>
   );
@@ -1281,6 +1283,7 @@ export function ReviewCodeView({
   activeSearchMatch,
   agentId,
   agentLabel,
+  allowViewedToggle = false,
   blocks,
   bottomInset = codeViewLayout.paddingBottom,
   collapsed,
@@ -1325,6 +1328,7 @@ export function ReviewCodeView({
   activeSearchMatch: DiffSearchMatch | null;
   agentId: 'codex' | 'claude' | 'pi';
   agentLabel: string;
+  allowViewedToggle?: boolean;
   blocks?: ReadonlyArray<ReviewDiffBlock>;
   bottomInset?: number;
   collapsed: ReadonlySet<string>;
@@ -2434,6 +2438,7 @@ export function ReviewCodeView({
       const meta = itemMetadata.get(item.id);
       return meta ? (
         <CodeViewHeader
+          allowViewedToggle={allowViewedToggle}
           isSectionLoading={loadingSectionIds.has(meta.section.id)}
           meta={meta}
           onLoadSection={onLoadSection}
@@ -2449,6 +2454,7 @@ export function ReviewCodeView({
       commitDetailsItemId,
       commitDetailsCollapsed,
       commitMetadata,
+      allowViewedToggle,
       itemMetadata,
       isReadOnly,
       loadingSectionIds,

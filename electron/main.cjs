@@ -74,6 +74,8 @@ const {
   readNarrativeWalkthrough,
 } = require('./narrative-walkthrough.cjs');
 const { uploadSharedWalkthrough } = require('./shared-walkthrough-upload.cjs');
+const { resolveWalkthroughShareTarget } = require('./walkthrough-sharing.cjs');
+const { createCloudflareAccessClient } = require('./cloudflare-access.cjs');
 
 /**
  * @typedef {import('../core/config/types.ts').CodiffConfig} CodiffConfig
@@ -102,14 +104,6 @@ const windowInitialRepositoryStates = new Map();
 const pendingCommentsClipboardController = createPendingCommentsClipboardController({ clipboard });
 /** @type {CodiffConfig} */
 let config = createDefaultConfig();
-
-const canUseWalkthroughSharing = () => {
-  try {
-    return !app.isPackaged && userInfo().username === 'cpojer';
-  } catch {
-    return false;
-  }
-};
 
 /**
  * @type {Map<string, ReturnType<typeof createSkillInstaller>>}
@@ -786,6 +780,25 @@ const focusWindow = (window) => {
   window.focus();
 };
 
+/** @param {number} webContentsId */
+const getWalkthroughShareContext = async (webContentsId) => {
+  const repositoryPath = windowRepositories.get(webContentsId) || getLaunchPath();
+  const uploader = await readGitIdentity(repositoryPath);
+  let username = '';
+  try {
+    username = userInfo().username;
+  } catch {}
+
+  return {
+    target: resolveWalkthroughShareTarget({
+      email: uploader.email,
+      overrideUrl: process.env.CODIFF_SHARE_SERVER_URL,
+      username,
+    }),
+    uploader,
+  };
+};
+
 /**
  * @param {string} repositoryPath
  * @param {CodiffLaunchOptions} [launchOptions]
@@ -1052,24 +1065,32 @@ ipcMain.handle('codiff:getNarrativeWalkthrough', async (event, source) => {
 });
 
 ipcMain.handle('codiff:shareWalkthrough', async (event, snapshot) => {
-  if (!canUseWalkthroughSharing()) {
-    return {
-      reason: 'Walkthrough sharing is only available in local development builds.',
-      status: 'failed',
-    };
-  }
-
+  /** @type {ReturnType<typeof createCloudflareAccessClient> | null} */
+  let accessClient = null;
   try {
+    const { target, uploader } = await getWalkthroughShareContext(event.sender.id);
+    if (!target) {
+      return {
+        reason: 'Walkthrough sharing is not available for this user.',
+        status: 'failed',
+      };
+    }
+    if (target.authenticated) {
+      accessClient = createCloudflareAccessClient({
+        serviceUrl: target.serviceUrl,
+      });
+    }
     const url = await uploadSharedWalkthrough({
+      authenticate: accessClient?.authenticate,
+      fetchImpl: accessClient?.fetch,
       openExternal: (url) => shell.openExternal(url),
-      serviceUrl:
-        process.env.CODIFF_SHARE_SERVER_URL ||
-        (app.isPackaged ? 'https://api.codiff.dev' : 'http://localhost:8787'),
+      serviceUrl: target.serviceUrl,
       snapshot: {
         ...snapshot,
         codiffVersion: app.getVersion(),
         exportedAt: new Date().toISOString(),
       },
+      uploader: target.internal ? uploader : undefined,
     });
     clipboard.writeText(url);
     return { status: 'uploaded', url };
@@ -1078,11 +1099,13 @@ ipcMain.handle('codiff:shareWalkthrough', async (event, snapshot) => {
       reason: error instanceof Error ? error.message : String(error),
       status: 'failed',
     };
+  } finally {
+    accessClient?.clear();
   }
 });
 
-ipcMain.handle('codiff:getFeatureFlags', () => ({
-  walkthroughSharing: canUseWalkthroughSharing(),
+ipcMain.handle('codiff:getFeatureFlags', async (event) => ({
+  walkthroughSharing: Boolean((await getWalkthroughShareContext(event.sender.id)).target),
 }));
 
 ipcMain.handle('codiff:askReviewAssistant', async (event, request) => {

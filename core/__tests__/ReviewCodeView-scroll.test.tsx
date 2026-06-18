@@ -374,6 +374,43 @@ test('walkthrough hunk viewed state is keyed independently from file path', asyn
   }
 });
 
+test('read-only walkthroughs can opt into the viewed control', async () => {
+  const file = createChangedFile('src/shared.ts');
+  const onToggleViewed = vi.fn();
+  const container = document.createElement('div');
+  document.body.append(container);
+  let root: Root | null = null;
+
+  try {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(
+        <ReviewCodeViewHarness
+          allowViewedToggle
+          files={[file]}
+          isReadOnly
+          onToggleViewed={onToggleViewed}
+        />,
+      );
+    });
+
+    const viewedButton = container.querySelector<HTMLButtonElement>('.codiff-viewed-button');
+    expect(viewedButton).not.toBeNull();
+    expect(container.querySelector('.codiff-open-button')).toBeNull();
+
+    await act(async () => {
+      viewedButton?.click();
+    });
+
+    expect(onToggleViewed).toHaveBeenCalledOnce();
+  } finally {
+    if (root) {
+      await act(async () => root?.unmount());
+    }
+    container.remove();
+  }
+});
+
 test('reload scroll target is retried until the selected item renders', async () => {
   const container = document.createElement('div');
   document.body.append(container);

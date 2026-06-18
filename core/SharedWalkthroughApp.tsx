@@ -8,9 +8,13 @@ import {
 import { useNarrativeNavigation } from './app/components/walkthrough/useNarrativeNavigation.ts';
 import { createDefaultConfig } from './config/defaults.ts';
 import { getAgentLabel } from './lib/app-constants.ts';
-import type { ReviewComment } from './lib/app-types.ts';
+import type { ReviewComment, ReviewIdentity } from './lib/app-types.ts';
 import { compactPath } from './lib/files.ts';
 import { getReviewCommentsFromState } from './lib/review-comments.ts';
+import {
+  updateReviewIdentityCollapsed,
+  updateReviewIdentityViewed,
+} from './lib/review-identity.ts';
 import { getSourceLabel, getSourceKey } from './lib/source.ts';
 import type {
   ChangedFile,
@@ -76,6 +80,7 @@ export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthrough
   );
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [itemVersionByKey, setItemVersionByKey] = useState<Record<string, number>>({});
+  const [viewed, setViewed] = useState<Record<string, string>>({});
   const reviewComments = useMemo(() => getSnapshotReviewComments(snapshot), [snapshot]);
 
   useEffect(() => {
@@ -122,6 +127,14 @@ export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthrough
     },
     [bumpItemVersion],
   );
+  const toggleViewed = useCallback(
+    (_file: ChangedFile, isViewed: boolean, reviewIdentity: ReviewIdentity) => {
+      setViewed((current) => updateReviewIdentityViewed(current, reviewIdentity, isViewed));
+      setCollapsed((current) => updateReviewIdentityCollapsed(current, reviewIdentity, isViewed));
+      bumpItemVersion(reviewIdentity.key);
+    },
+    [bumpItemVersion],
+  );
 
   const diffLineHeight = getCodeFontLineHeight(
     normalizeCodeFontSizePreference(snapshot.preferences.codeFontSize),
@@ -153,12 +166,12 @@ export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthrough
     onSelectPathFromScroll: noop,
     onSubmitComment: noop,
     onToggleCollapsed: toggleCollapsed,
-    onToggleViewed: noop,
+    onToggleViewed: toggleViewed,
     onUpdateComment: noop,
     searchQuery: '',
     showWhitespace: snapshot.preferences.showWhitespace,
     source: snapshot.repository.source,
-    viewed: {},
+    viewed,
     wordWrap: snapshot.preferences.wordWrap,
   };
 
@@ -170,6 +183,7 @@ export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthrough
     <div className="wt-stop wt-diff-surface">
       <ReviewCodeView
         {...commonReviewProps}
+        allowViewedToggle
         blocks={blocks}
         bottomInset={walkthroughCodeViewBottomInset}
         files={[]}

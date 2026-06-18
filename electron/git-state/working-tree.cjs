@@ -439,18 +439,21 @@ const gitOrEmpty = async (repoRoot, args) => {
 /** @param {string} launchPath */
 const readGitIdentity = async (launchPath) => {
   const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
-  const [name, email] = await Promise.all([
+  const [configuredName, configuredEmail, commitIdentity] = await Promise.all([
     gitOrEmpty(repoRoot, ['config', '--get', 'user.name']),
     gitOrEmpty(repoRoot, ['config', '--get', 'user.email']),
+    gitOrEmpty(repoRoot, ['log', '-1', '--format=%an%x00%ae', 'HEAD']),
   ]);
-  const trimmedEmail = email.trim();
+  const [commitName = '', commitEmail = ''] = commitIdentity.trim().split('\0');
+  const email = configuredEmail.trim() || commitEmail.trim();
+  const name = configuredName.trim() || commitName.trim();
 
   return {
-    email: trimmedEmail,
-    gravatarUrl: trimmedEmail
-      ? `https://www.gravatar.com/avatar/${getGravatarHash(trimmedEmail)}?s=80&d=identicon`
+    email,
+    gravatarUrl: email
+      ? `https://www.gravatar.com/avatar/${getGravatarHash(email)}?s=80&d=identicon`
       : undefined,
-    name: name.trim(),
+    name,
   };
 };
 

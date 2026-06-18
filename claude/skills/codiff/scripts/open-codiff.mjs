@@ -50,6 +50,11 @@ const getCodiffCommand = () => {
   return { args: [], command: 'codiff' };
 };
 
+const getShareCommand = () =>
+  process.env.CODIFF_SHARE_COMMAND
+    ? { args: [], command: process.env.CODIFF_SHARE_COMMAND }
+    : { args: [join(codiffRoot, 'bin/share-codiff.mjs')], command: process.execPath };
+
 const getClaudeHome = () => process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
 
 const findClaudeSessionFile = (sessionId) => {
@@ -149,6 +154,8 @@ if (rawArgs.includes('--guide')) {
 
 // Pull `--file <path>` (or `--file=<path>`) out of the forwarded arguments.
 const forwardedArgs = [];
+let openSharedWalkthrough = false;
+let shareWalkthrough = false;
 let walkthroughFile = '';
 for (let index = 0; index < rawArgs.length; index += 1) {
   const arg = rawArgs[index];
@@ -159,6 +166,14 @@ for (let index = 0; index < rawArgs.length; index += 1) {
   }
   if (arg.startsWith('--file=')) {
     walkthroughFile = arg.slice('--file='.length);
+    continue;
+  }
+  if (arg === '--share') {
+    shareWalkthrough = true;
+    continue;
+  }
+  if (arg === '--open') {
+    openSharedWalkthrough = true;
     continue;
   }
   forwardedArgs.push(arg);
@@ -175,6 +190,37 @@ const walkthroughFilePath = resolve(sessionCwd, walkthroughFile);
 if (!existsSync(walkthroughFilePath)) {
   process.stderr.write(`open-codiff: walkthrough file not found at ${walkthroughFilePath}.\n`);
   process.exit(1);
+}
+
+if (shareWalkthrough) {
+  const shareCommand = getShareCommand();
+  const shareResult = spawnSync(
+    shareCommand.command,
+    [
+      ...shareCommand.args,
+      '--file',
+      walkthroughFilePath,
+      '--agent',
+      'claude',
+      ...(openSharedWalkthrough ? ['--open'] : []),
+      ...forwardedArgs,
+    ],
+    {
+      cwd: sessionCwd,
+      encoding: 'utf8',
+    },
+  );
+  if (shareResult.stdout) {
+    process.stdout.write(shareResult.stdout);
+  }
+  if (shareResult.stderr) {
+    process.stderr.write(shareResult.stderr);
+  }
+  if (shareResult.error) {
+    process.stderr.write(`${shareResult.error.message}\n`);
+    process.exit(1);
+  }
+  process.exit(shareResult.status ?? 0);
 }
 
 const hasRepositoryTarget = forwardedArgs.some(
