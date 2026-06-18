@@ -1,7 +1,7 @@
 // @ts-check
 
 const CLOUDFLARE_EMAIL_SUFFIX = '@cloudflare.com';
-const CLOUDFLARE_SHARE_SERVER_URL = 'https://codiff.cloudflare-support-chat.workers.dev';
+const CLOUDFLARE_SHARE_SERVER_URL = 'https://codiff.cloudflare.dev';
 const PUBLIC_SHARE_SERVER_URL = 'https://api.codiff.dev';
 
 /** @param {string | undefined} email */

@@ -23,7 +23,7 @@ test('routes Cloudflare git identities to the authenticated internal service', (
   ).toEqual({
     authenticated: true,
     internal: true,
-    serviceUrl: 'https://codiff.cloudflare-support-chat.workers.dev',
+    serviceUrl: 'https://codiff.cloudflare.dev',
   });
 });
 
