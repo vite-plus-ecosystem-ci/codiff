@@ -9,6 +9,40 @@ const CLOUDFLARED_NOT_FOUND_CODE = 'CLOUDFLARED_NOT_FOUND';
 const CLOUDFLARED_NOT_FOUND_MESSAGE =
   'Cloudflare Access requires cloudflared. Install cloudflared and verify `cloudflared --version` works in Terminal. Codiff searches PATH, ~/.local/bin/cloudflared, /opt/homebrew/bin/cloudflared, and /usr/local/bin/cloudflared. If cloudflared is installed somewhere else, launch Codiff with `CODIFF_CLOUDFLARED_PATH=/absolute/path/to/cloudflared codiff -w`.';
 const COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
+const ERROR_DETAIL_LIMIT = 4000;
+
+/** @param {unknown} error */
+const getErrorDetail = (error) => {
+  if (!error || typeof error !== 'object') {
+    return String(error || '').trim();
+  }
+
+  const explicitDetail =
+    'detail' in error && typeof error.detail === 'string' ? error.detail.trim() : '';
+  const detail = explicitDetail || (error instanceof Error ? error.message : String(error));
+  return detail.trim().slice(0, ERROR_DETAIL_LIMIT);
+};
+
+/**
+ * @param {string} message
+ * @param {unknown} error
+ * @param {unknown} [previousError]
+ */
+const createAccessError = (message, error, previousError) => {
+  const detail = getErrorDetail(error);
+  const previousDetail = getErrorDetail(previousError);
+  const details = [
+    detail ? `cloudflared: ${detail}` : '',
+    previousDetail ? `Previous Access token check: ${previousDetail}` : '',
+  ].filter(Boolean);
+  const wrapped = new Error(details.length > 0 ? `${message}\n${details.join('\n')}` : message, {
+    cause: error,
+  });
+  if (error && typeof error === 'object' && 'code' in error) {
+    Object.assign(wrapped, { code: error.code });
+  }
+  return wrapped;
+};
 
 /** @param {string} [detail] */
 const createCloudflaredNotFoundError = (detail) =>
@@ -72,7 +106,16 @@ const runCloudflared = (args, { timeoutMs = COMMAND_TIMEOUT_MS } = {}) =>
     let settled = false;
     const timeout = setTimeout(() => {
       child.kill();
-      settle(new Error('Cloudflare Access sign-in timed out.'));
+      const error = new Error(
+        `cloudflared ${args.slice(0, 2).join(' ')} timed out after ${Math.round(
+          timeoutMs / 1000,
+        )} seconds.`,
+      );
+      Object.assign(error, {
+        code: 'CLOUDFLARED_TIMEOUT',
+        detail: [error.message, stderr.trim()].filter(Boolean).join('\n'),
+      });
+      settle(error);
     }, timeoutMs);
 
     /** @param {Error | null} error */
@@ -110,8 +153,15 @@ const runCloudflared = (args, { timeoutMs = COMMAND_TIMEOUT_MS } = {}) =>
         return;
       }
 
-      const error = new Error('Cloudflare Access authentication failed.');
-      Object.assign(error, { code: 'CLOUDFLARED_FAILED', detail: stderr.trim() });
+      const detail = stderr.trim();
+      const error = new Error(
+        `cloudflared ${args.slice(0, 2).join(' ')} failed with exit code ${code}.`,
+      );
+      Object.assign(error, {
+        code: 'CLOUDFLARED_FAILED',
+        detail: [error.message, detail].filter(Boolean).join('\n'),
+        exitCode: code,
+      });
       settle(error);
     });
   });
@@ -160,6 +210,7 @@ const createCloudflareAccessClient = ({
     }
 
     authentication = (async () => {
+      let tokenError;
       try {
         token = await readToken();
         return;
@@ -167,17 +218,32 @@ const createCloudflareAccessClient = ({
         if (isCloudflaredNotFoundError(error)) {
           throw error;
         }
+        tokenError = error;
       }
 
       try {
         await runCommand(['access', 'login', '--quiet', '--auto-close', baseUrl]);
+      } catch (error) {
+        if (isCloudflaredNotFoundError(error)) {
+          throw error;
+        }
+        throw createAccessError(
+          'Cloudflare Access browser sign-in did not complete.',
+          error,
+          tokenError,
+        );
+      }
+
+      try {
         token = await readToken();
       } catch (error) {
         if (isCloudflaredNotFoundError(error)) {
           throw error;
         }
-        throw new Error(
-          'Cloudflare Access sign-in did not complete. Finish signing in in your browser, then try sharing again.',
+        throw createAccessError(
+          'Cloudflare Access sign-in finished, but no authentication token was available.',
+          error,
+          tokenError,
         );
       }
     })().finally(() => {

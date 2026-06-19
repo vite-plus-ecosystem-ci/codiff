@@ -21,8 +21,37 @@ reactActEnvironment.ResizeObserver ??= class ResizeObserver {
 HTMLElement.prototype.scrollBy ??= function scrollBy() {};
 HTMLElement.prototype.scrollTo ??= function scrollTo() {};
 
+const createMarkdownFile = (path = 'README.md') =>
+  ({
+    ...createChangedFile(path),
+    sections: [
+      {
+        binary: false,
+        id: `${path}:unstaged`,
+        kind: 'unstaged',
+        loadState: 'ready',
+        newFile: {
+          contents: '# Shared Markdown\n\nRendered in the shared walkthrough.\n',
+          name: path,
+        },
+        oldFile: {
+          contents: '# Old heading\n',
+          name: path,
+        },
+        patch: `diff --git a/${path} b/${path}
+@@ -1 +1,3 @@
+-# Old heading
++# Shared Markdown
++
++Rendered in the shared walkthrough.
+`,
+      },
+    ],
+  }) satisfies SharedWalkthroughSnapshot['files'][number];
+
 test('shared walkthroughs switch between walkthrough and tree review modes', async () => {
   const file = createChangedFile('src/app.ts');
+  const markdownFile = createMarkdownFile();
   const source = { type: 'working-tree' } as const;
   const walkthrough = {
     agent: 'codex',
@@ -72,7 +101,7 @@ test('shared walkthroughs switch between walkthrough and tree review modes', asy
     branch: 'main',
     codiffVersion: '1.4.1',
     exportedAt: '2026-06-19T00:00:00.000Z',
-    files: [file],
+    files: [file, markdownFile],
     kind: 'codiff-walkthrough-share',
     preferences: {
       codeFontFamily: 'Fira Code',
@@ -119,6 +148,12 @@ test('shared walkthroughs switch between walkthrough and tree review modes', asy
       expect(container.querySelector('.file-tree-shell')).not.toBeNull();
       expect(container.querySelector('.walkthrough-list')).toBeNull();
     });
+    expect(container.querySelector('.codiff-markdown-preview')).toBeNull();
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>('button')].some(
+        ({ textContent }) => textContent === 'View as Markdown',
+      ),
+    ).toBe(true);
     expect(tabs[0]?.getAttribute('aria-selected')).toBe('true');
     expect(tabs[1]?.getAttribute('aria-selected')).toBe('false');
 
@@ -129,6 +164,99 @@ test('shared walkthroughs switch between walkthrough and tree review modes', asy
     await waitFor(() => {
       expect(container.querySelector('.walkthrough-list')).not.toBeNull();
       expect(container.querySelector('.file-tree-shell')).toBeNull();
+    });
+  } finally {
+    if (root) {
+      await act(async () => root?.unmount());
+    }
+    container.remove();
+  }
+});
+
+test('shared walkthroughs initially preview Markdown when other files are generated', async () => {
+  const file = createMarkdownFile();
+  const generatedFile = createChangedFile('src/__generated__/api.ts');
+  const source = { type: 'working-tree' } as const;
+  const walkthrough = {
+    agent: 'codex',
+    chapters: [],
+    focus: 'Review the Markdown.',
+    generatedAt: '2026-06-19T00:00:00.000Z',
+    kind: 'narrative',
+    repo: { branch: 'main', root: '/repo' },
+    source,
+    support: [],
+    title: 'Shared Markdown walkthrough',
+    version: 4,
+  } satisfies NarrativeWalkthrough;
+  const snapshot = {
+    branch: 'main',
+    codiffVersion: '1.4.1',
+    exportedAt: '2026-06-19T00:00:00.000Z',
+    files: [file, generatedFile],
+    kind: 'codiff-walkthrough-share',
+    preferences: {
+      codeFontFamily: 'Fira Code',
+      codeFontSize: 13,
+      diffStyle: 'split',
+      showWhitespace: false,
+      theme: 'system',
+      wordWrap: false,
+    },
+    repository: {
+      root: 'Shared Codiff review',
+      source,
+    },
+    version: 1,
+    walkthrough,
+  } satisfies SharedWalkthroughSnapshot;
+
+  const container = document.createElement('div');
+  document.body.append(container);
+  let root: Root | null = null;
+
+  try {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<SharedWalkthroughApp snapshot={snapshot} />);
+    });
+
+    const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    await act(async () => {
+      tabs[0]?.click();
+    });
+
+    await waitFor(() => {
+      const preview = container.querySelector('.codiff-markdown-preview');
+      expect(preview).not.toBeNull();
+      expect(preview?.textContent).toContain('Shared Markdown');
+      expect(preview?.textContent).toContain('Rendered in the shared walkthrough.');
+    });
+
+    const diffButton = [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+      ({ textContent }) => textContent === 'View as Diff',
+    );
+    expect(diffButton).not.toBeUndefined();
+
+    await act(async () => {
+      diffButton?.click();
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('.codiff-markdown-preview')).toBeNull();
+    });
+
+    const markdownButton = [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+      ({ textContent }) => textContent === 'View as Markdown',
+    );
+    expect(markdownButton).not.toBeUndefined();
+
+    await act(async () => {
+      markdownButton?.click();
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('.codiff-markdown-preview')).not.toBeNull();
     });
   } finally {
     if (root) {

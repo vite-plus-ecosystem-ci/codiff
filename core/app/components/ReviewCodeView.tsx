@@ -104,6 +104,8 @@ import { Gravatar } from './Gravatar.tsx';
 import { DiffLineCountBadge } from './Sidebar.tsx';
 import { useCopiedState } from './useCopiedState.ts';
 
+const emptyMarkdownPreviewSectionIds = new Set<string>();
+
 function CopyFilePathButton({ path }: { path: string }) {
   const [copied, markCopied] = useCopiedState(1600);
 
@@ -1298,6 +1300,7 @@ export function ReviewCodeView({
   forceExpandedPaths,
   gitIdentity,
   hunkNavigation,
+  initialMarkdownPreviewSectionIds = emptyMarkdownPreviewSectionIds,
   isPullRequest,
   isReadOnly = false,
   itemVersionByKey,
@@ -1343,6 +1346,7 @@ export function ReviewCodeView({
   forceExpandedPaths: ReadonlySet<string>;
   gitIdentity: GitIdentity | null;
   hunkNavigation: HunkNavigationRequest | null;
+  initialMarkdownPreviewSectionIds?: ReadonlySet<string>;
   isPullRequest: boolean;
   isReadOnly?: boolean;
   itemVersionByKey: Readonly<Record<string, number>>;
@@ -1380,7 +1384,7 @@ export function ReviewCodeView({
   const ignoreNextLineSelectionEndRef = useRef(false);
   const navigatedSelectionRef = useRef<CodeViewLineSelection | null>(null);
   const [markdownPreviewSections, setMarkdownPreviewSections] = useState<ReadonlySet<string>>(
-    () => new Set(),
+    () => new Set(initialMarkdownPreviewSectionIds),
   );
   // Markdown previews render inside a CodeView item. Change the item version once after the
   // preview appears so CodeView measures the preview height instead of the placeholder height.
@@ -1531,7 +1535,7 @@ export function ReviewCodeView({
         const markdownPreview = getMarkdownPreviewContents(file, section, fileDiff);
         const canRenderImage =
           !isReadOnly && onLoadImageContent != null && canRenderImagePreview(file.path, section);
-        const canRenderMarkdown = !isReadOnly && markdownPreview != null;
+        const canRenderMarkdown = markdownPreview != null;
         const isMarkdownPreview = canRenderMarkdown && markdownPreviewSections.has(section.id);
         const isSelected = block.fileSelected ?? block.selected ?? selectedPath === file.path;
         const reviewVersionPrefix = `${itemVersionByKey[reviewKey] ?? 0}:${block.id}:${

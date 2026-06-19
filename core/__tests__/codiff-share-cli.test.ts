@@ -33,6 +33,7 @@ type UploadedBody = {
     repository: {
       root: string;
       source: { ref?: string; type: string };
+      title?: string;
     };
     version: number;
     walkthrough: {
@@ -302,6 +303,7 @@ exit 1
     expect(body.snapshot.repository).toMatchObject({
       root: await realpath(repositoryPath),
       source: { ref: head, type: 'commit' },
+      title: 'Update example',
     });
     expect(body.snapshot.walkthrough).toMatchObject({
       agent: 'codex',

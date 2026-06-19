@@ -2131,6 +2131,8 @@ export default function App() {
       repository: {
         root: currentState.root,
         source: currentState.source,
+        title:
+          currentState.source.type === 'commit' ? currentState.commitMetadata?.subject : undefined,
       },
       reviewComments: currentState.reviewComments,
       version: 1,

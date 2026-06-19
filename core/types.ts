@@ -166,6 +166,7 @@ export type SharedWalkthroughSnapshot = {
   repository: {
     root: string;
     source: ReviewSource;
+    title?: string;
   };
   reviewComments?: ReadonlyArray<PullRequestExistingReviewComment>;
   version: 1;

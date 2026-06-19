@@ -9,6 +9,7 @@ import {
   useState,
   type MouseEvent,
 } from 'react';
+import { isGeneratedWalkthroughPath } from '../shared/narrative-walkthrough-diff.cjs';
 import { ReviewCodeView, type ReviewDiffBlock } from './app/components/ReviewCodeView.tsx';
 import { NarrativeSidebar } from './app/components/walkthrough/NarrativeSidebar.tsx';
 import {
@@ -31,6 +32,7 @@ import {
   getDiffLineCountTitle,
   getFirstVisibleSection,
   getItemId,
+  isMarkdownFilePath,
 } from './lib/diff.ts';
 import { compactPath, fileTreeSort, statusForTree } from './lib/files.ts';
 import { getReviewCommentsFromState } from './lib/review-comments.ts';
@@ -225,6 +227,23 @@ export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthrough
   const [treeScrollTarget, setTreeScrollTarget] = useState<ReviewScrollTarget | null>(null);
   const [viewed, setViewed] = useState<Record<string, string>>({});
   const reviewComments = useMemo(() => getSnapshotReviewComments(snapshot), [snapshot]);
+  const initialMarkdownPreviewSectionIds = useMemo(() => {
+    const nonGeneratedFiles = snapshot.files.filter(
+      (file) => !isGeneratedWalkthroughPath(file.path),
+    );
+    if (
+      nonGeneratedFiles.length === 0 ||
+      !nonGeneratedFiles.every((file) => isMarkdownFilePath(file.path))
+    ) {
+      return emptyPaths;
+    }
+
+    return new Set(
+      snapshot.files
+        .filter((file) => isMarkdownFilePath(file.path))
+        .flatMap((file) => file.sections.map((section) => section.id)),
+    );
+  }, [snapshot.files]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -334,6 +353,7 @@ export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthrough
     focusCommentRequest: 0,
     gitIdentity: null,
     hunkNavigation: null,
+    initialMarkdownPreviewSectionIds,
     isPullRequest: snapshot.repository.source.type === 'pull-request',
     isReadOnly: true,
     itemVersionByKey,

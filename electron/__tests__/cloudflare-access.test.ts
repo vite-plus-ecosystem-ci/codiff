@@ -54,6 +54,72 @@ test('opens system-browser authentication when no Access token exists', async ()
   ]);
 });
 
+test('preserves cloudflared details when browser authentication fails', async () => {
+  const tokenError = Object.assign(new Error('Existing Access token expired.'), {
+    detail: 'Existing Access token expired.',
+  });
+  const loginError = Object.assign(new Error('cloudflared access login failed.'), {
+    code: 'CLOUDFLARED_FAILED',
+    detail: 'Unable to find a Cloudflare Access application for codiff.example.',
+  });
+  const runCommand = vi.fn().mockRejectedValueOnce(tokenError).mockRejectedValueOnce(loginError);
+  const client = createCloudflareAccessClient({
+    runCommand,
+    serviceUrl: 'https://codiff.example',
+  });
+
+  await expect(client.authenticate()).rejects.toThrow(
+    [
+      'Cloudflare Access browser sign-in did not complete.',
+      'cloudflared: Unable to find a Cloudflare Access application for codiff.example.',
+      'Previous Access token check: Existing Access token expired.',
+    ].join('\n'),
+  );
+});
+
+test('reports when browser authentication finishes without producing a token', async () => {
+  const runCommand = vi
+    .fn()
+    .mockRejectedValueOnce(new Error('No cached Access token.'))
+    .mockResolvedValueOnce('')
+    .mockRejectedValueOnce(new Error('Access token is unavailable for this hostname.'));
+  const client = createCloudflareAccessClient({
+    runCommand,
+    serviceUrl: 'https://codiff.example',
+  });
+
+  await expect(client.authenticate()).rejects.toThrow(
+    [
+      'Cloudflare Access sign-in finished, but no authentication token was available.',
+      'cloudflared: Access token is unavailable for this hostname.',
+      'Previous Access token check: No cached Access token.',
+    ].join('\n'),
+  );
+});
+
+test('preserves authentication timeout details', async () => {
+  const timeoutError = Object.assign(new Error('cloudflared access login timed out.'), {
+    code: 'CLOUDFLARED_TIMEOUT',
+    detail: 'The browser authentication callback was not received.',
+  });
+  const runCommand = vi
+    .fn()
+    .mockRejectedValueOnce(new Error('No cached Access token.'))
+    .mockRejectedValueOnce(timeoutError);
+  const client = createCloudflareAccessClient({
+    runCommand,
+    serviceUrl: 'https://codiff.example',
+  });
+
+  await expect(client.authenticate()).rejects.toThrow(
+    [
+      'Cloudflare Access browser sign-in did not complete.',
+      'cloudflared: The browser authentication callback was not received.',
+      'Previous Access token check: No cached Access token.',
+    ].join('\n'),
+  );
+});
+
 test('does not send the Access token to another origin or after clearing it', async () => {
   const client = createCloudflareAccessClient({
     runCommand: async () => 'access.jwt.token',

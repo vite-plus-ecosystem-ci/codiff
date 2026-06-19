@@ -80,6 +80,7 @@ const uploadWalkthrough = async ({
         repository: {
           root: state.root,
           source: state.source,
+          title: state.source.type === 'commit' ? state.commitMetadata?.subject : undefined,
         },
         reviewComments: state.reviewComments,
         version: 1,

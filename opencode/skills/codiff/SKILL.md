@@ -64,9 +64,10 @@ change. Codiff owns the format and authoring guidance, so this skill only handle
    node scripts/open-codiff.mjs --share --file /tmp/codiff-walkthrough-<id>.json mr 123 /path/to/repository
    ```
 
-   The share command prints the final walkthrough URL to stdout. Cloudflare Access may open
-   the system browser when authentication is missing; after authentication, the command
-   resumes automatically.
+   The share command prints the final walkthrough URL to stdout. When the cached Cloudflare
+   Access token is missing or unusable, Codiff automatically opens the system browser for
+   authentication and resumes after sign-in. This authentication browser is independent of
+   `--open`, which only controls whether the completed walkthrough is opened.
 
    **Agent integration:** OpenCode does not expose session metadata to this launcher, so
    desktop mode keeps Codiff's configured backend and shared walkthroughs use its default.
