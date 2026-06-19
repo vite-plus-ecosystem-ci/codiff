@@ -418,6 +418,25 @@ test('preserves Pi as the narrative walkthrough agent', () => {
   expect(result.agent).toBe('pi');
 });
 
+test('preserves OpenCode as the narrative walkthrough agent', () => {
+  const result = normalizeNarrativeWalkthrough(baseInput(), files, {
+    agent: 'opencode',
+    source: { type: 'working-tree' },
+  });
+
+  expect(result.agent).toBe('opencode');
+});
+
+test('generates ids for otherwise valid chapters that omit them', () => {
+  const input = baseInput();
+  delete input.chapters[0].id;
+
+  const result = normalizeNarrativeWalkthrough(input, files, { agent: 'opencode' });
+
+  expect(result.chapters[0].id).toBe('chapter-1');
+  expect(result.chapters[0].stops).toHaveLength(2);
+});
+
 test('normalizes walkthroughs made only of synthetic hunks', () => {
   const syntheticFiles = [
     {

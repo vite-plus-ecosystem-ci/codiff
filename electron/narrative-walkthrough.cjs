@@ -281,8 +281,8 @@ const normalizeChapters = (input, index, coveredHunkIds) => {
       break;
     }
 
-    const id = oneLine(chapter?.id);
-    if (!id || chapterIds.has(id)) {
+    const id = oneLine(chapter?.id) || `chapter-${chapters.length + 1}`;
+    if (chapterIds.has(id)) {
       continue;
     }
 

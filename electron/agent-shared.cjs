@@ -26,6 +26,145 @@ const cleanText = (value, fallback = '') =>
 const normalizeEnum = (value, allowed, fallback) =>
   allowed.has(/** @type {T} */ (value)) ? /** @type {T} */ (value) : fallback;
 
+/**
+ * Walk `text` and return the first balanced JSON object or array, or `null`
+ * if none is found.
+ *
+ * @param {string} text
+ * @returns {string | null}
+ */
+const extractFirstJson = (text) => {
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch !== '{' && ch !== '[') continue;
+    const open = ch;
+    const close = ch === '{' ? '}' : ']';
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let j = i; j < text.length; j += 1) {
+      const c = text[j];
+      if (inString) {
+        if (escape) {
+          escape = false;
+        } else if (c === '\\') {
+          escape = true;
+        } else if (c === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (c === '"') {
+        inString = true;
+        continue;
+      }
+      if (c === open) depth += 1;
+      else if (c === close) {
+        depth -= 1;
+        if (depth === 0) {
+          return text.slice(i, j + 1);
+        }
+      }
+    }
+  }
+  return null;
+};
+
+/** @param {unknown} schema @returns {ReadonlyArray<string>} */
+const schemaRequiredFields = (schema) => {
+  if (!schema || typeof schema !== 'object') return [];
+  const required = /** @type {any} */ (schema).required;
+  if (!Array.isArray(required)) return [];
+  return required.filter((field) => typeof field === 'string');
+};
+
+/**
+ * @param {unknown} parsed
+ * @param {ReadonlyArray<string>} required
+ * @returns {boolean}
+ */
+const hasAllRequiredFields = (parsed, required) => {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  for (const field of required) {
+    if (!(field in parsed)) return false;
+  }
+  return true;
+};
+
+/**
+ * @param {unknown} parsed
+ * @param {unknown} schema
+ * @returns {unknown}
+ */
+const coerceResultToSchema = (parsed, schema) => {
+  const required = schemaRequiredFields(schema);
+  if (!required.length || hasAllRequiredFields(parsed, required)) return parsed;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return parsed;
+
+  /** @type {Record<string, unknown>} */
+  const next = { .../** @type {object} */ (parsed) };
+  const aliases = [
+    ['reply', 'text'],
+    ['reply', 'response'],
+    ['reply', 'answer'],
+    ['reply', 'message'],
+    ['reply', 'body'],
+  ];
+  for (const [target, alias] of aliases) {
+    if (required.includes(target) && !(target in next) && alias in next) {
+      next[target] = next[alias];
+    }
+  }
+  return hasAllRequiredFields(next, required) ? next : parsed;
+};
+
+/** @param {unknown} schema @returns {string} */
+const buildSchemaReminder = (schema) => {
+  const required = schemaRequiredFields(schema);
+  if (!schema || typeof schema !== 'object') return '';
+  const requiredInstruction = required.length
+    ? ` It must include the field${required.length === 1 ? '' : 's'} ${required
+        .map((field) => `\`${field}\``)
+        .join(', ')}.`
+    : '';
+  return `\n\nYour final reply must be a single JSON object.${requiredInstruction} Do not include any prose outside the JSON. Follow this JSON Schema exactly:\n${JSON.stringify(schema)}`;
+};
+
+/**
+ * @param {string} output
+ * @param {unknown} schema
+ * @param {string} agentLabel
+ * @returns {string}
+ */
+const normalizeStructuredOutput = (output, schema, agentLabel) => {
+  const text = output.trim();
+  const serialize = (value) => JSON.stringify(coerceResultToSchema(value, schema));
+
+  try {
+    return serialize(JSON.parse(text));
+  } catch {}
+
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) {
+    try {
+      return serialize(JSON.parse(fenced[1].trim()));
+    } catch {}
+  }
+
+  const balanced = extractFirstJson(text);
+  if (balanced) {
+    try {
+      return serialize(JSON.parse(balanced));
+    } catch {}
+  }
+
+  if (text) {
+    return JSON.stringify({ text });
+  }
+
+  throw new Error(`${agentLabel} did not produce a final answer.`);
+};
+
 /** @param {string} message @returns {unknown} */
 const parseJSONMessage = (message) => {
   try {
@@ -83,11 +222,13 @@ const findExecutableOnPath = (command) => {
 };
 
 module.exports = {
+  buildSchemaReminder,
   cleanText,
   findExecutableOnPath,
   getExecutableNames,
   isExecutableFile,
   normalizeEnum,
+  normalizeStructuredOutput,
   oneLine,
   parseJSONMessage,
   truncate,

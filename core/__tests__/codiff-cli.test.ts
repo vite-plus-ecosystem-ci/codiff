@@ -238,6 +238,13 @@ test('parseArguments recognizes Claude walkthrough seed options and the agent ov
   });
 });
 
+test('parseArguments recognizes the OpenCode agent override', () => {
+  expect(parseArguments(['-w', '--agent', 'opencode'])).toMatchObject({
+    agentBackend: 'opencode',
+    walkthrough: true,
+  });
+});
+
 test('parseArguments ignores unknown agent backends', () => {
   const result = parseArguments(['--agent', 'gpt']) as { agentBackend?: string };
   expect(result.agentBackend).toBeUndefined();
@@ -806,7 +813,7 @@ test('Pi skill launcher resolves the current session and forwards --agent pi', a
   }
 });
 
-test('OpenCode skill launcher uses the current project without changing the runtime backend', async () => {
+test('OpenCode skill launcher uses the current project and OpenCode runtime backend', async () => {
   const logger = await createFakeCommandLogger('codiff-opencode-launcher-', 'codiff');
   const repositoryPath = join(logger.directory, 'repo');
   const walkthroughFile = join(logger.directory, 'walkthrough.json');
@@ -835,6 +842,8 @@ test('OpenCode skill launcher uses the current project without changing the runt
 
     expect(await logger.readArgs()).toEqual([
       '-w',
+      '--agent',
+      'opencode',
       '--walkthrough-file',
       walkthroughFile,
       'HEAD',

@@ -134,7 +134,9 @@ process.stdin.on('end', () => {
     expect(args).toContain('--tools');
     expect(args).toContain('read,grep,find,ls');
     expect(args).not.toContain('--model');
-    expect(await readFile(stdinPath, 'utf8')).toContain('prompt');
+    const stdin = await readFile(stdinPath, 'utf8');
+    expect(stdin).toContain('prompt');
+    expect(stdin).toContain('Follow this JSON Schema exactly');
   } finally {
     if (previousPiPath == null) {
       delete process.env.CODIFF_PI_PATH;

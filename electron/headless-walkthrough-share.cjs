@@ -108,7 +108,7 @@ const readShareState = async (repositoryPath, source, config) =>
 
 /**
  * @param {{
- *   agent?: 'claude' | 'codex' | 'pi';
+ *   agent?: 'claude' | 'codex' | 'opencode' | 'pi';
  *   codiffVersion: string;
  *   openExternal: (url: string) => Promise<void>;
  *   repositoryPath: string;
@@ -158,7 +158,7 @@ const shareWalkthroughFile = async ({
 
 /**
  * @param {{
- *   agent?: 'claude' | 'codex' | 'pi';
+ *   agent?: 'claude' | 'codex' | 'opencode' | 'pi';
  *   claudeSessionId?: string;
  *   codexSessionId?: string;
  *   codiffVersion: string;
@@ -185,7 +185,12 @@ const generateAndShareWalkthrough = async ({
   const config = readConfig();
   const agent = getAgent(agentOverride || config.settings.agentBackend);
   const [state, uploader] = await readShareState(repositoryPath, source, config);
-  const sessionIds = { claudeSessionId, codexSessionId, piSessionId };
+  const sessionIds = {
+    claudeSessionId,
+    codexSessionId,
+    opencodeSessionId: undefined,
+    piSessionId,
+  };
   const providedContext = walkthroughContextPath
     ? readWalkthroughContext(walkthroughContextPath, codexSessionId)
     : null;

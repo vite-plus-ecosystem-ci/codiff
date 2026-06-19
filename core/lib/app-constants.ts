@@ -16,6 +16,7 @@ export const defaultAgentSkillStatus: AgentSkillStatus = {
 const AGENT_LABELS: Record<CodiffAgentBackend, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
+  opencode: 'OpenCode',
   pi: 'Pi',
 };
 

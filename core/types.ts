@@ -214,9 +214,10 @@ export type WalkthroughContext = {
 };
 
 export type CodiffLaunchOptions = {
-  agentBackend?: 'codex' | 'claude' | 'pi';
+  agentBackend?: 'codex' | 'claude' | 'opencode' | 'pi';
   claudeSessionId?: string;
   codexSessionId?: string;
+  opencodeSessionId?: string;
   piSessionId?: string;
   repositoryPathProvided: boolean;
   source?: ReviewSource;
@@ -361,7 +362,7 @@ export type WalkthroughCommit = {
 };
 
 export type NarrativeWalkthrough = {
-  agent: 'codex' | 'claude' | 'pi';
+  agent: 'codex' | 'claude' | 'opencode' | 'pi';
   chapters: ReadonlyArray<WalkthroughChapter>;
   /**
    * When present, the diff is a committable staging set: Codiff adds a commit
@@ -519,7 +520,7 @@ export type DiffImageContentResult =
 export type CodiffTheme = 'system' | 'light' | 'dark';
 
 export type CodiffPreferences = {
-  agentBackend: 'codex' | 'claude' | 'pi';
+  agentBackend: 'codex' | 'claude' | 'opencode' | 'pi';
   claudeModel: string;
   codeFontFamily: string;
   codeFontSize: number;
@@ -528,6 +529,7 @@ export type CodiffPreferences = {
   editorCommand: string;
   lastRepositoryPath: string;
   openAIModel: string;
+  opencodeModel: string;
   piModel: string;
   reviewCommentsPrefix: string;
   showOutdated: boolean;

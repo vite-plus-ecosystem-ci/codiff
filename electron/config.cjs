@@ -116,9 +116,11 @@ const normalizeTheme = (theme) =>
 const normalizeDiffStyle = (diffStyle) =>
   diffStyle === 'split' || diffStyle === 'unified' ? diffStyle : 'split';
 
-/** @param {unknown} backend @returns {'codex' | 'claude' | 'pi'} */
+/** @param {unknown} backend @returns {'codex' | 'claude' | 'opencode' | 'pi'} */
 const normalizeAgentBackend = (backend) =>
-  backend === 'codex' || backend === 'claude' || backend === 'pi' ? backend : 'codex';
+  backend === 'codex' || backend === 'claude' || backend === 'opencode' || backend === 'pi'
+    ? backend
+    : 'codex';
 
 /** @param {unknown} family @returns {string} */
 const normalizeCodeFontFamily = (family) => (typeof family === 'string' ? family.trim() : '');
@@ -251,6 +253,10 @@ const mergeConfig = (raw) => {
         typeof rawSettings.openAIModel === 'string'
           ? rawSettings.openAIModel
           : defaults.settings.openAIModel,
+      opencodeModel:
+        typeof rawSettings.opencodeModel === 'string'
+          ? rawSettings.opencodeModel
+          : defaults.settings.opencodeModel,
       piModel:
         typeof rawSettings.piModel === 'string' ? rawSettings.piModel : defaults.settings.piModel,
       reviewCommentsPrefix:

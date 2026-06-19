@@ -4,9 +4,11 @@ const { spawn } = require('node:child_process');
 const { homedir } = require('node:os');
 const { join } = require('node:path');
 const {
+  buildSchemaReminder,
   findExecutableOnPath,
   isExecutableFile,
   normalizeEnum,
+  normalizeStructuredOutput,
   oneLine,
 } = require('./agent-shared.cjs');
 
@@ -96,156 +98,11 @@ const getPiLaunchError = (error) => {
 const normalizePiModel = (value) => normalizeEnum(value, PI_MODEL_IDS, DEFAULT_PI_MODEL);
 
 /**
- * Walk `text` and return the first balanced JSON object or array, or `null`
- * if none is found. Used as a last-resort fallback when the model replies
- * with prose that contains an embedded JSON document.
- *
- * @param {string} text
- * @returns {string | null}
- */
-const extractFirstJson = (text) => {
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i];
-    if (ch !== '{' && ch !== '[') continue;
-    const open = ch;
-    const close = ch === '{' ? '}' : ']';
-    let depth = 0;
-    let inString = false;
-    let escape = false;
-    for (let j = i; j < text.length; j += 1) {
-      const c = text[j];
-      if (inString) {
-        if (escape) {
-          escape = false;
-        } else if (c === '\\') {
-          escape = true;
-        } else if (c === '"') {
-          inString = false;
-        }
-        continue;
-      }
-      if (c === '"') {
-        inString = true;
-        continue;
-      }
-      if (c === open) depth += 1;
-      else if (c === close) {
-        depth -= 1;
-        if (depth === 0) {
-          return text.slice(i, j + 1);
-        }
-      }
-    }
-  }
-  return null;
-};
-
-/**
- * Common alternative keys the model tends to use when the structured-output
- * prompt instruction is ambiguous. Used as a last-resort coercion when the
- * model returns a JSON document that does not match the supplied schema.
- *
- * @type {ReadonlyArray<readonly [string, string]>}
- */
-const SCHEMA_FIELD_ALIASES = Object.freeze([
-  ['reply', 'text'],
-  ['reply', 'response'],
-  ['reply', 'answer'],
-  ['reply', 'message'],
-  ['reply', 'body'],
-]);
-
-/**
- * @param {unknown} schema
- * @returns {ReadonlyArray<string>}
- */
-const schemaRequiredFields = (schema) => {
-  if (!schema || typeof schema !== 'object') return [];
-  const required = /** @type {any} */ (schema).required;
-  if (!Array.isArray(required)) return [];
-  return required.filter((field) => typeof field === 'string');
-};
-
-/**
- * @param {unknown} parsed
- * @param {ReadonlyArray<string>} required
- * @returns {boolean}
- */
-const hasAllRequiredFields = (parsed, required) => {
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
-  for (const field of required) {
-    if (!(field in parsed)) return false;
-  }
-  return true;
-};
-
-/**
- * @param {unknown} parsed
- * @param {unknown} schema
- * @returns {unknown}
- */
-const coerceResultToSchema = (parsed, schema) => {
-  const required = schemaRequiredFields(schema);
-  if (!required.length) return parsed;
-  if (hasAllRequiredFields(parsed, required)) return parsed;
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return parsed;
-
-  /** @type {Record<string, unknown>} */
-  const next = { .../** @type {object} */ (parsed) };
-  for (const [target, alias] of SCHEMA_FIELD_ALIASES) {
-    if (required.includes(target) && !(target in next) && alias in next) {
-      next[target] = next[alias];
-    }
-  }
-  if (hasAllRequiredFields(next, required)) return next;
-  return parsed;
-};
-
-/**
- * @param {unknown} schema
- * @returns {string}
- */
-const buildSchemaReminder = (schema) => {
-  const required = schemaRequiredFields(schema);
-  if (!required.length) return '';
-  return `\n\nYour final reply must be a single JSON object that includes the field${
-    required.length === 1 ? '' : 's'
-  }: ${required.map((field) => `\`${field}\``).join(', ')}. Do not include any prose outside the JSON.`;
-};
-
-/**
  * @param {string} output
  * @param {unknown} schema
  * @returns {string}
  */
-const normalizePiOutput = (output, schema) => {
-  const text = output.trim();
-  const serialize = (value) => JSON.stringify(coerceResultToSchema(value, schema));
-
-  try {
-    return serialize(JSON.parse(text));
-  } catch {}
-
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) {
-    try {
-      return serialize(JSON.parse(fenced[1].trim()));
-    } catch {}
-  }
-
-  const balanced = extractFirstJson(text);
-  if (balanced) {
-    try {
-      return serialize(JSON.parse(balanced));
-    } catch {}
-  }
-
-  if (text) {
-    return JSON.stringify({ text });
-  }
-
-  throw new Error('Pi did not produce a final answer.');
-};
+const normalizePiOutput = (output, schema) => normalizeStructuredOutput(output, schema, 'Pi');
 
 /**
  * @param {string} repoRoot

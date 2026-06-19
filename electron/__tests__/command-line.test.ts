@@ -54,6 +54,15 @@ const defaultLaunchOptions = {
   walkthrough: false,
 };
 
+test('parses the OpenCode agent override', () => {
+  expect(parseCommandLineArguments(['codiff', '--agent', 'opencode', '/repo'])).toMatchObject({
+    launchOptions: {
+      agentBackend: 'opencode',
+      repositoryPathProvided: true,
+    },
+  });
+});
+
 test('parses commit and walkthrough command-line options', () => {
   expect(
     parseCommandLineArguments(['codiff', '--walkthrough', '--commit', 'HEAD', '/repo']),

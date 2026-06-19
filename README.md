@@ -162,18 +162,22 @@ combine `Mod`, `Ctrl`, `Alt`, `Shift`, or `Meta` with a key, for example `Mod+Sh
 
 ## Walkthroughs
 
-Codiff uses a local agent CLI for walkthroughs and inline review assistance. It supports two
+Codiff uses a local agent CLI for walkthroughs and inline review assistance. It supports four
 backends, selected with the `settings.agentBackend` config value (or the `--agent` flag for a
 single launch) and the `Agent` application menu:
 
 - `codex` (default) — the OpenAI Codex CLI, configured with `settings.openAIModel`.
 - `claude` — the [Claude Code](https://claude.com/claude-code) CLI, configured with `settings.claudeModel`.
+- `opencode` — the [OpenCode](https://opencode.ai/) CLI, using its configured default model.
+- `pi` — the Pi CLI, using its configured default model.
 
 Install the backend you want and verify it is available before using `codiff -w`:
 
 ```bash
 codex --version
 claude --version
+opencode --version
+pi --version
 ```
 
 Codiff looks for the CLI on `PATH` and the usual install locations. It does not run your shell
@@ -183,6 +187,8 @@ explicit path:
 ```bash
 CODIFF_CODEX_PATH=/absolute/path/to/codex codiff -w
 CODIFF_CLAUDE_PATH=/absolute/path/to/claude codiff --agent claude -w
+CODIFF_OPENCODE_PATH=/absolute/path/to/opencode codiff --agent opencode -w
+CODIFF_PI_PATH=/absolute/path/to/pi codiff --agent pi -w
 ```
 
 Claude Code rides your existing `claude` login (subscription or `ANTHROPIC_API_KEY`); run `claude`

@@ -35,6 +35,7 @@ import {
 } from 'react';
 import claudeIconUrl from '../../assets/claude.svg';
 import codexIconUrl from '../../assets/codex.svg';
+import opencodeIconUrl from '../../assets/opencode.svg';
 import piIconUrl from '../../assets/pi.svg';
 import { matchesShortcut } from '../../config/keymap.ts';
 import type { CodiffDiffStyle, CodiffKeymap } from '../../config/types.ts';
@@ -291,7 +292,7 @@ function ReviewAvatar({
   return <Gravatar fallback={label} size="medium" url={avatarUrl} />;
 }
 
-function AgentAvatar({ agentId }: { agentId: 'codex' | 'claude' | 'pi' }) {
+function AgentAvatar({ agentId }: { agentId: 'codex' | 'claude' | 'opencode' | 'pi' }) {
   return (
     <img
       alt=""
@@ -302,8 +303,14 @@ function AgentAvatar({ agentId }: { agentId: 'codex' | 'claude' | 'pi' }) {
   );
 }
 
-const agentIconUrl = (agentId: 'codex' | 'claude' | 'pi') => {
-  return agentId === 'pi' ? piIconUrl : agentId === 'claude' ? claudeIconUrl : codexIconUrl;
+const agentIconUrl = (agentId: 'codex' | 'claude' | 'opencode' | 'pi') => {
+  return agentId === 'pi'
+    ? piIconUrl
+    : agentId === 'opencode'
+      ? opencodeIconUrl
+      : agentId === 'claude'
+        ? claudeIconUrl
+        : codexIconUrl;
 };
 
 const canAskCodexForComment = (comment: ReviewComment) =>
@@ -635,7 +642,7 @@ function ReviewCommentEditor({
   onSubmitComment,
   onUpdateComment,
 }: {
-  agentId: 'codex' | 'claude' | 'pi';
+  agentId: 'codex' | 'claude' | 'opencode' | 'pi';
   agentLabel: string;
   comment: ReviewComment;
   displayName: string;
@@ -901,7 +908,7 @@ function ReviewAnnotation({
   onSubmitComment,
   onUpdateComment,
 }: {
-  agentId: 'codex' | 'claude' | 'pi';
+  agentId: 'codex' | 'claude' | 'opencode' | 'pi';
   agentLabel: string;
   annotation: DiffLineAnnotation<ReviewCommentAnnotationMetadata>;
   comments: ReadonlyArray<ReviewComment>;
@@ -1329,7 +1336,7 @@ export function ReviewCodeView({
   wordWrap,
 }: {
   activeSearchMatch: DiffSearchMatch | null;
-  agentId: 'codex' | 'claude' | 'pi';
+  agentId: 'codex' | 'claude' | 'opencode' | 'pi';
   agentLabel: string;
   allowViewedToggle?: boolean;
   blocks?: ReadonlyArray<ReviewDiffBlock>;

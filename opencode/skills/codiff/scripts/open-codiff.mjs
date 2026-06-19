@@ -124,6 +124,8 @@ if (shareWalkthrough) {
       ...shareCommand.args,
       '--file',
       walkthroughFilePath,
+      '--agent',
+      'opencode',
       ...(openSharedWalkthrough ? ['--open'] : []),
       ...forwardedArgs,
     ],
@@ -153,6 +155,8 @@ const codiffCommand = getCodiffCommand();
 const args = [
   ...codiffCommand.args,
   '-w',
+  '--agent',
+  'opencode',
   '--walkthrough-file',
   walkthroughFilePath,
   ...forwardedArgs,

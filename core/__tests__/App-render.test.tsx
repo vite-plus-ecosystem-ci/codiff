@@ -133,6 +133,7 @@ const createCodiffMock = (overrides: Partial<Window['codiff']> = {}): Window['co
     editorCommand: '',
     lastRepositoryPath: '/repo',
     openAIModel: defaultSettings.openAIModel,
+    opencodeModel: defaultSettings.opencodeModel,
     piModel: defaultSettings.piModel,
     reviewCommentsPrefix: defaultSettings.reviewCommentsPrefix,
     showOutdated: false,

@@ -29,6 +29,7 @@ const {
 } = require('./git-state.cjs');
 const { normalizeOpenAIModel } = require('./codex.cjs');
 const { normalizeClaudeModel } = require('./claude.cjs');
+const { normalizeOpenCodeModel } = require('./opencode.cjs');
 const { createWalkthroughCommit } = require('./walkthrough-commit.cjs');
 const { diagnoseWalkthroughMismatch } = require('./walkthrough-diagnosis.cjs');
 const { readCommitMessageReply } = require('./walkthrough-commit-message.cjs');
@@ -133,13 +134,13 @@ const readRepositoryStateWithConfig = (repositoryPath, source) =>
 const resolveWindowAgent = (webContentsId) => {
   const override = windowLaunchOptions.get(webContentsId)?.agentBackend;
   return getAgent(
-    override === 'codex' || override === 'claude' || override === 'pi'
+    override === 'codex' || override === 'claude' || override === 'opencode' || override === 'pi'
       ? override
       : config.settings.agentBackend,
   );
 };
 
-/** @param {'codex' | 'claude' | 'pi'} agentId */
+/** @param {'codex' | 'claude' | 'opencode' | 'pi'} agentId */
 const skillInstallerFor = (agentId) => skillInstallers.get(agentId);
 const { getTerminalHelperStatus, installTerminalHelper } = createTerminalHelper({
   app,
@@ -186,6 +187,9 @@ const updateConfig = (nextConfig) => {
       openAIModel: normalizeOpenAIModel(
         nextConfig.settings?.openAIModel ?? config.settings.openAIModel,
       ),
+      opencodeModel: normalizeOpenCodeModel(
+        nextConfig.settings?.opencodeModel ?? config.settings.opencodeModel,
+      ),
       piModel: normalizePiModel(nextConfig.settings?.piModel ?? config.settings.piModel),
     },
   };
@@ -195,7 +199,7 @@ const updateConfig = (nextConfig) => {
   Menu.setApplicationMenu(buildApplicationMenu());
 };
 
-/** @param {'codex' | 'claude' | 'pi'} backend */
+/** @param {'codex' | 'claude' | 'opencode' | 'pi'} backend */
 const selectAgentBackend = (backend) => {
   const agentBackend = normalizeAgentBackend(backend);
   if (config.settings.agentBackend === agentBackend) {
@@ -844,6 +848,7 @@ if (squirrelStartup || !lock) {
     migrateFromPreferences(app.getPath('userData'), normalizeOpenAIModel);
     config = readConfig();
     config.settings.openAIModel = normalizeOpenAIModel(config.settings.openAIModel);
+    config.settings.opencodeModel = normalizeOpenCodeModel(config.settings.opencodeModel);
     config.settings.claudeModel = normalizeClaudeModel(config.settings.claudeModel);
     config.settings.piModel = normalizePiModel(config.settings.piModel);
     config.settings.agentBackend = normalizeAgentBackend(config.settings.agentBackend);
@@ -866,6 +871,7 @@ if (squirrelStartup || !lock) {
           codeFontFamily: normalizeCodeFontFamily(nextConfig.settings.codeFontFamily),
           codeFontSize: normalizeCodeFontSize(nextConfig.settings.codeFontSize),
           openAIModel: normalizeOpenAIModel(nextConfig.settings.openAIModel),
+          opencodeModel: normalizeOpenCodeModel(nextConfig.settings.opencodeModel),
           piModel: normalizePiModel(nextConfig.settings.piModel),
         },
       };

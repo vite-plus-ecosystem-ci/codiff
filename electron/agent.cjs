@@ -2,6 +2,7 @@
 
 const codex = require('./codex.cjs');
 const claude = require('./claude.cjs');
+const opencode = require('./opencode.cjs');
 const pi = require('./pi.cjs');
 const { readCodexSessionContext } = require('./codex-session-context.cjs');
 const { readClaudeSessionContext } = require('./claude-session-context.cjs');
@@ -16,14 +17,14 @@ const { readPiSessionContext } = require('./pi-session-context.cjs');
  *   onPartialText?: (delta: string) => void;
  * }} AgentOptions
  * @typedef {{
- *   id: 'codex' | 'claude' | 'pi';
+ *   id: 'codex' | 'claude' | 'opencode' | 'pi';
  *   label: string;
  *   cliName: string;
  *   cliPathEnvVar: string;
  *   models: ReadonlyArray<{id: string; label: string}>;
  *   defaultModel: string;
  *   fallbackModel: string;
- *   modelSettingKey: 'openAIModel' | 'claudeModel' | 'piModel';
+ *   modelSettingKey: 'openAIModel' | 'claudeModel' | 'opencodeModel' | 'piModel';
  *   normalizeModel: (value: unknown) => string;
  *   notFoundCode: string;
  *   isNotFoundError: (error: unknown) => boolean;
@@ -36,13 +37,13 @@ const { readPiSessionContext } = require('./pi-session-context.cjs');
  *     options?: AgentOptions,
  *   ) => Promise<string>;
  *   readSessionContext: (sessionId: string | undefined) => WalkthroughContext | null;
- *   sessionLaunchOptionKey: 'codexSessionId' | 'claudeSessionId' | 'piSessionId';
+ *   sessionLaunchOptionKey: 'codexSessionId' | 'claudeSessionId' | 'opencodeSessionId' | 'piSessionId';
  * }} Agent
  */
 
 const DEFAULT_AGENT_BACKEND = 'codex';
-/** @type {ReadonlyArray<'codex' | 'claude' | 'pi'>} */
-const AGENT_BACKENDS = Object.freeze(['codex', 'claude', 'pi']);
+/** @type {ReadonlyArray<'codex' | 'claude' | 'opencode' | 'pi'>} */
+const AGENT_BACKENDS = Object.freeze(['codex', 'claude', 'opencode', 'pi']);
 
 /** @returns {Agent} */
 const createCodexAgent = () => ({
@@ -81,6 +82,24 @@ const createClaudeAgent = () => ({
 });
 
 /** @returns {Agent} */
+const createOpenCodeAgent = () => ({
+  id: 'opencode',
+  label: 'OpenCode',
+  cliName: 'opencode',
+  cliPathEnvVar: 'CODIFF_OPENCODE_PATH',
+  models: opencode.OPENCODE_MODELS,
+  defaultModel: opencode.DEFAULT_OPENCODE_MODEL,
+  fallbackModel: opencode.FALLBACK_OPENCODE_MODEL,
+  modelSettingKey: 'opencodeModel',
+  normalizeModel: opencode.normalizeOpenCodeModel,
+  notFoundCode: opencode.OPENCODE_NOT_FOUND_CODE,
+  isNotFoundError: opencode.isOpenCodeNotFoundError,
+  run: opencode.runOpenCode,
+  readSessionContext: () => null,
+  sessionLaunchOptionKey: 'opencodeSessionId',
+});
+
+/** @returns {Agent} */
 const createPiAgent = () => ({
   id: 'pi',
   label: 'Pi',
@@ -98,16 +117,19 @@ const createPiAgent = () => ({
   sessionLaunchOptionKey: 'piSessionId',
 });
 
-/** @type {Record<'codex' | 'claude' | 'pi', () => Agent>} */
+/** @type {Record<'codex' | 'claude' | 'opencode' | 'pi', () => Agent>} */
 const AGENT_FACTORIES = {
   claude: createClaudeAgent,
   codex: createCodexAgent,
+  opencode: createOpenCodeAgent,
   pi: createPiAgent,
 };
 
-/** @param {unknown} value @returns {'codex' | 'claude' | 'pi'} */
+/** @param {unknown} value @returns {'codex' | 'claude' | 'opencode' | 'pi'} */
 const normalizeAgentBackend = (value) =>
-  value === 'codex' || value === 'claude' || value === 'pi' ? value : DEFAULT_AGENT_BACKEND;
+  value === 'codex' || value === 'claude' || value === 'opencode' || value === 'pi'
+    ? value
+    : DEFAULT_AGENT_BACKEND;
 
 /** @param {unknown} backendId @returns {Agent} */
 const getAgent = (backendId) => AGENT_FACTORIES[normalizeAgentBackend(backendId)]();

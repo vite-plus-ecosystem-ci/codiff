@@ -15,10 +15,13 @@ choose.
 
 ## Shape
 
+- **`version` / `kind` / `title` / `focus`** — use `version: 4`, `kind: "narrative"`,
+  a short walkthrough title, and a one- or two-sentence string describing the review focus.
 - **`chapters[]`** — 1-6 compact sections in display order. A chapter is a conceptual group,
-  not a file. For one- or two-file diffs, prefer one chapter unless there are clearly separate
-  review phases. Keep `title` to 1-2 short words and at most 16 characters, e.g. `"UI"`,
-  `"CLI"`, `"Tests"`, `"Docs"`, `"Runtime"`, `"Cleanup"`.
+  not a file. Every chapter requires a unique string `id`, plus `title`, `icon`, `blurb`, and
+  `stops`. For one- or two-file diffs, prefer one chapter unless there are clearly separate review
+  phases. Keep `title` to 1-2 short words and at most 16 characters, e.g. `"UI"`, `"CLI"`,
+  `"Tests"`, `"Docs"`, `"Runtime"`, `"Cleanup"`.
 - **`chapters[].stops[]`** — the main review path. Use 1-2 stops for tiny changes, 1-3 stops
   for focused small changes, 5-9 for medium changes, and 7-12 for large changes. Never exceed 14. A stop should represent one review idea and can include up to 14 ordered `hunkIds`.
 - **`hunkIds[]`** — deterministic hunk ids copied from the repository digest, in the exact order

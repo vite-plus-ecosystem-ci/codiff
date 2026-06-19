@@ -4,7 +4,7 @@ import { expect, test } from 'vite-plus/test';
 const require = createRequire(import.meta.url);
 const { AGENT_BACKENDS, DEFAULT_AGENT_BACKEND, getAgent, listAgents, normalizeAgentBackend } =
   require('../agent.cjs') as {
-    AGENT_BACKENDS: ReadonlyArray<'codex' | 'claude' | 'pi'>;
+    AGENT_BACKENDS: ReadonlyArray<'codex' | 'claude' | 'opencode' | 'pi'>;
     DEFAULT_AGENT_BACKEND: string;
     getAgent: (backendId: unknown) => {
       id: string;
@@ -22,14 +22,15 @@ const { AGENT_BACKENDS, DEFAULT_AGENT_BACKEND, getAgent, listAgents, normalizeAg
 test('normalizes unknown agent backends to the default', () => {
   expect(normalizeAgentBackend('claude')).toBe('claude');
   expect(normalizeAgentBackend('codex')).toBe('codex');
+  expect(normalizeAgentBackend('opencode')).toBe('opencode');
   expect(normalizeAgentBackend('pi')).toBe('pi');
   expect(normalizeAgentBackend('gpt')).toBe(DEFAULT_AGENT_BACKEND);
   expect(normalizeAgentBackend(undefined)).toBe(DEFAULT_AGENT_BACKEND);
 });
 
 test('lists all agent backends', () => {
-  expect(AGENT_BACKENDS).toEqual(['codex', 'claude', 'pi']);
-  expect(listAgents().map((agent) => agent.id)).toEqual(['codex', 'claude', 'pi']);
+  expect(AGENT_BACKENDS).toEqual(['codex', 'claude', 'opencode', 'pi']);
+  expect(listAgents().map((agent) => agent.id)).toEqual(['codex', 'claude', 'opencode', 'pi']);
 });
 
 test('resolves the Codex agent with its session wiring', () => {
@@ -58,6 +59,17 @@ test('resolves the Pi agent with its session wiring', () => {
   expect(agent.modelSettingKey).toBe('piModel');
   expect(agent.sessionLaunchOptionKey).toBe('piSessionId');
   expect(agent.notFoundCode).toBe('PI_NOT_FOUND');
+  expect(typeof agent.run).toBe('function');
+  expect(typeof agent.readSessionContext).toBe('function');
+});
+
+test('resolves the OpenCode agent with its runtime wiring', () => {
+  const agent = getAgent('opencode');
+  expect(agent.id).toBe('opencode');
+  expect(agent.label).toBe('OpenCode');
+  expect(agent.modelSettingKey).toBe('opencodeModel');
+  expect(agent.sessionLaunchOptionKey).toBe('opencodeSessionId');
+  expect(agent.notFoundCode).toBe('OPENCODE_NOT_FOUND');
   expect(typeof agent.run).toBe('function');
   expect(typeof agent.readSessionContext).toBe('function');
 });
