@@ -2,7 +2,7 @@
 
 const { spawn } = require('node:child_process');
 const { promises: fs } = require('node:fs');
-const { tmpdir } = require('node:os');
+const { homedir, tmpdir } = require('node:os');
 const { join } = require('node:path');
 const {
   cleanText,
@@ -22,7 +22,7 @@ const CODEX_MACOS_BLOCKED_MESSAGE =
   'macOS blocked the local Codex CLI. Update Codex CLI from the official OpenAI release, then run `codex --version` and try again.';
 const CODEX_NOT_FOUND_CODE = 'CODEX_NOT_FOUND';
 const CODEX_NOT_FOUND_MESSAGE =
-  'Codex CLI was not found. Install Codex and verify `codex --version` works in Terminal. Codiff searches PATH, /opt/homebrew/bin/codex, and /usr/local/bin/codex. If Codex is installed somewhere else, launch Codiff with `CODIFF_CODEX_PATH=/absolute/path/to/codex codiff -w`.';
+  'Codex CLI was not found. Install Codex and verify `codex --version` works in Terminal. On macOS, Codiff also checks for the CLI bundled with Codex.app. If Codex is installed somewhere else, launch Codiff with `CODIFF_CODEX_PATH=/absolute/path/to/codex codiff -w`.';
 /**
  * @typedef {{
  *   fallbackModel?: string;
@@ -60,6 +60,21 @@ const createCodexNotFoundError = (detail) =>
     },
   );
 
+/**
+ * @param {NodeJS.Platform} [platform]
+ * @param {string} [home]
+ */
+const getCodexInstallPaths = (platform = process.platform, home = homedir()) => [
+  '/opt/homebrew/bin/codex',
+  '/usr/local/bin/codex',
+  ...(platform === 'darwin'
+    ? [
+        '/Applications/Codex.app/Contents/Resources/codex',
+        join(home, 'Applications/Codex.app/Contents/Resources/codex'),
+      ]
+    : []),
+];
+
 const getCodexCommand = () => {
   const codexPath = process.env.CODIFF_CODEX_PATH?.trim();
   if (codexPath) {
@@ -77,7 +92,7 @@ const getCodexCommand = () => {
     return pathCommand;
   }
 
-  for (const path of ['/opt/homebrew/bin/codex', '/usr/local/bin/codex']) {
+  for (const path of getCodexInstallPaths()) {
     if (isExecutableFile(path)) {
       return path;
     }
@@ -329,6 +344,7 @@ module.exports = {
   DEFAULT_OPENAI_MODEL,
   FALLBACK_OPENAI_MODEL,
   getCodexCommand,
+  getCodexInstallPaths,
   getCodexLaunchErrorMessage,
   isCodexNotFoundError,
   isOpenAIModelAvailabilityError,

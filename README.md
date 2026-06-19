@@ -185,8 +185,9 @@ opencode --version
 pi --version
 ```
 
-Codiff looks for the CLI on `PATH` and the usual install locations. It does not run your shell
-startup files to discover them. If a CLI is installed somewhere else, launch Codiff with an
+Codiff looks for the CLI on `PATH` and the usual install locations. On macOS, it also recognizes
+the CLI embedded in `/Applications/Codex.app` or `~/Applications/Codex.app`. It does not run your
+shell startup files to discover CLIs. If a CLI is installed somewhere else, launch Codiff with an
 explicit path:
 
 ```bash

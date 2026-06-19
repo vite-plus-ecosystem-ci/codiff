@@ -2,6 +2,23 @@
 
 const poll = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** @param {unknown} error */
+const describeFetchError = (error) => {
+  const message = error instanceof Error ? error.message : String(error);
+  const cause =
+    error && typeof error === 'object' && 'cause' in error && error.cause ? error.cause : null;
+  if (!cause || typeof cause !== 'object') {
+    return message;
+  }
+
+  const causeCode = 'code' in cause && typeof cause.code === 'string' ? cause.code : '';
+  const causeMessage = cause instanceof Error ? cause.message : String(cause);
+  const causeDetail = [causeCode, causeMessage].filter(
+    (detail, index, details) => detail && details.indexOf(detail) === index,
+  );
+  return causeDetail.length > 0 ? `${message}: ${causeDetail.join(' - ')}` : message;
+};
+
 /**
  * @param {{
  *   authenticate?: () => Promise<void>;
@@ -25,10 +42,25 @@ const uploadSharedWalkthrough = async ({
   const baseUrl = serviceUrl.replace(/\/+$/, '');
   await authenticate();
 
-  const intentResponse = await fetchImpl(`${baseUrl}/api/upload-intents`, {
-    credentials: 'include',
-    method: 'POST',
-  });
+  /** @type {(phase: string, input: string, init?: RequestInit) => Promise<Response>} */
+  const fetchShareService = async (phase, input, init) => {
+    try {
+      return await fetchImpl(input, init);
+    } catch (error) {
+      throw new Error(`Codiff share ${phase} failed: ${describeFetchError(error)}`, {
+        cause: error,
+      });
+    }
+  };
+
+  const intentResponse = await fetchShareService(
+    'upload intent request',
+    `${baseUrl}/api/upload-intents`,
+    {
+      credentials: 'include',
+      method: 'POST',
+    },
+  );
   if (!intentResponse.ok) {
     throw new Error(`Codiff share service rejected upload intent (${intentResponse.status}).`);
   }
@@ -43,7 +75,9 @@ const uploadSharedWalkthrough = async ({
 
   let uploadToken = immediateUploadToken;
   for (let attempt = 0; attempt < 120 && !uploadToken; attempt += 1) {
-    const pollResponse = await fetchImpl(intent.pollUrl, { credentials: 'include' });
+    const pollResponse = await fetchShareService('authorization poll', intent.pollUrl, {
+      credentials: 'include',
+    });
     if (pollResponse.ok) {
       const result = await pollResponse.json();
       if (result.status === 'claimed' && typeof result.uploadToken === 'string') {
@@ -60,7 +94,7 @@ const uploadSharedWalkthrough = async ({
     throw new Error('Codiff share upload was not authorized in time.');
   }
 
-  const uploadResponse = await fetchImpl(`${baseUrl}/api/uploads`, {
+  const uploadResponse = await fetchShareService('upload request', `${baseUrl}/api/uploads`, {
     body: JSON.stringify(uploader ? { snapshot, uploader } : snapshot),
     credentials: 'include',
     headers: {

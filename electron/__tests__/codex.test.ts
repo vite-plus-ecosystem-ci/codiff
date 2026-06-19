@@ -10,6 +10,7 @@ const {
   CODEX_NOT_FOUND_MESSAGE,
   DEFAULT_OPENAI_MODEL,
   getCodexCommand,
+  getCodexInstallPaths,
   getCodexLaunchErrorMessage,
   isOpenAIModelAvailabilityError,
   normalizeOpenAIModel,
@@ -19,6 +20,7 @@ const {
   CODEX_NOT_FOUND_MESSAGE: string;
   DEFAULT_OPENAI_MODEL: string;
   getCodexCommand: () => string;
+  getCodexInstallPaths: (platform?: NodeJS.Platform, home?: string) => Array<string>;
   getCodexLaunchErrorMessage: (error: unknown, platform?: NodeJS.Platform) => string;
   isOpenAIModelAvailabilityError: (value: string) => boolean;
   normalizeOpenAIModel: (value: unknown) => string;
@@ -83,6 +85,19 @@ test('explains missing Codex CLI launches', () => {
       }),
     ),
   ).toBe(CODEX_NOT_FOUND_MESSAGE);
+});
+
+test('checks the Codex app embedded CLI on macOS', () => {
+  expect(getCodexInstallPaths('darwin', '/Users/reviewer')).toEqual([
+    '/opt/homebrew/bin/codex',
+    '/usr/local/bin/codex',
+    '/Applications/Codex.app/Contents/Resources/codex',
+    '/Users/reviewer/Applications/Codex.app/Contents/Resources/codex',
+  ]);
+  expect(getCodexInstallPaths('linux', '/home/reviewer')).toEqual([
+    '/opt/homebrew/bin/codex',
+    '/usr/local/bin/codex',
+  ]);
 });
 
 test('rejects invalid explicit Codex CLI overrides', () => {

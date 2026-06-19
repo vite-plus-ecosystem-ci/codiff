@@ -129,3 +129,25 @@ test('skips the claim page for an immediately claimed headless upload', async ()
   expect(openExternal).not.toHaveBeenCalled();
   expect(fetchImpl).toHaveBeenCalledTimes(2);
 });
+
+test('includes the underlying cause when a share request cannot connect', async () => {
+  const networkError = new Error('fetch failed', {
+    cause: Object.assign(new Error('getaddrinfo ENOTFOUND api.codiff.dev'), {
+      code: 'ENOTFOUND',
+    }),
+  });
+
+  await expect(
+    uploadSharedWalkthrough({
+      authenticate: async () => {},
+      fetchImpl: vi.fn(async () => {
+        throw networkError;
+      }),
+      openExternal: async () => {},
+      serviceUrl: 'https://api.codiff.dev',
+      snapshot: { kind: 'codiff-walkthrough-share', version: 1 },
+    }),
+  ).rejects.toThrow(
+    'Codiff share upload intent request failed: fetch failed: ENOTFOUND - getaddrinfo ENOTFOUND api.codiff.dev',
+  );
+});
