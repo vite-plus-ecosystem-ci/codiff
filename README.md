@@ -162,9 +162,12 @@ combine `Mod`, `Ctrl`, `Alt`, `Shift`, or `Meta` with a key, for example `Mod+Sh
 
 ## Walkthroughs
 
-Codiff uses a local agent CLI for walkthroughs and inline review assistance. It supports four
-backends, selected with the `settings.agentBackend` config value (or the `--agent` flag for a
-single launch) and the `Agent` application menu:
+Codiff uses a local agent CLI for walkthroughs and inline review assistance. On the first launch
+without an existing config file, it selects the first installed CLI in this order: Codex, Claude
+Code, OpenCode, then Pi. This checks executable presence only and persists the selection. If none
+are installed, Codiff keeps Codex as the default. After that, select a backend with the
+`settings.agentBackend` config value (or the `--agent` flag for a single launch) and the `Agent`
+application menu:
 
 - `codex` (default) — the OpenAI Codex CLI, configured with `settings.openAIModel`.
 - `claude` — the [Claude Code](https://claude.com/claude-code) CLI, configured with `settings.claudeModel`.

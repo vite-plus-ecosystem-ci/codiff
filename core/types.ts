@@ -394,7 +394,7 @@ export type NarrativeWalkthroughResult =
       walkthrough: NarrativeWalkthrough;
     }
   | {
-      code?: 'CODEX_NOT_FOUND' | 'CLAUDE_NOT_FOUND' | 'PI_NOT_FOUND';
+      code?: 'CODEX_NOT_FOUND' | 'CLAUDE_NOT_FOUND' | 'OPENCODE_NOT_FOUND' | 'PI_NOT_FOUND';
       reason: string;
       status: 'unavailable';
     };
@@ -474,7 +474,7 @@ export type ReviewAssistantResult =
       status: 'ready';
     }
   | {
-      code?: 'CODEX_NOT_FOUND' | 'CLAUDE_NOT_FOUND' | 'PI_NOT_FOUND';
+      code?: 'CODEX_NOT_FOUND' | 'CLAUDE_NOT_FOUND' | 'OPENCODE_NOT_FOUND' | 'PI_NOT_FOUND';
       reason: string;
       status: 'unavailable';
     };

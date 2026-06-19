@@ -2,22 +2,32 @@ import { createRequire } from 'node:module';
 import { expect, test } from 'vite-plus/test';
 
 const require = createRequire(import.meta.url);
-const { AGENT_BACKENDS, DEFAULT_AGENT_BACKEND, getAgent, listAgents, normalizeAgentBackend } =
-  require('../agent.cjs') as {
-    AGENT_BACKENDS: ReadonlyArray<'codex' | 'claude' | 'opencode' | 'pi'>;
-    DEFAULT_AGENT_BACKEND: string;
-    getAgent: (backendId: unknown) => {
-      id: string;
-      label: string;
-      modelSettingKey: string;
-      sessionLaunchOptionKey: string;
-      notFoundCode: string;
-      run: unknown;
-      readSessionContext: unknown;
-    };
-    listAgents: () => ReadonlyArray<{ id: string }>;
-    normalizeAgentBackend: (value: unknown) => string;
+const {
+  AGENT_BACKENDS,
+  DEFAULT_AGENT_BACKEND,
+  detectInitialAgentBackend,
+  getAgent,
+  listAgents,
+  normalizeAgentBackend,
+} = require('../agent.cjs') as {
+  AGENT_BACKENDS: ReadonlyArray<'codex' | 'claude' | 'opencode' | 'pi'>;
+  DEFAULT_AGENT_BACKEND: string;
+  detectInitialAgentBackend: (
+    isAvailable?: (agent: { id: 'codex' | 'claude' | 'opencode' | 'pi' }) => boolean,
+  ) => string;
+  getAgent: (backendId: unknown) => {
+    id: string;
+    isAvailable: () => boolean;
+    label: string;
+    modelSettingKey: string;
+    sessionLaunchOptionKey: string;
+    notFoundCode: string;
+    run: unknown;
+    readSessionContext: unknown;
   };
+  listAgents: () => ReadonlyArray<{ id: string }>;
+  normalizeAgentBackend: (value: unknown) => string;
+};
 
 test('normalizes unknown agent backends to the default', () => {
   expect(normalizeAgentBackend('claude')).toBe('claude');
@@ -33,12 +43,28 @@ test('lists all agent backends', () => {
   expect(listAgents().map((agent) => agent.id)).toEqual(['codex', 'claude', 'opencode', 'pi']);
 });
 
+test('detects the first available agent backend in priority order', () => {
+  const checked: Array<string> = [];
+  const backend = detectInitialAgentBackend((agent) => {
+    checked.push(agent.id);
+    return agent.id === 'opencode';
+  });
+
+  expect(backend).toBe('opencode');
+  expect(checked).toEqual(['codex', 'claude', 'opencode']);
+});
+
+test('falls back to Codex when no agent backend is installed', () => {
+  expect(detectInitialAgentBackend(() => false)).toBe('codex');
+});
+
 test('resolves the Codex agent with its session wiring', () => {
   const agent = getAgent('codex');
   expect(agent.id).toBe('codex');
   expect(agent.modelSettingKey).toBe('openAIModel');
   expect(agent.sessionLaunchOptionKey).toBe('codexSessionId');
   expect(agent.notFoundCode).toBe('CODEX_NOT_FOUND');
+  expect(typeof agent.isAvailable).toBe('function');
   expect(typeof agent.run).toBe('function');
   expect(typeof agent.readSessionContext).toBe('function');
 });

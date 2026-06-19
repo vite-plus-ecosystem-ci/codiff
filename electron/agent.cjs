@@ -27,6 +27,7 @@ const { readPiSessionContext } = require('./pi-session-context.cjs');
  *   modelSettingKey: 'openAIModel' | 'claudeModel' | 'opencodeModel' | 'piModel';
  *   normalizeModel: (value: unknown) => string;
  *   notFoundCode: string;
+ *   isAvailable: () => boolean;
  *   isNotFoundError: (error: unknown) => boolean;
  *   run: (
  *     repoRoot: string,
@@ -45,6 +46,23 @@ const DEFAULT_AGENT_BACKEND = 'codex';
 /** @type {ReadonlyArray<'codex' | 'claude' | 'opencode' | 'pi'>} */
 const AGENT_BACKENDS = Object.freeze(['codex', 'claude', 'opencode', 'pi']);
 
+/**
+ * @param {() => string} getCommand
+ * @param {(error: unknown) => boolean} isNotFoundError
+ */
+const canResolveCommand = (getCommand, isNotFoundError) => {
+  try {
+    getCommand();
+    return true;
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return false;
+    }
+
+    throw error;
+  }
+};
+
 /** @returns {Agent} */
 const createCodexAgent = () => ({
   id: 'codex',
@@ -57,6 +75,7 @@ const createCodexAgent = () => ({
   modelSettingKey: 'openAIModel',
   normalizeModel: codex.normalizeOpenAIModel,
   notFoundCode: codex.CODEX_NOT_FOUND_CODE,
+  isAvailable: () => canResolveCommand(codex.getCodexCommand, codex.isCodexNotFoundError),
   isNotFoundError: codex.isCodexNotFoundError,
   run: codex.runCodex,
   readSessionContext: readCodexSessionContext,
@@ -75,6 +94,7 @@ const createClaudeAgent = () => ({
   modelSettingKey: 'claudeModel',
   normalizeModel: claude.normalizeClaudeModel,
   notFoundCode: claude.CLAUDE_NOT_FOUND_CODE,
+  isAvailable: () => canResolveCommand(claude.getClaudeCommand, claude.isClaudeNotFoundError),
   isNotFoundError: claude.isClaudeNotFoundError,
   run: claude.runClaude,
   readSessionContext: readClaudeSessionContext,
@@ -93,6 +113,8 @@ const createOpenCodeAgent = () => ({
   modelSettingKey: 'opencodeModel',
   normalizeModel: opencode.normalizeOpenCodeModel,
   notFoundCode: opencode.OPENCODE_NOT_FOUND_CODE,
+  isAvailable: () =>
+    canResolveCommand(opencode.getOpenCodeCommand, opencode.isOpenCodeNotFoundError),
   isNotFoundError: opencode.isOpenCodeNotFoundError,
   run: opencode.runOpenCode,
   readSessionContext: () => null,
@@ -111,6 +133,7 @@ const createPiAgent = () => ({
   modelSettingKey: 'piModel',
   normalizeModel: pi.normalizePiModel,
   notFoundCode: pi.PI_NOT_FOUND_CODE,
+  isAvailable: () => canResolveCommand(pi.getPiCommand, pi.isPiNotFoundError),
   isNotFoundError: pi.isPiNotFoundError,
   run: pi.runPi,
   readSessionContext: readPiSessionContext,
@@ -137,9 +160,18 @@ const getAgent = (backendId) => AGENT_FACTORIES[normalizeAgentBackend(backendId)
 /** @returns {ReadonlyArray<Agent>} */
 const listAgents = () => AGENT_BACKENDS.map((id) => AGENT_FACTORIES[id]());
 
+/**
+ * Select the first installed backend without launching a CLI process.
+ * @param {(agent: Agent) => boolean} [isAvailable]
+ * @returns {'codex' | 'claude' | 'opencode' | 'pi'}
+ */
+const detectInitialAgentBackend = (isAvailable = (agent) => agent.isAvailable()) =>
+  listAgents().find(isAvailable)?.id ?? DEFAULT_AGENT_BACKEND;
+
 module.exports = {
   AGENT_BACKENDS,
   DEFAULT_AGENT_BACKEND,
+  detectInitialAgentBackend,
   getAgent,
   listAgents,
   normalizeAgentBackend,

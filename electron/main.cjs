@@ -34,7 +34,12 @@ const { createWalkthroughCommit } = require('./walkthrough-commit.cjs');
 const { diagnoseWalkthroughMismatch } = require('./walkthrough-diagnosis.cjs');
 const { readCommitMessageReply } = require('./walkthrough-commit-message.cjs');
 const { normalizePiModel } = require('./pi.cjs');
-const { getAgent, listAgents, normalizeAgentBackend } = require('./agent.cjs');
+const {
+  detectInitialAgentBackend,
+  getAgent,
+  listAgents,
+  normalizeAgentBackend,
+} = require('./agent.cjs');
 const { buildInstallSkillMenuItem, listAgentSkills } = require('./agent-skills.cjs');
 const {
   configToPreferences,
@@ -846,12 +851,18 @@ if (squirrelStartup || !lock) {
 
   app.on('ready', () => {
     migrateFromPreferences(app.getPath('userData'), normalizeOpenAIModel);
+    const shouldDetectInitialAgent = !existsSync(getConfigPath());
     config = readConfig();
     config.settings.openAIModel = normalizeOpenAIModel(config.settings.openAIModel);
     config.settings.opencodeModel = normalizeOpenCodeModel(config.settings.opencodeModel);
     config.settings.claudeModel = normalizeClaudeModel(config.settings.claudeModel);
     config.settings.piModel = normalizePiModel(config.settings.piModel);
-    config.settings.agentBackend = normalizeAgentBackend(config.settings.agentBackend);
+    config.settings.agentBackend = shouldDetectInitialAgent
+      ? detectInitialAgentBackend()
+      : normalizeAgentBackend(config.settings.agentBackend);
+    if (shouldDetectInitialAgent) {
+      writeConfig(config);
+    }
     nativeTheme.themeSource = config.settings.theme;
     Menu.setApplicationMenu(buildApplicationMenu());
 

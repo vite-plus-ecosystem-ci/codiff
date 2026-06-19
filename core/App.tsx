@@ -2209,6 +2209,7 @@ export default function App() {
     !walkthroughLoading &&
     (walkthroughError?.code === 'CODEX_NOT_FOUND' ||
       walkthroughError?.code === 'CLAUDE_NOT_FOUND' ||
+      walkthroughError?.code === 'OPENCODE_NOT_FOUND' ||
       walkthroughError?.code === 'PI_NOT_FOUND');
 
   const sidebarLabel = `${compactPath(state.root)}${state.branch ? ` (${state.branch})` : ''}`;
