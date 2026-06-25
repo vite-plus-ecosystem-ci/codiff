@@ -241,7 +241,7 @@ html[data-codiff-platform='darwin'] .plan-header {
   font: 12px/1.4 var(--font-sans);
   left: 50%;
   max-width: min(520px, calc(100% - 32px));
-  padding: 8px 12px;
+  padding: 8px 16px;
   position: absolute;
   top: 12px;
   transform: translateX(-50%);
@@ -393,6 +393,19 @@ html[data-codiff-platform='darwin'] .plan-header {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--sidebar-ref) 18%, transparent);
 }
 
+.plan-comment-thread.resolved {
+  color: var(--muted);
+  opacity: 0.72;
+}
+
+.plan-comment-thread.resolved .review-comment-body {
+  background: color-mix(in srgb, var(--code-bg) 92%, var(--muted));
+}
+
+.plan-comment-thread.resolved .plan-comment-target {
+  display: block;
+}
+
 .plan-comment-header {
   column-gap: 0;
   grid-template-columns: minmax(0, 1fr) 26px;
@@ -404,6 +417,17 @@ html[data-codiff-platform='darwin'] .plan-header {
   display: flex;
   gap: 6px;
   min-width: 0;
+}
+
+.plan-comment-status {
+  border: 1px solid color-mix(in srgb, var(--muted) 36%, transparent);
+  border-radius: 999px;
+  color: var(--muted);
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 18px;
+  padding-inline: 7px;
 }
 
 .plan-comment-target {
@@ -439,6 +463,34 @@ html[data-codiff-platform='darwin'] .plan-header {
   cursor: default;
   opacity: 0.7;
   text-decoration: none;
+}
+
+.plan-resolved-comments {
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: var(--plan-comment-resolved-top);
+}
+
+.plan-resolved-comments > summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  list-style-position: inside;
+  padding-block: 8px;
+  padding-inline: 16px;
+  user-select: none;
+}
+
+.plan-resolved-comments > summary:hover {
+  color: var(--text);
+}
+
+.plan-resolved-comment-list {
+  display: grid;
+  gap: 8px;
+  padding: 0 0 8px;
 }
 
 @container plan-review (max-width: 1400px) {
@@ -488,6 +540,14 @@ html[data-codiff-platform='darwin'] .plan-header {
 
   .plan-comment-position {
     position: static;
+  }
+
+  .plan-resolved-comments {
+    position: static;
+  }
+
+  .plan-resolved-comment-list {
+    padding-inline: 4px;
   }
 
   .plan-comment-thread.review-comment-thread {

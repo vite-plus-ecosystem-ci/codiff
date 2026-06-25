@@ -99,7 +99,7 @@ const {
   normalizeRepositoryWatcherPath,
   repositoryWatcherSnapshotsMatchExpectedWrites,
 } = require('./repository-watcher.cjs');
-const { readPlanReview, writePlanReview } = require('./plan-review.cjs');
+const { getPlanReviewPath, readPlanReview, writePlanReview } = require('./plan-review.cjs');
 const { createSharedPlanSnapshot } = require('./shared-plan.cjs');
 const { readLocalIdentity } = require('./local-identity.cjs');
 
@@ -291,6 +291,9 @@ const writePlanResult = (webContentsId, status, review) => {
       `${JSON.stringify({
         path: launchOptions.planFile,
         pid: process.pid,
+        ...(review
+          ? { reviewPath: getPlanReviewPath(app.getPath('userData'), launchOptions.planFile) }
+          : {}),
         ...(review ? { review } : {}),
         ...(review && planInitialVersions.has(webContentsId)
           ? {

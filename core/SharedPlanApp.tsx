@@ -26,7 +26,10 @@ export function SharedPlanApp({ snapshot }: { snapshot: SharedPlanSnapshot }) {
   const [layouts, setLayouts] = useState<ReadonlyArray<MarkdownAnnotationLayout>>([]);
   const [workspace, setWorkspace] = useState<HTMLDivElement | null>(null);
   const annotations = useMemo<ReadonlyArray<MarkdownAnnotation>>(
-    () => snapshot.review.threads.map(({ anchor, id }) => ({ anchor, id })),
+    () =>
+      snapshot.review.threads
+        .filter((thread) => thread.status === 'open')
+        .map(({ anchor, id }) => ({ anchor, id })),
     [snapshot.review.threads],
   );
 

@@ -124,6 +124,13 @@ export function PlanCommentCard({
   const editorRef = useRef<MarkdownEditorHandle>(null);
   const body = getThreadBody(thread);
   const author = thread.createdBy;
+  const resolved = thread.status === 'resolved';
+  const resolutionLabel =
+    thread.resolution?.reason === 'agent-handled'
+      ? 'Resolved by agent'
+      : thread.resolution?.reason === 'anchor-removed'
+        ? 'Resolved after target removal'
+        : 'Resolved';
 
   useEffect(() => {
     if (active && body.length === 0) {
@@ -135,7 +142,7 @@ export function PlanCommentCard({
     <div
       className={`review-comment-thread plan-comment-thread${active ? ' active' : ''}${
         detached ? ' detached' : ''
-      }`}
+      }${resolved ? ' resolved' : ''}`}
       onFocusCapture={onActivate}
       onPointerDown={onActivate}
     >
@@ -149,13 +156,14 @@ export function PlanCommentCard({
           <div className="review-comment-header plan-comment-header">
             <div className="plan-comment-heading">
               <strong>{author.name}</strong>
+              {resolved ? <span className="plan-comment-status">{resolutionLabel}</span> : null}
               <button
                 aria-label={`Show comment target: ${getPlanCommentTargetLabel(thread)}`}
                 className="plan-comment-target"
-                disabled={detached}
+                disabled={detached || resolved}
                 onClick={onReveal}
                 title={
-                  detached
+                  detached || resolved
                     ? `Comment target unavailable: ${getPlanCommentTargetLabel(thread)}`
                     : `Show ${getPlanCommentTargetLabel(thread)}`
                 }
@@ -197,10 +205,10 @@ export function PlanCommentCard({
               }
             }}
             placeholder="Write a comment…"
-            readOnly={readOnly}
+            readOnly={readOnly || resolved}
             ref={editorRef}
             spellCheck
-            suppressHtmlProcessing={readOnly}
+            suppressHtmlProcessing={readOnly || resolved}
             value={body}
             variant="embedded"
           />
@@ -244,18 +252,28 @@ export function PlanCommentRail({
   const asideRef = useRef<HTMLElement>(null);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const railRef = useRef<HTMLDivElement>(null);
+  const resolvedRef = useRef<HTMLDetailsElement>(null);
   const layoutById = useMemo(
     () => new Map(layouts.map((layout) => [layout.id, layout])),
     [layouts],
   );
-  const orderedThreads = useMemo(
+  const openThreads = useMemo(
     () =>
-      [...threads].sort((left, right) => {
-        const leftTop = layoutById.get(left.id)?.rect?.top ?? Number.POSITIVE_INFINITY;
-        const rightTop = layoutById.get(right.id)?.rect?.top ?? Number.POSITIVE_INFINITY;
-        return leftTop - rightTop || left.createdAt.localeCompare(right.createdAt);
-      }),
+      threads
+        .filter((thread) => thread.status === 'open')
+        .sort((left, right) => {
+          const leftTop = layoutById.get(left.id)?.rect?.top ?? Number.POSITIVE_INFINITY;
+          const rightTop = layoutById.get(right.id)?.rect?.top ?? Number.POSITIVE_INFINITY;
+          return leftTop - rightTop || left.createdAt.localeCompare(right.createdAt);
+        }),
     [layoutById, threads],
+  );
+  const resolvedThreads = useMemo(
+    () =>
+      threads
+        .filter((thread) => thread.status === 'resolved')
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+    [threads],
   );
 
   useLayoutEffect(() => {
@@ -263,8 +281,8 @@ export function PlanCommentRail({
       return;
     }
     const workspaceTop = workspace.getBoundingClientRect().top;
-    let bottom = 0;
-    for (const thread of orderedThreads) {
+    let bottom = 12;
+    for (const thread of openThreads) {
       const layout = layoutById.get(thread.id);
       const card = cardRefs.current.get(thread.id);
       if (!card) {
@@ -281,8 +299,13 @@ export function PlanCommentRail({
       const height = card.getBoundingClientRect().height || 110;
       bottom = top + height + 8;
     }
-    asideRef.current?.style.setProperty('--plan-comment-rail-min-height', `${bottom}px`);
-  }, [layoutById, layoutPass, orderedThreads, workspace]);
+    asideRef.current?.style.setProperty('--plan-comment-resolved-top', `${bottom}px`);
+    const resolvedHeight = resolvedRef.current?.getBoundingClientRect().height ?? 0;
+    asideRef.current?.style.setProperty(
+      '--plan-comment-rail-min-height',
+      `${bottom + resolvedHeight + 12}px`,
+    );
+  }, [layoutById, layoutPass, openThreads, resolvedThreads.length, workspace]);
 
   useEffect(() => {
     const rail = railRef.current;
@@ -310,7 +333,7 @@ export function PlanCommentRail({
   return (
     <aside className="plan-comment-rail" ref={asideRef}>
       <div className="plan-comment-rail-scroll" ref={railRef}>
-        {orderedThreads.map((thread) => {
+        {openThreads.map((thread) => {
           const layout = layoutById.get(thread.id);
           return (
             <div
@@ -341,6 +364,30 @@ export function PlanCommentRail({
             </div>
           );
         })}
+        {resolvedThreads.length > 0 ? (
+          <details className="plan-resolved-comments" onToggle={onHeightChange} ref={resolvedRef}>
+            <summary>Resolved comments ({resolvedThreads.length})</summary>
+            <div className="plan-resolved-comment-list">
+              {resolvedThreads.map((thread) => (
+                <PlanCommentCard
+                  active={activeThreadId === thread.id}
+                  detached
+                  identity={identity}
+                  key={thread.id}
+                  onActivate={() => onActivate(thread)}
+                  onBodyChange={(body) => onBodyChange(thread.id, body)}
+                  onDelete={() => onDelete(thread.id)}
+                  onEmptyBlur={() => onEmptyBlur(thread.id)}
+                  onHeightChange={onHeightChange}
+                  onReveal={() => onReveal(thread)}
+                  readOnly={readOnly}
+                  showDelete={showDelete}
+                  thread={thread}
+                />
+              ))}
+            </div>
+          </details>
+        ) : null}
       </div>
     </aside>
   );
@@ -359,6 +406,7 @@ export function PlanEditorView({
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savePromiseRef = useRef<Promise<unknown>>(Promise.resolve());
   const reviewRef = useRef<PlanReview | null>(null);
+  const initialOpenThreadIdsRef = useRef<ReadonlySet<string>>(new Set());
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [commentTarget, setCommentTarget] = useState<{
     left: number;
@@ -439,6 +487,11 @@ export function PlanEditorView({
             },
           }
         : createEmptyReview(initialDocument);
+      initialOpenThreadIdsRef.current = new Set(
+        storedReview?.threads
+          .filter((thread) => thread.status === 'open')
+          .map((thread) => thread.id) ?? [],
+      );
       reviewRef.current = nextReview;
       setReview(nextReview);
       setIdentity(nextIdentity);
@@ -486,7 +539,10 @@ export function PlanEditorView({
   }, []);
 
   const annotations = useMemo<ReadonlyArray<MarkdownAnnotation>>(
-    () => review?.threads.map(({ anchor, id }) => ({ anchor, id })) ?? [],
+    () =>
+      review?.threads
+        .filter((thread) => thread.status === 'open')
+        .map(({ anchor, id }) => ({ anchor, id })) ?? [],
     [review?.threads],
   );
   const effectiveLayouts = useMemo(() => {
@@ -504,8 +560,41 @@ export function PlanEditorView({
       const nextIds = new Set(nextLayouts.map(({ id }) => id));
       setLayouts(nextLayouts);
       setProvisionalLayouts((current) => current.filter(({ id }) => !nextIds.has(id)));
+      const initialOpenThreadIds = initialOpenThreadIdsRef.current;
+      if (
+        initialOpenThreadIds.size > 0 &&
+        [...initialOpenThreadIds].every((id) => nextIds.has(id))
+      ) {
+        initialOpenThreadIdsRef.current = new Set();
+        const detachedIds = new Set(
+          nextLayouts
+            .filter((layout) => layout.detached && initialOpenThreadIds.has(layout.id))
+            .map((layout) => layout.id),
+        );
+        const current = reviewRef.current;
+        if (current && detachedIds.size > 0) {
+          const resolvedAt = new Date().toISOString();
+          persistReview(
+            {
+              ...current,
+              threads: current.threads.map((thread) =>
+                detachedIds.has(thread.id) && thread.status === 'open'
+                  ? {
+                      ...thread,
+                      resolution: { reason: 'anchor-removed', resolvedAt },
+                      status: 'resolved',
+                      updatedAt: resolvedAt,
+                    }
+                  : thread,
+              ),
+            },
+            true,
+          );
+          setActiveThreadId((active) => (active && detachedIds.has(active) ? null : active));
+        }
+      }
     },
-    [],
+    [persistReview],
   );
 
   const updateThread = useCallback(

@@ -13,6 +13,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { accessSync, constants, existsSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
@@ -159,6 +160,33 @@ const getSessionCwd = () => {
 };
 
 const rawArgs = process.argv.slice(2);
+
+if (rawArgs[0] === '--resolve-plan-comments') {
+  const reviewPath = rawArgs[1] ? resolve(rawArgs[1]) : '';
+  const threadIds = rawArgs.slice(2).filter(Boolean);
+  if (!reviewPath || threadIds.length === 0) {
+    process.stderr.write(
+      'open-codiff: expected --resolve-plan-comments <review-path> <thread-id>... .\n',
+    );
+    process.exit(1);
+  }
+  const require = createRequire(import.meta.url);
+  const { resolvePlanReviewThreadsAtPath } = require(join(codiffRoot, 'electron/plan-review.cjs'));
+  try {
+    const { missingIds, resolvedIds } = await resolvePlanReviewThreadsAtPath(
+      reviewPath,
+      threadIds,
+      'agent-handled',
+    );
+    process.stdout.write(
+      `CODIFF_PLAN_COMMENTS_RESOLVED ${JSON.stringify({ missingIds, resolvedIds })}\n`,
+    );
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
+  process.exit(0);
+}
 
 if (rawArgs.includes('--guide')) {
   const binEntry = join(codiffRoot, 'bin/codiff.js');

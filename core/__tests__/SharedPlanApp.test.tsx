@@ -178,6 +178,79 @@ test('shared plans render Markdown and comments read-only', async () => {
   }
 });
 
+test('shared plans collapse resolved comments without rendering their annotations', async () => {
+  const snapshot = {
+    codiffVersion: '1.5.0',
+    document: {
+      content: '# Current plan\n',
+      name: 'plan.md',
+      title: 'Current plan',
+    },
+    exportedAt: '2026-06-25T00:00:00.000Z',
+    kind: 'codiff-plan-share',
+    preferences: { theme: 'system' },
+    review: {
+      threads: [
+        {
+          anchor: {
+            block: {
+              fingerprint: 'removed-heading-fingerprint',
+              path: [0],
+              text: 'Removed heading',
+              type: 'heading',
+            },
+            kind: 'block',
+            version: 1,
+          },
+          createdAt: '2026-06-24T00:00:00.000Z',
+          createdBy: { id: 'reviewer', name: 'Reviewer' },
+          id: 'resolved-thread',
+          messages: [
+            {
+              author: { id: 'reviewer', name: 'Reviewer' },
+              body: 'This comment was handled.',
+              createdAt: '2026-06-24T00:00:00.000Z',
+              id: 'resolved-message',
+              updatedAt: '2026-06-25T00:00:00.000Z',
+            },
+          ],
+          resolution: {
+            reason: 'anchor-removed',
+            resolvedAt: '2026-06-25T00:00:00.000Z',
+          },
+          status: 'resolved',
+          updatedAt: '2026-06-25T00:00:00.000Z',
+        },
+      ],
+      version: 1,
+    },
+    version: 1,
+  } satisfies SharedPlanSnapshot;
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+
+  try {
+    await act(async () => {
+      root.render(<SharedPlanApp snapshot={snapshot} />);
+    });
+    await waitFor(() => {
+      expect(container.querySelector('.plan-resolved-comments')).not.toBeNull();
+    });
+
+    const resolvedSection = container.querySelector<HTMLDetailsElement>('.plan-resolved-comments');
+    expect(resolvedSection?.open).toBe(false);
+    expect(resolvedSection?.querySelector('summary')?.textContent).toBe('Resolved comments (1)');
+    expect(resolvedSection?.querySelector('.plan-comment-thread.resolved')?.textContent).toContain(
+      'Resolved after target removal',
+    );
+    expect(container.querySelector('[data-mdx-annotation-block~="resolved-thread"]')).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
 test('shared plans do not render active HTML from documents or comments', async () => {
   const snapshot = {
     codiffVersion: '1.4.7',

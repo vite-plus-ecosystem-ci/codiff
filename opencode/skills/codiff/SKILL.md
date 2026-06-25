@@ -42,10 +42,19 @@ change. Codiff owns the format and authoring guidance, so this skill only handle
    means the user closed the window after Codiff flushed the file and comments. A canceled handoff
    means the app could not complete the handoff and must not be treated as approval.
 5. Read the `CODIFF_PLAN_RESULT` JSON emitted when Codiff closes. Re-read the entire Markdown file
-   and process every unresolved thread in `review.threads`. Treat edits, additions, removals,
-   reordered steps, and comments as user direction. Preserve detached comments and use their
-   quoted anchor context.
-6. For `status: "done"`, execute the edited plan when the next action is clear. For
+   and process every thread in `review.threads` whose `status` is `"open"`. Treat edits, additions,
+   removals, reordered steps, and open comments as user direction. Use quoted anchor context for
+   detached comments. Resolved comments are retained history and must not be processed again.
+6. After successfully applying one or more open comments, acknowledge only the handled thread IDs
+   using the exact `reviewPath` from `CODIFF_PLAN_RESULT`:
+
+   ```bash
+   node scripts/open-codiff.mjs --resolve-plan-comments "<reviewPath>" <thread-id>...
+   ```
+
+   Do not resolve comments that were ambiguous, deferred, or not applied.
+
+7. For `status: "done"`, execute the edited plan when the next action is clear. For
    `status: "closed"`, continue only when `documentChanged` is true or unresolved comments contain
    user direction; otherwise treat the close as cancellation. If the feedback is materially
    ambiguous, ask one focused question before changing code.

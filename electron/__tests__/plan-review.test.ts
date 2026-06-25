@@ -1,22 +1,35 @@
-import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { promisify } from 'node:util';
 import { expect, test } from 'vite-plus/test';
 import type { PlanReview } from '../../core/types.ts';
 
+const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
-const { getPlanReviewPath, normalizePlanReview, readPlanReview, writePlanReview } =
-  require('../plan-review.cjs') as {
-    getPlanReviewPath: (userDataPath: string, planFile: string) => string;
-    normalizePlanReview: (value: unknown) => PlanReview;
-    readPlanReview: (userDataPath: string, planFile: string) => Promise<PlanReview | null>;
-    writePlanReview: (
-      userDataPath: string,
-      planFile: string,
-      review: unknown,
-    ) => Promise<PlanReview>;
-  };
+const {
+  getPlanReviewPath,
+  normalizePlanReview,
+  readPlanReview,
+  resolvePlanReviewThreadsAtPath,
+  writePlanReview,
+} = require('../plan-review.cjs') as {
+  getPlanReviewPath: (userDataPath: string, planFile: string) => string;
+  normalizePlanReview: (value: unknown) => PlanReview;
+  readPlanReview: (userDataPath: string, planFile: string) => Promise<PlanReview | null>;
+  resolvePlanReviewThreadsAtPath: (
+    path: string,
+    threadIds: ReadonlyArray<string>,
+    reason: 'agent-handled' | 'anchor-removed',
+  ) => Promise<{
+    missingIds: ReadonlyArray<string>;
+    resolvedIds: ReadonlyArray<string>;
+    review: PlanReview;
+  }>;
+  writePlanReview: (userDataPath: string, planFile: string, review: unknown) => Promise<PlanReview>;
+};
 
 const createReview = (body: string): PlanReview => {
   const author = {
@@ -62,6 +75,25 @@ const createReview = (body: string): PlanReview => {
   };
 };
 
+const addThread = (review: PlanReview, id: string, body: string): PlanReview => {
+  const source = review.threads[0]!;
+  return {
+    ...review,
+    threads: [
+      ...review.threads,
+      {
+        ...source,
+        id,
+        messages: source.messages.map((message) => ({
+          ...message,
+          body,
+          id: `${id}-message`,
+        })),
+      },
+    ],
+  };
+};
+
 test('plan reviews round trip through the sidecar store', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codiff-plan-review-'));
   const planFile = join(directory, 'plan.md');
@@ -71,6 +103,212 @@ test('plan reviews round trip through the sidecar store', async () => {
     await expect(readPlanReview(directory, planFile)).resolves.toBeNull();
     await expect(writePlanReview(directory, planFile, review)).resolves.toEqual(review);
     await expect(readPlanReview(directory, planFile)).resolves.toEqual(review);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test('plan review resolution metadata round trips through the sidecar store', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codiff-plan-review-'));
+  const planFile = join(directory, 'plan.md');
+  const review = createReview('Keep this requirement explicit.');
+  const resolvedReview = {
+    ...review,
+    threads: review.threads.map((thread) => ({
+      ...thread,
+      resolution: {
+        reason: 'agent-handled' as const,
+        resolvedAt: '2026-06-25T00:00:00.000Z',
+      },
+      status: 'resolved' as const,
+      updatedAt: '2026-06-25T00:00:00.000Z',
+    })),
+  };
+
+  try {
+    await expect(writePlanReview(directory, planFile, resolvedReview)).resolves.toEqual(
+      resolvedReview,
+    );
+    await expect(readPlanReview(directory, planFile)).resolves.toEqual(resolvedReview);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test('resolves selected open plan comments by review path', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codiff-plan-review-'));
+  const planFile = join(directory, 'plan.md');
+  const review = createReview('Handle this comment.');
+  const secondThread = {
+    ...review.threads[0],
+    id: 'thread-2',
+    messages: review.threads[0]!.messages.map((message) => ({
+      ...message,
+      id: 'message-2',
+    })),
+  };
+  const alreadyResolved = {
+    ...review.threads[0],
+    id: 'thread-3',
+    resolution: {
+      reason: 'anchor-removed' as const,
+      resolvedAt: '2026-06-24T01:00:00.000Z',
+    },
+    status: 'resolved' as const,
+    updatedAt: '2026-06-24T01:00:00.000Z',
+  };
+  const reviewPath = getPlanReviewPath(directory, planFile);
+
+  try {
+    await writePlanReview(directory, planFile, {
+      ...review,
+      threads: [review.threads[0]!, secondThread, alreadyResolved],
+    });
+    const result = await resolvePlanReviewThreadsAtPath(
+      reviewPath,
+      ['thread-1', 'thread-3', 'missing-thread'],
+      'agent-handled',
+    );
+
+    expect(result.resolvedIds).toEqual(['thread-1']);
+    expect(result.missingIds).toEqual(['missing-thread']);
+    expect(result.review.threads).toEqual([
+      expect.objectContaining({
+        id: 'thread-1',
+        resolution: expect.objectContaining({
+          reason: 'agent-handled',
+          resolvedAt: expect.any(String),
+        }),
+        status: 'resolved',
+        updatedAt: expect.any(String),
+      }),
+      secondThread,
+      alreadyResolved,
+    ]);
+    await expect(readPlanReview(directory, planFile)).resolves.toEqual(result.review);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test('concurrent plan review saves and resolutions preserve both updates', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codiff-plan-review-race-'));
+  const planFile = join(directory, 'plan.md');
+  const review = createReview('Handle this comment.');
+  const reviewWithNewThread = addThread(review, 'thread-2', 'Keep this new comment.');
+  const reviewPath = getPlanReviewPath(directory, planFile);
+
+  try {
+    await writePlanReview(directory, planFile, review);
+    await Promise.all([
+      writePlanReview(directory, planFile, reviewWithNewThread),
+      resolvePlanReviewThreadsAtPath(reviewPath, ['thread-1'], 'agent-handled'),
+    ]);
+
+    await expect(readPlanReview(directory, planFile)).resolves.toEqual(
+      expect.objectContaining({
+        threads: [
+          expect.objectContaining({
+            id: 'thread-1',
+            resolution: expect.objectContaining({ reason: 'agent-handled' }),
+            status: 'resolved',
+          }),
+          expect.objectContaining({
+            id: 'thread-2',
+            status: 'open',
+          }),
+        ],
+      }),
+    );
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test('a stale plan save cannot reopen an agent-resolved comment', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codiff-plan-review-resolution-'));
+  const planFile = join(directory, 'plan.md');
+  const review = createReview('Handle this comment.');
+  const reviewWithNewThread = addThread(review, 'thread-2', 'Keep this new comment.');
+  const reviewPath = getPlanReviewPath(directory, planFile);
+
+  try {
+    await writePlanReview(directory, planFile, review);
+    await resolvePlanReviewThreadsAtPath(reviewPath, ['thread-1'], 'agent-handled');
+    await writePlanReview(directory, planFile, reviewWithNewThread);
+
+    await expect(readPlanReview(directory, planFile)).resolves.toEqual(
+      expect.objectContaining({
+        threads: [
+          expect.objectContaining({
+            id: 'thread-1',
+            resolution: expect.objectContaining({ reason: 'agent-handled' }),
+            status: 'resolved',
+          }),
+          expect.objectContaining({
+            id: 'thread-2',
+            status: 'open',
+          }),
+        ],
+      }),
+    );
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test('cross-process plan review saves preserve concurrent agent resolution', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codiff-plan-review-process-race-'));
+  const planFile = join(directory, 'plan.md');
+  const review = createReview('Handle this comment.');
+  const reviewWithNewThread = addThread(
+    review,
+    'thread-2',
+    `Keep this new comment.${' detail'.repeat(100_000)}`,
+  );
+  const reviewPath = getPlanReviewPath(directory, planFile);
+  const inputPath = join(directory, 'updated-review.json');
+  const modulePath = resolve('electron/plan-review.cjs');
+  const writer = `
+    const { readFile } = require('node:fs/promises');
+    const { writePlanReviewAtPath } = require(process.argv[1]);
+    (async () => {
+      const review = JSON.parse(await readFile(process.argv[3], 'utf8'));
+      await writePlanReviewAtPath(process.argv[2], review);
+    })().catch((error) => {
+      console.error(error);
+      process.exit(1);
+    });
+  `;
+  const resolver = `
+    const { resolvePlanReviewThreadsAtPath } = require(process.argv[1]);
+    resolvePlanReviewThreadsAtPath(process.argv[2], ['thread-1'], 'agent-handled').catch((error) => {
+      console.error(error);
+      process.exit(1);
+    });
+  `;
+
+  try {
+    await writePlanReview(directory, planFile, review);
+    await writeFile(inputPath, `${JSON.stringify(reviewWithNewThread)}\n`);
+    await Promise.all([
+      execFileAsync(process.execPath, ['-e', writer, modulePath, reviewPath, inputPath]),
+      execFileAsync(process.execPath, ['-e', resolver, modulePath, reviewPath]),
+    ]);
+
+    const savedReview = JSON.parse(await readFile(reviewPath, 'utf8')) as PlanReview;
+    expect(savedReview.threads).toEqual([
+      expect.objectContaining({
+        id: 'thread-1',
+        resolution: expect.objectContaining({ reason: 'agent-handled' }),
+        status: 'resolved',
+      }),
+      expect.objectContaining({
+        id: 'thread-2',
+        status: 'open',
+      }),
+    ]);
+    expect(await readdir(dirname(reviewPath))).toEqual([reviewPath.split('/').at(-1)]);
   } finally {
     await rm(directory, { force: true, recursive: true });
   }

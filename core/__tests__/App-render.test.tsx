@@ -1615,6 +1615,250 @@ test('plan mode opens the Markdown editor without loading repository state', asy
   }
 });
 
+test('plan mode resolves stored comments whose anchors were already removed', async () => {
+  const savePlanReview = vi.fn(async (review: PlanReview) => review);
+  const storedReview = {
+    document: {
+      id: 'plan:/tmp/plan.md',
+      path: '/tmp/plan.md',
+      version: 'old-plan-version',
+    },
+    threads: [
+      {
+        anchor: {
+          block: {
+            fingerprint: 'removed-heading-fingerprint',
+            path: [99],
+            text: 'Removed heading',
+            type: 'heading',
+          },
+          kind: 'block',
+          version: 1,
+        },
+        createdAt: '2026-06-24T00:00:00.000Z',
+        createdBy: {
+          email: 'reviewer@example.com',
+          id: 'reviewer@example.com',
+          name: 'Reviewer',
+        },
+        id: 'detached-thread',
+        messages: [
+          {
+            author: {
+              email: 'reviewer@example.com',
+              id: 'reviewer@example.com',
+              name: 'Reviewer',
+            },
+            body: 'Keep this comment as history.',
+            createdAt: '2026-06-24T00:00:00.000Z',
+            id: 'detached-message',
+            updatedAt: '2026-06-24T00:00:00.000Z',
+          },
+        ],
+        status: 'open',
+        updatedAt: '2026-06-24T00:00:00.000Z',
+      },
+    ],
+    version: 1,
+  } satisfies PlanReview;
+  window.codiff = createCodiffMock({
+    getLaunchOptions: vi.fn(async () => ({
+      planFile: '/tmp/plan.md',
+      planResultFile: '/tmp/result.json',
+      repositoryPathProvided: true,
+      walkthrough: false,
+    })),
+    getMarkdownDocument: vi.fn(async () => ({
+      content: '# Current plan\n',
+      id: 'plan:/tmp/plan.md',
+      kind: 'plan' as const,
+      path: '/tmp/plan.md',
+      version: 'plan-version',
+    })),
+    getPlanReview: vi.fn(async () => storedReview),
+    savePlanReview,
+  });
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+
+  try {
+    await act(async () => {
+      root.render(<App />);
+    });
+    await waitFor(() => {
+      expect(savePlanReview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threads: [
+            expect.objectContaining({
+              id: 'detached-thread',
+              resolution: expect.objectContaining({
+                reason: 'anchor-removed',
+                resolvedAt: expect.any(String),
+              }),
+              status: 'resolved',
+            }),
+          ],
+        }),
+      );
+    });
+
+    const resolvedSection = container.querySelector<HTMLDetailsElement>('.plan-resolved-comments');
+    expect(resolvedSection?.open).toBe(false);
+    expect(resolvedSection?.querySelector('summary')?.textContent).toBe('Resolved comments (1)');
+    expect(container.querySelector('.plan-comment-thread.resolved')?.textContent).toContain(
+      'Resolved after target removal',
+    );
+    expect(container.querySelector('[data-mdx-annotation-block~="detached-thread"]')).toBeNull();
+
+    await act(async () => {
+      resolvedSection!.open = true;
+      resolvedSection!.dispatchEvent(new Event('toggle'));
+    });
+    await act(async () => {
+      resolvedSection?.querySelector<HTMLButtonElement>('.review-comment-delete')?.click();
+    });
+    await waitFor(() => {
+      expect(container.querySelector('.plan-resolved-comments')).toBeNull();
+      expect(savePlanReview).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          threads: [],
+        }),
+      );
+    });
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
+test('plan mode keeps comments open when their anchors are removed during the current review', async () => {
+  let publishMarkdownChange:
+    | ((change: {
+        deleted: boolean;
+        document: {
+          content: string;
+          id: string;
+          kind: 'plan';
+          path: string;
+          version: string;
+        };
+        id: string;
+      }) => void)
+    | null = null;
+  const savePlanReview = vi.fn(async (review: PlanReview) => review);
+  const storedReview = {
+    document: {
+      id: 'plan:/tmp/plan.md',
+      path: '/tmp/plan.md',
+      version: 'plan-version',
+    },
+    threads: [
+      {
+        anchor: {
+          block: {
+            fingerprint: 'heading-fingerprint',
+            path: [0],
+            text: 'Current plan',
+            type: 'heading',
+          },
+          kind: 'block',
+          version: 1,
+        },
+        createdAt: '2026-06-24T00:00:00.000Z',
+        createdBy: {
+          email: 'reviewer@example.com',
+          id: 'reviewer@example.com',
+          name: 'Reviewer',
+        },
+        id: 'live-thread',
+        messages: [
+          {
+            author: {
+              email: 'reviewer@example.com',
+              id: 'reviewer@example.com',
+              name: 'Reviewer',
+            },
+            body: 'The agent still needs to process this.',
+            createdAt: '2026-06-24T00:00:00.000Z',
+            id: 'live-message',
+            updatedAt: '2026-06-24T00:00:00.000Z',
+          },
+        ],
+        status: 'open',
+        updatedAt: '2026-06-24T00:00:00.000Z',
+      },
+    ],
+    version: 1,
+  } satisfies PlanReview;
+  window.codiff = createCodiffMock({
+    getLaunchOptions: vi.fn(async () => ({
+      planFile: '/tmp/plan.md',
+      planResultFile: '/tmp/result.json',
+      repositoryPathProvided: true,
+      walkthrough: false,
+    })),
+    getMarkdownDocument: vi.fn(async () => ({
+      content: '# Current plan\n',
+      id: 'plan:/tmp/plan.md',
+      kind: 'plan' as const,
+      path: '/tmp/plan.md',
+      version: 'plan-version',
+    })),
+    getPlanReview: vi.fn(async () => storedReview),
+    onMarkdownDocumentChanged: vi.fn((callback) => {
+      publishMarkdownChange = callback;
+      return () => {
+        publishMarkdownChange = null;
+      };
+    }),
+    savePlanReview,
+  });
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+
+  try {
+    await act(async () => {
+      root.render(<App />);
+    });
+    await waitFor(() => {
+      expect(container.querySelector('[data-mdx-annotation-block~="live-thread"]')).not.toBeNull();
+      expect(publishMarkdownChange).not.toBeNull();
+    });
+    savePlanReview.mockClear();
+
+    await act(async () => {
+      publishMarkdownChange?.({
+        deleted: false,
+        document: {
+          content: '# Replacement plan\n',
+          id: 'plan:/tmp/plan.md',
+          kind: 'plan',
+          path: '/tmp/plan.md',
+          version: 'next-plan-version',
+        },
+        id: 'plan:/tmp/plan.md',
+      });
+    });
+    await waitFor(() => {
+      expect(container.querySelector('[data-mdx-annotation-block~="live-thread"]')).toBeNull();
+    });
+
+    expect(container.querySelector('.plan-resolved-comments')).toBeNull();
+    expect(container.querySelector('.plan-comment-position .plan-comment-thread')).not.toBeNull();
+    expect(
+      savePlanReview.mock.calls.some(
+        ([review]) =>
+          review.threads.find((thread) => thread.id === 'live-thread')?.status === 'resolved',
+      ),
+    ).toBe(false);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
 test('closing plan mode flushes and returns a closed handoff', async () => {
   const completePlan = vi.fn(async (_review: PlanReview, _status: 'closed' | 'done') => {});
   let blockPlanReviewSave = false;

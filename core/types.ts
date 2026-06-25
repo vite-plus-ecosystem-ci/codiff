@@ -201,6 +201,10 @@ export type PlanCommentThread = {
   createdBy: PlanCommentAuthor;
   id: string;
   messages: ReadonlyArray<PlanCommentMessage>;
+  resolution?: {
+    reason: 'agent-handled' | 'anchor-removed';
+    resolvedAt: string;
+  };
   status: 'open' | 'resolved';
   updatedAt: string;
 };

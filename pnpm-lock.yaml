@@ -22,6 +22,9 @@ importers:
       electron-squirrel-startup:
         specifier: ^1.0.1
         version: 1.0.1
+      proper-lockfile:
+        specifier: ^4.1.2
+        version: 4.1.2
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: ^0.79.4

@@ -1,13 +1,14 @@
 // @ts-check
 
 const { createHash, randomUUID } = require('node:crypto');
-const { readFile } = require('node:fs/promises');
-const { mkdir, open, rename, unlink } = require('node:fs/promises');
+const { mkdir, open, readFile, rename, unlink } = require('node:fs/promises');
 const { dirname, join, resolve } = require('node:path');
+const lockfile = require('proper-lockfile');
 
 const MAX_PLAN_REVIEW_BYTES = 2 * 1024 * 1024;
+const PLAN_REVIEW_LOCK_STALE_MS = 10_000;
 /** @type {Map<string, Promise<unknown>>} */
-const writeQueues = new Map();
+const operationQueues = new Map();
 
 /** @param {string} userDataPath @param {string} planFile */
 const getPlanReviewPath = (userDataPath, planFile) => {
@@ -73,6 +74,13 @@ const isMessage = (value) =>
   isString(value.updatedAt);
 
 /** @param {unknown} value */
+const isResolution = (value) =>
+  value == null ||
+  (isRecord(value) &&
+    (value.reason === 'agent-handled' || value.reason === 'anchor-removed') &&
+    isString(value.resolvedAt));
+
+/** @param {unknown} value */
 const isThread = (value) =>
   isRecord(value) &&
   isAnchor(value.anchor) &&
@@ -81,6 +89,7 @@ const isThread = (value) =>
   isString(value.id) &&
   Array.isArray(value.messages) &&
   value.messages.every(isMessage) &&
+  isResolution(value.resolution) &&
   (value.status === 'open' || value.status === 'resolved') &&
   isString(value.updatedAt);
 
@@ -102,10 +111,24 @@ const normalizePlanReview = (value) => {
   return value;
 };
 
+/** @param {unknown} review */
+const serializePlanReview = (review) => {
+  const content = `${JSON.stringify(normalizePlanReview(review), null, 2)}\n`;
+  if (Buffer.byteLength(content, 'utf8') > MAX_PLAN_REVIEW_BYTES) {
+    throw new Error('Plan review exceeds the 2 MB limit.');
+  }
+  return content;
+};
+
 /** @param {string} userDataPath @param {string} planFile */
 const readPlanReview = async (userDataPath, planFile) => {
+  return readPlanReviewAtPath(getPlanReviewPath(userDataPath, planFile));
+};
+
+/** @param {string} path */
+const readPlanReviewAtPath = async (path) => {
   try {
-    const raw = await readFile(getPlanReviewPath(userDataPath, planFile), 'utf8');
+    const raw = await readFile(path, 'utf8');
     if (Buffer.byteLength(raw, 'utf8') > MAX_PLAN_REVIEW_BYTES) {
       throw new Error('Plan review exceeds the 2 MB limit.');
     }
@@ -116,6 +139,43 @@ const readPlanReview = async (userDataPath, planFile) => {
     }
     throw error;
   }
+};
+
+/** @template T @param {string} path @param {() => Promise<T>} operation */
+const withPlanReviewLock = async (path, operation) => {
+  await mkdir(dirname(path), { recursive: true });
+  const release = await lockfile.lock(path, {
+    realpath: false,
+    retries: {
+      factor: 1,
+      maxTimeout: 100,
+      minTimeout: 100,
+      randomize: true,
+      retries: 150,
+    },
+    stale: PLAN_REVIEW_LOCK_STALE_MS,
+    update: PLAN_REVIEW_LOCK_STALE_MS / 2,
+  });
+  try {
+    return await operation();
+  } finally {
+    await release();
+  }
+};
+
+/** @template T @param {string} path @param {() => Promise<T>} operation */
+const queuePlanReviewOperation = async (path, operation) => {
+  const previous = operationQueues.get(path) ?? Promise.resolve();
+  const queued = previous
+    .catch(() => {})
+    .then(operation)
+    .finally(() => {
+      if (operationQueues.get(path) === queued) {
+        operationQueues.delete(path);
+      }
+    });
+  operationQueues.set(path, queued);
+  return queued;
 };
 
 /** @param {string} path @param {string} content */
@@ -135,32 +195,94 @@ const atomicWrite = async (path, content) => {
   }
 };
 
-/** @param {string} userDataPath @param {string} planFile @param {unknown} review */
-const writePlanReview = async (userDataPath, planFile, review) => {
-  const normalized = normalizePlanReview(review);
-  const content = `${JSON.stringify(normalized, null, 2)}\n`;
-  if (Buffer.byteLength(content, 'utf8') > MAX_PLAN_REVIEW_BYTES) {
-    throw new Error('Plan review exceeds the 2 MB limit.');
+/** @param {unknown} currentReview @param {unknown} nextReview */
+const preserveResolvedThreads = (currentReview, nextReview) => {
+  const current = currentReview ? normalizePlanReview(currentReview) : null;
+  const next = normalizePlanReview(nextReview);
+  if (!current) {
+    return next;
   }
-
-  const path = getPlanReviewPath(userDataPath, planFile);
-  const previous = writeQueues.get(path) ?? Promise.resolve();
-  const write = previous
-    .catch(() => {})
-    .then(() => atomicWrite(path, content))
-    .finally(() => {
-      if (writeQueues.get(path) === write) {
-        writeQueues.delete(path);
+  const currentThreads = new Map(current.threads.map((thread) => [thread.id, thread]));
+  return {
+    ...next,
+    threads: next.threads.map((thread) => {
+      const storedThread = currentThreads.get(thread.id);
+      if (storedThread?.status !== 'resolved' || thread.status === 'resolved') {
+        return thread;
       }
-    });
-  writeQueues.set(path, write);
-  await write;
-  return normalized;
+      return {
+        ...thread,
+        ...(storedThread.resolution ? { resolution: storedThread.resolution } : {}),
+        status: 'resolved',
+        updatedAt: storedThread.updatedAt,
+      };
+    }),
+  };
+};
+
+/** @param {string} path @param {unknown} review */
+const writePlanReviewAtPath = async (path, review) => {
+  const normalized = normalizePlanReview(review);
+  return queuePlanReviewOperation(path, () =>
+    withPlanReviewLock(path, async () => {
+      const nextReview = preserveResolvedThreads(await readPlanReviewAtPath(path), normalized);
+      await atomicWrite(path, serializePlanReview(nextReview));
+      return nextReview;
+    }),
+  );
+};
+
+/** @param {string} userDataPath @param {string} planFile @param {unknown} review */
+const writePlanReview = async (userDataPath, planFile, review) =>
+  writePlanReviewAtPath(getPlanReviewPath(userDataPath, planFile), review);
+
+/**
+ * @param {string} path
+ * @param {ReadonlyArray<string>} threadIds
+ * @param {'agent-handled' | 'anchor-removed'} reason
+ */
+const resolvePlanReviewThreadsAtPath = async (path, threadIds, reason) => {
+  return queuePlanReviewOperation(path, () =>
+    withPlanReviewLock(path, async () => {
+      const review = await readPlanReviewAtPath(path);
+      if (!review) {
+        throw new Error(`Plan review not found at ${path}.`);
+      }
+
+      const requestedIds = new Set(threadIds);
+      const resolvedAt = new Date().toISOString();
+      const resolvedIds = [];
+      const nextReview = {
+        ...review,
+        threads: review.threads.map((thread) => {
+          if (!requestedIds.has(thread.id) || thread.status === 'resolved') {
+            return thread;
+          }
+          resolvedIds.push(thread.id);
+          return {
+            ...thread,
+            resolution: { reason, resolvedAt },
+            status: 'resolved',
+            updatedAt: resolvedAt,
+          };
+        }),
+      };
+      const knownIds = new Set(review.threads.map((thread) => thread.id));
+      const missingIds = threadIds.filter((id) => !knownIds.has(id));
+      if (resolvedIds.length > 0) {
+        await atomicWrite(path, serializePlanReview(nextReview));
+      }
+      return { missingIds, resolvedIds, review: nextReview };
+    }),
+  );
 };
 
 module.exports = {
   getPlanReviewPath,
   normalizePlanReview,
   readPlanReview,
+  readPlanReviewAtPath,
+  resolvePlanReviewThreadsAtPath,
   writePlanReview,
+  writePlanReviewAtPath,
 };

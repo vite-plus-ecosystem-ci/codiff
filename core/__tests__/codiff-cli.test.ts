@@ -15,6 +15,7 @@ import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, expect, test } from 'vite-plus/test';
 import { formatHelpText, parseArguments, resolvePullRequestUrl } from '../../bin/arguments.js';
+import type { PlanReview } from '../types.ts';
 import { createFakeCommandLogger, createFakeOpenLogger } from './helpers/cli.ts';
 
 const execFileAsync = promisify(execFile);
@@ -777,6 +778,83 @@ test('Codex skill launcher opens a blocking plan handoff', async () => {
     expect(await logger.readArgs()).toEqual(['--plan', planFile, '--agent', 'codex']);
   } finally {
     await logger.cleanup();
+  }
+});
+
+test('Codex skill launcher resolves handled plan comments', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codiff-plan-comments-'));
+  const reviewPath = join(directory, 'review.json');
+  const author = {
+    email: 'reviewer@example.com',
+    id: 'reviewer@example.com',
+    name: 'Reviewer',
+  };
+  const review = {
+    document: {
+      id: 'plan:/tmp/plan.md',
+      path: '/tmp/plan.md',
+      version: 'plan-version',
+    },
+    threads: ['thread-1', 'thread-2'].map((id) => ({
+      anchor: {
+        block: {
+          fingerprint: `${id}-fingerprint`,
+          path: [0],
+          text: 'Execute the plan',
+          type: 'heading',
+        },
+        kind: 'block' as const,
+        version: 1 as const,
+      },
+      createdAt: '2026-06-24T00:00:00.000Z',
+      createdBy: author,
+      id,
+      messages: [
+        {
+          author,
+          body: `Handle ${id}.`,
+          createdAt: '2026-06-24T00:00:00.000Z',
+          id: `${id}-message`,
+          updatedAt: '2026-06-24T00:00:00.000Z',
+        },
+      ],
+      status: 'open' as const,
+      updatedAt: '2026-06-24T00:00:00.000Z',
+    })),
+    version: 1 as const,
+  } satisfies PlanReview;
+
+  try {
+    await writeFile(reviewPath, `${JSON.stringify(review)}\n`);
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [
+        resolve('codex/skills/codiff/scripts/open-codiff.mjs'),
+        '--resolve-plan-comments',
+        reviewPath,
+        'thread-1',
+        'missing-thread',
+      ],
+      { cwd: resolve('codex/skills/codiff') },
+    );
+
+    expect(stdout).toBe(
+      'CODIFF_PLAN_COMMENTS_RESOLVED {"missingIds":["missing-thread"],"resolvedIds":["thread-1"]}\n',
+    );
+    const savedReview = JSON.parse(await readFile(reviewPath, 'utf8')) as PlanReview;
+    expect(savedReview.threads).toEqual([
+      expect.objectContaining({
+        id: 'thread-1',
+        resolution: expect.objectContaining({
+          reason: 'agent-handled',
+          resolvedAt: expect.any(String),
+        }),
+        status: 'resolved',
+      }),
+      review.threads[1],
+    ]);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
   }
 });
 
