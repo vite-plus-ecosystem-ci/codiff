@@ -182,7 +182,6 @@ function CodeViewHeader({
     file,
     isCollapsed,
     isMarkdownPreview,
-    isSelected,
     isViewed,
     lineCount,
     reviewIdentity,
@@ -197,7 +196,7 @@ function CodeViewHeader({
     <div
       className={`codiff-file-header${walkthroughNote ? ' with-note' : ''}${
         isCollapsed ? ' collapsed' : ''
-      }${isSelected ? ' selected' : ''}${isViewed ? ' viewed' : ''}`}
+      }${isViewed ? ' viewed' : ''}`}
     >
       <div
         aria-expanded={!isCollapsed}
@@ -1638,9 +1637,7 @@ export function ReviewCodeView({
         }:${reviewKey}:${section.id}:${commentLayoutPassByItem[id] ?? 0}`;
         const sectionStateVersionKey = `${isCollapsed ? 'collapsed' : 'open'}:${
           isViewed ? 'viewed' : 'pending'
-        }:${index}:${isSelected ? 'selected' : 'idle'}:${fontLayoutKey}:${
-          walkthroughNote?.reason ?? ''
-        }`;
+        }:${index}:${fontLayoutKey}:${walkthroughNote?.reason ?? ''}`;
         const annotationMap = new Map<string, DiffLineAnnotation<ReviewAnnotationMetadata>>();
         const globalSectionComments = commentsBySection.get(section.id) ?? [];
         const visibleGlobalComments = globalSectionComments.filter(

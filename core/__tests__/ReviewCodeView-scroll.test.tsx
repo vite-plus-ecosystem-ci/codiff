@@ -229,6 +229,42 @@ test('read-only Markdown previews highlight blocks containing added lines', asyn
   }
 });
 
+test('scroll selection updates do not publish new item versions', async () => {
+  const firstFile = createChangedFile('src/first.ts');
+  const secondFile = createChangedFile('README.md');
+  const container = document.createElement('div');
+  document.body.append(container);
+  let root: Root | null = null;
+
+  try {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(
+        <ReviewCodeViewHarness files={[firstFile, secondFile]} selectedPath={firstFile.path} />,
+      );
+    });
+
+    const firstVersions = codeViewMock.lastItems.map((item) => item.version);
+    expect(codeViewMock.postRenderNodes[0]?.classList.contains('codiff-selected-item')).toBe(true);
+    expect(codeViewMock.postRenderNodes[1]?.classList.contains('codiff-selected-item')).toBe(false);
+
+    await act(async () => {
+      root?.render(
+        <ReviewCodeViewHarness files={[firstFile, secondFile]} selectedPath={secondFile.path} />,
+      );
+    });
+
+    expect(codeViewMock.lastItems.map((item) => item.version)).toEqual(firstVersions);
+    expect(codeViewMock.postRenderNodes[0]?.classList.contains('codiff-selected-item')).toBe(false);
+    expect(codeViewMock.postRenderNodes[1]?.classList.contains('codiff-selected-item')).toBe(true);
+  } finally {
+    if (root) {
+      await act(async () => root?.unmount());
+    }
+    container.remove();
+  }
+});
+
 test('walkthrough header chrome does not leak inline styles onto reused diff nodes', async () => {
   const file = createChangedFile('src/reused.ts');
   const headerBlock: ReviewDiffBlock = {
