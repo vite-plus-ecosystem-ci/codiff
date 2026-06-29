@@ -1,8 +1,3 @@
-import {
-  filterPatchToHunkIds,
-  getSectionWalkthroughHunks,
-  isSyntheticWalkthroughHunk,
-} from '../../shared/narrative-walkthrough-diff.cjs';
 import type {
   ChangedFile,
   DiffSection,
@@ -16,6 +11,11 @@ import type {
   WalkthroughStop,
 } from '../types.ts';
 import { getDiffLineCount, getVisibleDiffSections } from './diff.ts';
+import {
+  filterPatchToHunkIds,
+  getSectionWalkthroughHunks,
+  isSyntheticWalkthroughHunk,
+} from './narrative-walkthrough-diff.js';
 
 export type NarrativeLineCount = {
   added: number;

@@ -307,6 +307,22 @@ test('empty code font family removes the root CSS variable', async () => {
   container.remove();
 });
 
+test('stale persisted collapsed sidebar state does not hide the sidebar on launch', async () => {
+  window.localStorage.setItem('codiff:sidebar-collapsed', 'true');
+  window.codiff = createCodiffMock();
+
+  const app = await renderReact(<App />);
+
+  await waitFor(() => {
+    expect(app.container.querySelector('.app-shell')?.classList.contains('sidebar-collapsed')).toBe(
+      false,
+    );
+    expect(app.container.querySelector('.sidebar')).not.toBeNull();
+  });
+
+  await app.cleanup();
+});
+
 test('empty repository state fills the review pane for centered layout', async () => {
   window.codiff = createCodiffMock();
 
@@ -1123,9 +1139,10 @@ test('pull request descriptions render as provider-aware Markdown source context
       expect(header?.querySelector('.codiff-file-path')?.textContent).toBe(label);
       expect(header?.querySelector('.source-description-title')).toBeNull();
       if (source.author) {
-        expect(header?.querySelector('.source-description-author')?.textContent).toContain(
-          `@${source.author.login}`,
-        );
+        expect(header?.querySelector('.source-description-author')).toBeNull();
+        expect(
+          app.container.querySelector('.source-description-author-header')?.textContent,
+        ).toContain(source.author.name ?? `@${source.author.login}`);
       } else {
         expect(header?.querySelector('.source-description-author')).toBeNull();
       }
@@ -1273,7 +1290,7 @@ test('title-only pull request source context renders as a collapsed static heade
   }
 });
 
-test('pull request descriptions stay visible in walkthrough mode', async () => {
+test('narrative walkthrough stops show pull request descriptions once', async () => {
   const changedFile = createChangedFile('src/app.ts');
   const source = {
     description: '## Summary\n\nKeep the PR context visible.',
@@ -1346,15 +1363,13 @@ test('pull request descriptions stay visible in walkthrough mode', async () => {
 
   try {
     await waitFor(() => {
-      expect(app.container.querySelector('.codiff-source-description-header')).not.toBeNull();
       expect(app.container.querySelector('.wt-stop-block')).not.toBeNull();
     });
 
-    const header = app.container.querySelector<HTMLElement>('.codiff-source-description-header');
-    expect(header?.textContent).toContain('Keep context visible in walkthrough');
-    expect(app.container.querySelector('.source-description-markdown')?.textContent).toContain(
-      'Keep the PR context visible.',
-    );
+    expect(app.container.querySelectorAll('.codiff-source-description-header')).toHaveLength(1);
+    expect(app.container.querySelectorAll('.source-description-markdown')).toHaveLength(1);
+    expect(app.container.textContent).toContain('Keep context visible in walkthrough');
+    expect(app.container.textContent).toContain('Keep the PR context visible.');
   } finally {
     await app.cleanup();
   }

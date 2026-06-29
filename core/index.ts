@@ -1,11 +1,25 @@
 export { SharedPlanApp } from './SharedPlanApp.tsx';
-export { SharedWalkthroughApp } from './SharedWalkthroughApp.tsx';
+export {
+  MergeRequestReviewApp,
+  ReadOnlyGeneralCommentCard,
+  SharedWalkthroughApp,
+  type MergeRequestReviewAppProps,
+  type MergeRequestReviewMode,
+  type MergeRequestWalkthroughStatus,
+} from './SharedWalkthroughApp.tsx';
 export type {
   ChangedFile,
   CodiffFeatureFlags,
   CodiffPreferences,
   DiffSection,
+  GitIdentity,
   NarrativeWalkthrough,
+  PullRequestGeneralComment,
+  PullRequestGeneralCommentThread,
+  PullRequestExistingReviewComment,
+  PullRequestReviewComment,
+  PullRequestReviewEvent,
+  RepositoryState,
   ReviewSource,
   SharedPlanSnapshot,
   SharedWalkthroughSnapshot,

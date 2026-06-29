@@ -19,7 +19,7 @@ const { readRepositoryState } = require('../../electron/git-state.cjs') as {
     }>;
   }>;
 };
-const { getSectionWalkthroughHunks } = require('../../shared/narrative-walkthrough-diff.cjs') as {
+const { getSectionWalkthroughHunks } = require('../lib/narrative-walkthrough-diff.cjs') as {
   getSectionWalkthroughHunks: (
     file: { path: string },
     section: { id: string; patch: string },

@@ -40,7 +40,19 @@ export type ChangedFile = {
 export type ReviewAuthor = {
   avatarUrl?: string;
   login: string;
+  name?: string;
   url?: string;
+};
+
+export type PullRequestReviewActionStatus = {
+  disabled?: boolean;
+  reason?: string;
+};
+
+export type PullRequestReviewStatus = {
+  approve?: PullRequestReviewActionStatus;
+  close?: PullRequestReviewActionStatus;
+  requestChanges?: PullRequestReviewActionStatus;
 };
 
 export type ReviewSource =
@@ -83,6 +95,7 @@ export type ReviewSource =
       projectPath?: string;
       provider?: 'github' | 'gitlab';
       repo?: string;
+      reviewStatus?: PullRequestReviewStatus;
       title?: string;
       type: 'pull-request';
       url: string;
@@ -151,6 +164,7 @@ export type RepositoryState = {
   branch: string | null;
   commitMetadata?: CommitMetadata;
   files: ReadonlyArray<ChangedFile>;
+  generalComments?: ReadonlyArray<PullRequestGeneralCommentThread>;
   generatedAt: number;
   launchPath: string;
   reviewComments?: ReadonlyArray<PullRequestExistingReviewComment>;
@@ -240,6 +254,7 @@ export type SharedWalkthroughSnapshot = {
     'codeFontFamily' | 'codeFontSize' | 'diffStyle' | 'showWhitespace' | 'theme' | 'wordWrap'
   >;
   repository: {
+    generalComments?: ReadonlyArray<PullRequestGeneralCommentThread>;
     root: string;
     source: ReviewSource;
     title?: string;
@@ -652,14 +667,33 @@ export type PullRequestReviewComment = {
   side: 'additions' | 'deletions';
   startLineNumber?: number;
   startSide?: 'additions' | 'deletions';
+  threadId?: string;
 };
 
 export type PullRequestExistingReviewComment = PullRequestReviewComment & {
   author: ReviewAuthor;
+  canEdit?: boolean;
+  canResolveThread?: boolean;
   id: string;
   isOutdated?: boolean;
+  isThreadResolved?: boolean;
   submittedAt?: string;
   url?: string;
+};
+
+export type PullRequestGeneralComment = {
+  author: ReviewAuthor;
+  body: string;
+  canEdit?: boolean;
+  id: string;
+  submittedAt?: string;
+  url?: string;
+};
+
+export type PullRequestGeneralCommentThread = {
+  comments: ReadonlyArray<PullRequestGeneralComment>;
+  id: string;
+  isResolved?: boolean;
 };
 
 export type PullRequestReviewEvent = 'APPROVE' | 'REQUEST_CHANGES';

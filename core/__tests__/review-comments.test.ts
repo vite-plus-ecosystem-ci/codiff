@@ -66,6 +66,42 @@ test('getReviewCommentsFromState carries the outdated flag through to review com
   expect(comments.find((comment) => comment.id === 'github:2')?.isOutdated).toBeUndefined();
 });
 
+test('getReviewCommentsFromState carries GitLab discussion metadata through to review comments', () => {
+  const state = createPullRequestState();
+  state.reviewComments = [
+    {
+      author: { login: 'reviewer' },
+      body: 'Resolvable comment.',
+      canResolveThread: true,
+      filePath: 'src/a.ts',
+      id: 'gitlab:1',
+      lineNumber: 5,
+      side: 'additions',
+      threadId: 'discussion-1',
+    },
+    {
+      author: { login: 'reviewer' },
+      body: 'Resolved comment.',
+      filePath: 'src/a.ts',
+      id: 'gitlab:2',
+      isThreadResolved: true,
+      lineNumber: 6,
+      side: 'additions',
+      threadId: 'discussion-2',
+    },
+  ];
+  const comments = getReviewCommentsFromState(state);
+
+  expect(comments.find((comment) => comment.id === 'gitlab:1')).toMatchObject({
+    canResolveThread: true,
+    threadId: 'discussion-1',
+  });
+  expect(comments.find((comment) => comment.id === 'gitlab:2')).toMatchObject({
+    isThreadResolved: true,
+    threadId: 'discussion-2',
+  });
+});
+
 test('getVisibleReviewComments hides outdated comments unless they are shown', () => {
   const comments = [
     createReviewComment({ id: 'github:1', isOutdated: true }),

@@ -1,16 +1,33 @@
+import { MarkdownEditor, type MarkdownEditorHandle } from '@nkzw/mdx-editor';
+import useRelativeTime from '@nkzw/use-relative-time';
+import { ChatCircleIcon as ChatCircle } from '@phosphor-icons/react/ChatCircle';
 import type { FileTreeRowDecorationRenderer } from '@pierre/trees';
 import { FileTree, useFileTree } from '@pierre/trees/react';
+import { ExternalLink } from 'lucide-react';
 import {
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from 'react';
-import { isGeneratedWalkthroughPath } from '../shared/narrative-walkthrough-diff.cjs';
-import { ReviewCodeView, type ReviewDiffBlock } from './app/components/ReviewCodeView.tsx';
+import { Gravatar } from './app/components/Gravatar.tsx';
+import {
+  isPullRequestReviewActionDisabled,
+  PullRequestReviewButtons,
+} from './app/components/Panels.tsx';
+import { ReadOnlyMarkdownView } from './app/components/ReadOnlyMarkdownView.tsx';
+import {
+  PullRequestSourceDescription,
+  ReviewCodeView,
+  type ReviewDiffBlock,
+} from './app/components/ReviewCodeView.tsx';
 import { NarrativeSidebar } from './app/components/walkthrough/NarrativeSidebar.tsx';
 import {
   NarrativeWalkthroughView,
@@ -18,6 +35,8 @@ import {
 } from './app/components/walkthrough/NarrativeWalkthroughView.tsx';
 import { useNarrativeNavigation } from './app/components/walkthrough/useNarrativeNavigation.ts';
 import { createDefaultConfig } from './config/defaults.ts';
+import { matchesShortcut } from './config/keymap.ts';
+import type { CodiffKeymap } from './config/types.ts';
 import { getAgentLabel } from './lib/app-constants.ts';
 import type {
   CodeViewInstance,
@@ -36,15 +55,31 @@ import {
   isMarkdownFilePath,
 } from './lib/diff.ts';
 import { compactPath, fileTreeSort, fuzzyMatches, sortFiles, statusForTree } from './lib/files.ts';
-import { getReviewCommentsFromState } from './lib/review-comments.ts';
+import { isNativeInputTarget } from './lib/keyboard.ts';
+import { isGeneratedWalkthroughPath } from './lib/narrative-walkthrough-diff.js';
+import { getReviewCommentRangeProps, getReviewCommentsFromState } from './lib/review-comments.ts';
 import {
   updateReviewIdentityCollapsed,
   updateReviewIdentityViewed,
 } from './lib/review-identity.ts';
+import {
+  SIDEBAR_DEFAULT_WIDTH,
+  clampSidebarWidth,
+  readSidebarWidth,
+  writeSidebarWidth,
+} from './lib/sidebar-width.ts';
 import { getSourceLabel, getSourceKey } from './lib/source.ts';
 import type {
   ChangedFile,
+  CodiffPreferences,
+  GitIdentity,
+  NarrativeWalkthrough,
+  PullRequestGeneralComment,
+  PullRequestGeneralCommentThread,
   PullRequestExistingReviewComment,
+  PullRequestReviewComment,
+  PullRequestReviewEvent,
+  ReviewAuthor,
   RepositoryState,
   SharedWalkthroughSnapshot,
   WalkthroughCommitMessageResult,
@@ -52,10 +87,61 @@ import type {
 } from './types.ts';
 
 const emptyReviewComments: ReadonlyArray<ReviewComment> = [];
+const emptyGeneralCommentThreads: ReadonlyArray<PullRequestGeneralCommentThread> = [];
 const emptyPaths = new Set<string>();
 const emptyWalkthroughNotes = new Map();
 const walkthroughCodeViewBottomInset = 96;
 const CODE_FONT_SIZE_DEFAULT = 13;
+const defaultSharedPreferences: SharedWalkthroughSnapshot['preferences'] = {
+  codeFontFamily: 'Fira Code',
+  codeFontSize: CODE_FONT_SIZE_DEFAULT,
+  diffStyle: 'split',
+  showWhitespace: false,
+  theme: 'system',
+  wordWrap: false,
+};
+
+const readSharedSidebarWidth = () =>
+  typeof localStorage === 'undefined' ? SIDEBAR_DEFAULT_WIDTH : readSidebarWidth();
+
+const writeSharedSidebarWidth = (width: number) => {
+  if (typeof localStorage !== 'undefined') {
+    writeSidebarWidth(width);
+  }
+};
+
+export type MergeRequestWalkthroughStatus = 'failed' | 'generating' | 'idle' | 'ready';
+export type MergeRequestReviewMode = 'comments' | 'tree' | 'walkthrough';
+
+export type MergeRequestReviewAppProps = {
+  externalUrl: string;
+  gitIdentity?: GitIdentity | null;
+  initialMode?: MergeRequestReviewMode;
+  onClosePullRequest?: () => Promise<void> | void;
+  onGenerateWalkthrough: () => Promise<void> | void;
+  onHome: () => void;
+  onModeChange?: (mode: MergeRequestReviewMode) => void;
+  onResolveDiscussion?: (discussionId: string, resolved: boolean) => Promise<void>;
+  onSubmitComment: (comment: PullRequestReviewComment) => Promise<PullRequestExistingReviewComment>;
+  onSubmitGeneralComment: (body: string) => Promise<void>;
+  onSubmitReview: (
+    event: PullRequestReviewEvent,
+    comments: ReadonlyArray<PullRequestReviewComment>,
+  ) => Promise<void>;
+  onUpdateComment: (commentId: string, body: string) => Promise<void>;
+  onUpdateGeneralComment: (commentId: string, body: string) => Promise<void>;
+  preferences?: Partial<
+    Pick<
+      CodiffPreferences,
+      'codeFontFamily' | 'codeFontSize' | 'diffStyle' | 'showWhitespace' | 'theme' | 'wordWrap'
+    >
+  >;
+  state: RepositoryState;
+  title: string;
+  walkthrough: NarrativeWalkthrough | null;
+  walkthroughError?: string | null;
+  walkthroughStatus: MergeRequestWalkthroughStatus;
+};
 
 const getCodeFontLineHeight = (size: number) => Math.round((size * 20) / 13);
 
@@ -81,6 +167,525 @@ const getSnapshotReviewComments = (
 };
 
 const noop = () => {};
+
+const getAuthorDisplayName = (author: ReviewAuthor) => author.name || author.login;
+const getGeneralCommentElementId = (commentId: string) => `general-comment:${commentId}`;
+
+const scrollCommentIntoContainerView = (container: HTMLElement, element: HTMLElement) => {
+  const containerRect = container.getBoundingClientRect();
+  const elementRect = element.getBoundingClientRect();
+  const top =
+    container.scrollTop +
+    elementRect.top -
+    containerRect.top -
+    Math.max(0, (container.clientHeight - elementRect.height) / 2);
+
+  container.scrollTo({
+    behavior: 'smooth',
+    top,
+  });
+};
+const plainTextCommentPattern =
+  /<!--[\s\S]*?-->|<\/?(?:details|summary)\b[^>]*>|```[\s\S]*?```|`([^`]+)`|\[([^\]]+)\]\([^)]+\)|[*_~>#]+/g;
+
+const getCommentPreview = (body: string) => {
+  const preview = body
+    .replaceAll(
+      plainTextCommentPattern,
+      (_, inlineCode: string | undefined, linkText: string | undefined) =>
+        inlineCode ?? linkText ?? ' ',
+    )
+    .replaceAll(/\s+/g, ' ')
+    .trim();
+  return preview || 'Comment';
+};
+
+const formatSubmittedAt = (value: string) => {
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? new Date(time).toLocaleString() : value;
+};
+
+function RelativeSubmittedAtTime({
+  submittedAt,
+  timestamp,
+}: {
+  submittedAt: string;
+  timestamp: number;
+}) {
+  const relativeTime = useRelativeTime(timestamp);
+  return (
+    <time dateTime={submittedAt} title={formatSubmittedAt(submittedAt)}>
+      {relativeTime}
+    </time>
+  );
+}
+
+function SubmittedAtTime({ submittedAt }: { submittedAt: string }) {
+  const timestamp = Date.parse(submittedAt);
+  if (!Number.isFinite(timestamp)) {
+    return (
+      <time dateTime={submittedAt} title={submittedAt}>
+        {submittedAt}
+      </time>
+    );
+  }
+  return <RelativeSubmittedAtTime submittedAt={submittedAt} timestamp={timestamp} />;
+}
+
+export function ReadOnlyGeneralCommentCard({
+  className = '',
+  comment,
+  focused = false,
+}: {
+  className?: string;
+  comment: PullRequestGeneralComment;
+  focused?: boolean;
+}) {
+  const displayName = getAuthorDisplayName(comment.author);
+  const classes = ['review-comment', 'general-comment-card', focused ? 'focused' : '', className]
+    .filter(Boolean)
+    .join(' ');
+
+  return (
+    <article className={classes} id={getGeneralCommentElementId(comment.id)}>
+      <Gravatar fallback={displayName} size="medium" url={comment.author.avatarUrl} />
+      <div className="review-comment-body source-description-body">
+        <div className="review-comment-header read-only general-comment-header">
+          <strong title={`@${comment.author.login}`}>{displayName}</strong>
+          {comment.submittedAt ? <SubmittedAtTime submittedAt={comment.submittedAt} /> : null}
+        </div>
+        <ReadOnlyMarkdownView
+          ariaLabel={`Comment by ${displayName}`}
+          className="review-comment-markdown-editor general-comment-markdown-editor"
+          contentClassName="review-comment-input read-only general-comment-input"
+          fallback={<div className="review-comment-input read-only" />}
+          value={comment.body}
+          variant="embedded"
+        />
+      </div>
+    </article>
+  );
+}
+
+function GeneralCommentCard({
+  comment,
+  editDraft,
+  editError,
+  editing,
+  editSubmitting,
+  focused,
+  keymap,
+  onCancelEdit,
+  onChangeEditDraft,
+  onSaveEdit,
+  onStartEdit,
+}: {
+  comment: PullRequestGeneralComment;
+  editDraft: string;
+  editError: string | null;
+  editing: boolean;
+  editSubmitting: boolean;
+  focused: boolean;
+  keymap: CodiffKeymap;
+  onCancelEdit: () => void;
+  onChangeEditDraft: (draft: string) => void;
+  onSaveEdit: () => void;
+  onStartEdit: (comment: PullRequestGeneralComment) => void;
+}) {
+  const displayName = getAuthorDisplayName(comment.author);
+  const canSaveEdit = editing && !editSubmitting && Boolean(editDraft.trim());
+  const editorRef = useRef<MarkdownEditorHandle | null>(null);
+  const handleEditKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (!matchesShortcut(event, keymap, 'submitComment') || !canSaveEdit) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      onSaveEdit();
+    },
+    [canSaveEdit, keymap, onSaveEdit],
+  );
+  const setEditorRef = useCallback(
+    (editor: MarkdownEditorHandle | null) => {
+      editorRef.current = editor;
+      if (editor && editing) {
+        requestAnimationFrame(() => {
+          editor.focus({ defaultSelection: 'rootEnd', preventScroll: true });
+        });
+      }
+    },
+    [editing],
+  );
+
+  useEffect(() => {
+    if (!editing) {
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      editorRef.current?.focus({ defaultSelection: 'rootEnd', preventScroll: true });
+    });
+  }, [editing]);
+
+  return (
+    <article
+      className={`review-comment general-comment-card${focused ? ' focused' : ''}`}
+      id={getGeneralCommentElementId(comment.id)}
+    >
+      <Gravatar fallback={displayName} size="medium" url={comment.author.avatarUrl} />
+      <div className="review-comment-body source-description-body">
+        <div
+          className={`review-comment-header read-only general-comment-header${
+            comment.canEdit || editing ? ' with-comment-action' : ''
+          }`}
+        >
+          <strong title={`@${comment.author.login}`}>{displayName}</strong>
+          {comment.submittedAt ? <SubmittedAtTime submittedAt={comment.submittedAt} /> : null}
+          {editing ? (
+            <span className="general-comment-edit-actions">
+              <button
+                className="review-comment-action"
+                disabled={editSubmitting}
+                onClick={onCancelEdit}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="review-comment-action"
+                disabled={!canSaveEdit}
+                onClick={onSaveEdit}
+                type="button"
+              >
+                {editSubmitting ? 'Saving' : 'Save'}
+              </button>
+            </span>
+          ) : comment.canEdit ? (
+            <button
+              className="review-comment-action"
+              onClick={() => onStartEdit(comment)}
+              type="button"
+            >
+              Edit
+            </button>
+          ) : null}
+        </div>
+        {editing ? (
+          <>
+            <Suspense fallback={<div className="review-comment-input" />}>
+              <MarkdownEditor
+                ariaLabel={`Edit comment by ${displayName}`}
+                className="review-comment-markdown-editor general-comment-markdown-editor"
+                colorScheme="inherit"
+                contentClassName="review-comment-input general-comment-input"
+                density="compact"
+                onChange={onChangeEditDraft}
+                onKeyDown={handleEditKeyDown}
+                readOnly={editSubmitting}
+                ref={setEditorRef}
+                spellCheck
+                value={editDraft}
+                variant="embedded"
+              />
+            </Suspense>
+            {editError ? <div className="review-comment-error">{editError}</div> : null}
+          </>
+        ) : (
+          <ReadOnlyMarkdownView
+            ariaLabel={`Comment by ${displayName}`}
+            className="review-comment-markdown-editor general-comment-markdown-editor"
+            contentClassName="review-comment-input read-only general-comment-input"
+            fallback={<div className="review-comment-input read-only" />}
+            value={comment.body}
+            variant="embedded"
+          />
+        )}
+      </div>
+    </article>
+  );
+}
+
+function GeneralCommentThreadCard({
+  editDraft,
+  editError,
+  editingCommentId,
+  editSubmitting,
+  focusedCommentId,
+  keymap,
+  onCancelEdit,
+  onChangeEditDraft,
+  onSaveEdit,
+  onStartEdit,
+  thread,
+}: {
+  editDraft: string;
+  editError: string | null;
+  editingCommentId: string | null;
+  editSubmitting: boolean;
+  focusedCommentId: string | null;
+  keymap: CodiffKeymap;
+  onCancelEdit: () => void;
+  onChangeEditDraft: (draft: string) => void;
+  onSaveEdit: () => void;
+  onStartEdit: (comment: PullRequestGeneralComment) => void;
+  thread: PullRequestGeneralCommentThread;
+}) {
+  return (
+    <section className="general-comment-thread">
+      {thread.comments.map((comment) => (
+        <GeneralCommentCard
+          comment={comment}
+          editDraft={editDraft}
+          editError={editingCommentId === comment.id ? editError : null}
+          editing={editingCommentId === comment.id}
+          editSubmitting={editSubmitting && editingCommentId === comment.id}
+          focused={comment.id === focusedCommentId}
+          key={comment.id}
+          keymap={keymap}
+          onCancelEdit={onCancelEdit}
+          onChangeEditDraft={onChangeEditDraft}
+          onSaveEdit={onSaveEdit}
+          onStartEdit={onStartEdit}
+        />
+      ))}
+    </section>
+  );
+}
+
+function SidebarGeneralCommentList({
+  comments,
+  focusedCommentId,
+  onActivateComment,
+}: {
+  comments: ReadonlyArray<PullRequestGeneralComment>;
+  focusedCommentId: string | null;
+  onActivateComment: (commentId: string) => void;
+}) {
+  if (comments.length === 0) {
+    return (
+      <div className="sidebar-comments-empty">
+        <strong>No comments yet</strong>
+        <span>Start the discussion in the main panel.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="history-list sidebar-comment-list">
+      {comments.map((comment, index) => {
+        const displayName = getAuthorDisplayName(comment.author);
+        const selected = comment.id === focusedCommentId;
+        return (
+          <button
+            aria-current={selected ? 'true' : undefined}
+            className={`history-entry sidebar-comment-entry with-metadata${selected ? ' selected' : ''}`}
+            key={comment.id}
+            onClick={() => onActivateComment(comment.id)}
+            title={comment.body}
+            type="button"
+          >
+            <span className="history-entry-ref">#{index + 1}</span>
+            <span className="history-entry-subject">{getCommentPreview(comment.body)}</span>
+            <span className="history-entry-meta">
+              <span className="history-entry-author">
+                <Gravatar fallback={displayName} size="small" url={comment.author.avatarUrl} />
+                <span>{displayName}</span>
+              </span>
+              {comment.submittedAt ? <SubmittedAtTime submittedAt={comment.submittedAt} /> : null}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function GeneralCommentComposer({
+  disabled,
+  draft,
+  error,
+  gitIdentity,
+  keymap,
+  onChangeDraft,
+  onSubmit,
+  submitting,
+}: {
+  disabled: boolean;
+  draft: string;
+  error: string | null;
+  gitIdentity: GitIdentity | null;
+  keymap: CodiffKeymap;
+  onChangeDraft: (draft: string) => void;
+  onSubmit: () => void;
+  submitting: boolean;
+}) {
+  const canSubmit = !disabled && !submitting && Boolean(draft.trim());
+  const handleKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (!matchesShortcut(event, keymap, 'submitComment') || !canSubmit) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      onSubmit();
+    },
+    [canSubmit, keymap, onSubmit],
+  );
+  return (
+    <section className="review-comment-thread general-comment-composer">
+      <div className="review-comment">
+        <Gravatar
+          fallback={gitIdentity?.name || gitIdentity?.email || 'You'}
+          size="medium"
+          url={gitIdentity?.gravatarUrl}
+        />
+        <div className="review-comment-body">
+          <div className="review-comment-header general-comment-header general-comment-composer-header">
+            <strong>{gitIdentity?.name || gitIdentity?.email || 'You'}</strong>
+            <button
+              className="review-comment-action"
+              disabled={!canSubmit}
+              onClick={onSubmit}
+              title={
+                canSubmit ? 'Submit merge request comment' : 'Write a comment before commenting'
+              }
+              type="button"
+            >
+              <ChatCircle aria-hidden className="review-comment-action-icon" size={14} />
+              {submitting ? 'Sending' : 'Comment'}
+            </button>
+          </div>
+          <Suspense fallback={<div className="review-comment-input" />}>
+            <MarkdownEditor
+              ariaLabel="Add merge request comment"
+              className="review-comment-markdown-editor"
+              colorScheme="inherit"
+              contentClassName="review-comment-input"
+              density="compact"
+              onChange={onChangeDraft}
+              onKeyDown={handleKeyDown}
+              placeholder="Write a comment…"
+              readOnly={disabled || submitting}
+              spellCheck
+              value={draft}
+              variant="embedded"
+            />
+          </Suspense>
+          {error ? <div className="review-comment-error">{error}</div> : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MergeRequestCommentsView({
+  draft,
+  editDraft,
+  editError,
+  editingCommentId,
+  editSubmitting,
+  error,
+  focusedCommentId,
+  focusedCommentRequest,
+  gitIdentity,
+  interactive,
+  keymap,
+  onCancelEdit,
+  onChangeDraft,
+  onChangeEditDraft,
+  onSaveEdit,
+  onStartEdit,
+  onSubmit,
+  sourceDescription,
+  submitting,
+  threads,
+}: {
+  draft: string;
+  editDraft: string;
+  editError: string | null;
+  editingCommentId: string | null;
+  editSubmitting: boolean;
+  error: string | null;
+  focusedCommentId: string | null;
+  focusedCommentRequest: number;
+  gitIdentity: GitIdentity | null;
+  interactive: boolean;
+  keymap: CodiffKeymap;
+  onCancelEdit: () => void;
+  onChangeDraft: (draft: string) => void;
+  onChangeEditDraft: (draft: string) => void;
+  onSaveEdit: () => void;
+  onStartEdit: (comment: PullRequestGeneralComment) => void;
+  onSubmit: () => void;
+  sourceDescription?: ReactNode;
+  submitting: boolean;
+  threads: ReadonlyArray<PullRequestGeneralCommentThread>;
+}) {
+  const commentsRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (focusedCommentId == null) {
+      return;
+    }
+
+    const container = commentsRef.current;
+    const element = document.getElementById(getGeneralCommentElementId(focusedCommentId));
+    if (!container || !element) {
+      return;
+    }
+
+    scrollCommentIntoContainerView(container, element);
+  }, [focusedCommentId, focusedCommentRequest]);
+
+  return (
+    <div className="merge-request-comments-view" ref={commentsRef}>
+      {sourceDescription ? (
+        <div className="merge-request-comments-source-description">{sourceDescription}</div>
+      ) : null}
+      {threads.length > 0 ? (
+        <div className="general-comment-list">
+          {threads.map((thread) => (
+            <GeneralCommentThreadCard
+              editDraft={editDraft}
+              editError={editError}
+              editingCommentId={editingCommentId}
+              editSubmitting={editSubmitting}
+              focusedCommentId={focusedCommentId}
+              key={thread.id}
+              keymap={keymap}
+              onCancelEdit={onCancelEdit}
+              onChangeEditDraft={onChangeEditDraft}
+              onSaveEdit={onSaveEdit}
+              onStartEdit={onStartEdit}
+              thread={thread}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state">
+          <div className="empty-panel squircle">
+            <strong>No comments yet</strong>
+            <span>Add a merge request comment to start the discussion.</span>
+          </div>
+        </div>
+      )}
+      {interactive ? (
+        <GeneralCommentComposer
+          disabled={!interactive}
+          draft={draft}
+          error={error}
+          gitIdentity={gitIdentity}
+          keymap={keymap}
+          onChangeDraft={onChangeDraft}
+          onSubmit={onSubmit}
+          submitting={submitting}
+        />
+      ) : null}
+    </div>
+  );
+}
 
 const disabledCommit = async (): Promise<WalkthroughCommitResult> => ({
   reason: 'Shared walkthroughs are read-only.',
@@ -206,7 +811,42 @@ function SharedFileTree({
   );
 }
 
-export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthroughSnapshot }) {
+type ReviewSurfaceProps = {
+  externalUrl?: string;
+  gitIdentity?: GitIdentity | null;
+  initialMode?: MergeRequestReviewMode;
+  interactive?: {
+    onClosePullRequest?: () => Promise<void> | void;
+    onGenerateWalkthrough: () => Promise<void> | void;
+    onHome: () => void;
+    onResolveDiscussion?: (discussionId: string, resolved: boolean) => Promise<void>;
+    onSubmitComment: (
+      comment: PullRequestReviewComment,
+    ) => Promise<PullRequestExistingReviewComment>;
+    onSubmitGeneralComment: (body: string) => Promise<void>;
+    onSubmitReview: (
+      event: PullRequestReviewEvent,
+      comments: ReadonlyArray<PullRequestReviewComment>,
+    ) => Promise<void>;
+    onUpdateComment: (commentId: string, body: string) => Promise<void>;
+    onUpdateGeneralComment: (commentId: string, body: string) => Promise<void>;
+    walkthroughError?: string | null;
+    walkthroughStatus: MergeRequestWalkthroughStatus;
+  };
+  onModeChange?: (mode: MergeRequestReviewMode) => void;
+  snapshot: SharedWalkthroughSnapshot;
+  title?: string;
+};
+
+function ReviewSurface({
+  externalUrl,
+  gitIdentity = null,
+  initialMode,
+  interactive,
+  onModeChange,
+  snapshot,
+  title,
+}: ReviewSurfaceProps) {
   const sharedWalkthrough = useMemo(
     () => ({
       ...snapshot.walkthrough,
@@ -219,16 +859,74 @@ export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthrough
     snapshot.files,
     `${snapshot.repository.root}:${getSourceKey(snapshot.repository.source)}`,
   );
+  const keymap = useMemo(() => createDefaultConfig().keymap, []);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [fileSearchQuery, setFileSearchQuery] = useState('');
   const [itemVersionByKey, setItemVersionByKey] = useState<Record<string, number>>({});
   const [selectedPath, setSelectedPath] = useState<string | null>(
     () => snapshot.files[0]?.path ?? null,
   );
-  const [sidebarMode, setSidebarMode] = useState<'tree' | 'walkthrough'>('walkthrough');
+  const [sidebarWidth, setSidebarWidth] = useState(readSharedSidebarWidth);
+  const [uncontrolledSidebarMode, setUncontrolledSidebarMode] = useState<MergeRequestReviewMode>(
+    () => initialMode ?? (interactive ? 'tree' : 'walkthrough'),
+  );
+  const isSidebarModeControlled = Boolean(initialMode && onModeChange);
+  const sidebarMode = isSidebarModeControlled ? initialMode : uncontrolledSidebarMode;
   const [treeScrollTarget, setTreeScrollTarget] = useState<ReviewScrollTarget | null>(null);
   const [viewed, setViewed] = useState<Record<string, string>>({});
-  const reviewComments = useMemo(() => getSnapshotReviewComments(snapshot), [snapshot]);
+  const snapshotReviewComments = useMemo(() => getSnapshotReviewComments(snapshot), [snapshot]);
+  const [editedReviewCommentBodies, setEditedReviewCommentBodies] = useState<
+    Readonly<Record<string, string>>
+  >({});
+  const visibleSnapshotReviewComments = useMemo(
+    () =>
+      snapshotReviewComments.map((comment) =>
+        editedReviewCommentBodies[comment.id] != null &&
+        editedReviewCommentBodies[comment.id] !== comment.body
+          ? { ...comment, body: editedReviewCommentBodies[comment.id] }
+          : comment,
+      ),
+    [editedReviewCommentBodies, snapshotReviewComments],
+  );
+  const [localReviewComments, setLocalReviewComments] =
+    useState<ReadonlyArray<ReviewComment>>(emptyReviewComments);
+  const reviewComments = useMemo(
+    () => [...visibleSnapshotReviewComments, ...localReviewComments],
+    [localReviewComments, visibleSnapshotReviewComments],
+  );
+  const reviewCommentsRef = useRef(reviewComments);
+  const generalCommentThreads = snapshot.repository.generalComments ?? emptyGeneralCommentThreads;
+  const generalComments = useMemo(
+    () =>
+      (snapshot.repository.generalComments ?? emptyGeneralCommentThreads).flatMap(
+        (thread) => thread.comments,
+      ),
+    [snapshot.repository.generalComments],
+  );
+  const generalCommentCount = generalComments.length;
+  const [generalCommentDraft, setGeneralCommentDraft] = useState('');
+  const [generalCommentEditDraft, setGeneralCommentEditDraft] = useState('');
+  const [editingGeneralCommentId, setEditingGeneralCommentId] = useState<string | null>(null);
+  const [generalCommentEditError, setGeneralCommentEditError] = useState<string | null>(null);
+  const [generalCommentEditSubmitting, setGeneralCommentEditSubmitting] = useState(false);
+  const [generalCommentError, setGeneralCommentError] = useState<string | null>(null);
+  const [focusedGeneralCommentId, setFocusedGeneralCommentId] = useState<string | null>(null);
+  const [generalCommentScrollRequest, setGeneralCommentScrollRequest] = useState(0);
+  const [generalCommentSubmitting, setGeneralCommentSubmitting] = useState(false);
+  const [focusCommentId, setFocusCommentId] = useState<string | null>(null);
+  const [focusCommentRequest, setFocusCommentRequest] = useState(0);
+  const [pullRequestReviewSubmitting, setPullRequestReviewSubmitting] =
+    useState<PullRequestReviewEvent | null>(null);
+  const [pullRequestCloseSubmitting, setPullRequestCloseSubmitting] = useState(false);
+  const [walkthroughRequestPending, setWalkthroughRequestPending] = useState(false);
+  const walkthroughRequestPendingRef = useRef(false);
+  const [walkthroughRequestId, setWalkthroughRequestId] = useState(0);
+  const interactiveRef = useRef(interactive);
+
+  useEffect(() => {
+    reviewCommentsRef.current = reviewComments;
+  }, [reviewComments]);
+
   const visibleFiles = useMemo(
     () =>
       sortFiles(snapshot.files).filter(
@@ -287,6 +985,373 @@ export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthrough
       ...current,
       [key]: (current[key] ?? 0) + 1,
     }));
+  }, []);
+  const changeSidebarMode = useCallback(
+    (mode: MergeRequestReviewMode) => {
+      setUncontrolledSidebarMode(mode);
+      onModeChange?.(mode);
+    },
+    [onModeChange],
+  );
+
+  const createComment = useCallback(
+    (comment: Omit<ReviewComment, 'body' | 'id'>) => {
+      if (!interactive) {
+        return;
+      }
+
+      const id = crypto.randomUUID();
+      setFocusCommentId(id);
+      setFocusCommentRequest((current) => current + 1);
+      setLocalReviewComments((current) => [...current, { ...comment, body: '', id }]);
+      bumpItemVersion(comment.filePath);
+    },
+    [bumpItemVersion, interactive],
+  );
+  const activateGeneralComment = useCallback(
+    (commentId: string) => {
+      changeSidebarMode('comments');
+      setFocusedGeneralCommentId(commentId);
+      setGeneralCommentScrollRequest((current) => current + 1);
+    },
+    [changeSidebarMode],
+  );
+  const navigateGeneralComment = useCallback(
+    (direction: 1 | -1) => {
+      if (generalComments.length === 0) {
+        return;
+      }
+
+      const currentIndex = focusedGeneralCommentId
+        ? generalComments.findIndex((comment) => comment.id === focusedGeneralCommentId)
+        : -1;
+      const nextIndex =
+        currentIndex === -1
+          ? direction > 0
+            ? 0
+            : generalComments.length - 1
+          : Math.min(generalComments.length - 1, Math.max(0, currentIndex + direction));
+      const nextComment = generalComments[nextIndex];
+
+      if (nextComment) {
+        activateGeneralComment(nextComment.id);
+      }
+    },
+    [activateGeneralComment, focusedGeneralCommentId, generalComments],
+  );
+  const updateComment = useCallback((commentId: string, body: string) => {
+    setLocalReviewComments((current) =>
+      current.map((comment) =>
+        comment.id === commentId && !comment.isReadOnly ? { ...comment, body } : comment,
+      ),
+    );
+  }, []);
+  const updateExistingReviewComment = useCallback(
+    async (commentId: string, body: string) => {
+      if (!interactive) {
+        return;
+      }
+      const comment = reviewCommentsRef.current.find((candidate) => candidate.id === commentId);
+      await interactive.onUpdateComment(commentId, body);
+      setEditedReviewCommentBodies((current) => ({ ...current, [commentId]: body }));
+      if (comment) {
+        bumpItemVersion(comment.filePath);
+      }
+    },
+    [bumpItemVersion, interactive],
+  );
+  const deleteComment = useCallback(
+    (commentId: string) => {
+      const comment = reviewCommentsRef.current.find((candidate) => candidate.id === commentId);
+      setFocusCommentId((current) => (current === commentId ? null : current));
+      setLocalReviewComments((current) =>
+        current.filter((candidate) => candidate.id !== commentId),
+      );
+      if (comment) {
+        bumpItemVersion(comment.filePath);
+      }
+    },
+    [bumpItemVersion],
+  );
+  const submitComment = useCallback(
+    (commentId: string) => {
+      const comment = reviewCommentsRef.current.find((candidate) => candidate.id === commentId);
+      if (
+        !interactive ||
+        !comment ||
+        comment.isReadOnly ||
+        !comment.body.trim() ||
+        comment.remoteSubmit?.status === 'submitting'
+      ) {
+        return;
+      }
+
+      setLocalReviewComments((current) =>
+        current.map((candidate) =>
+          candidate.id === commentId
+            ? { ...candidate, remoteSubmit: { status: 'submitting' } }
+            : candidate,
+        ),
+      );
+      void interactive
+        .onSubmitComment({
+          body: comment.body,
+          filePath: comment.filePath,
+          lineNumber: comment.lineNumber,
+          side: comment.side,
+          ...getReviewCommentRangeProps(comment),
+          ...(comment.threadId ? { threadId: comment.threadId } : {}),
+        })
+        .then(() => {
+          setFocusCommentId((current) => (current === commentId ? null : current));
+          setLocalReviewComments((current) =>
+            current.filter((candidate) => candidate.id !== commentId),
+          );
+          bumpItemVersion(comment.filePath);
+        })
+        .catch((error: unknown) => {
+          setLocalReviewComments((current) =>
+            current.map((candidate) =>
+              candidate.id === commentId
+                ? {
+                    ...candidate,
+                    remoteSubmit: {
+                      error: error instanceof Error ? error.message : String(error),
+                      status: 'error',
+                    },
+                  }
+                : candidate,
+            ),
+          );
+          bumpItemVersion(comment.filePath);
+        });
+    },
+    [bumpItemVersion, interactive],
+  );
+  const submitReview = useCallback(
+    (event: PullRequestReviewEvent) => {
+      const source = snapshot.repository.source;
+      if (
+        !interactive ||
+        pullRequestReviewSubmitting ||
+        (source.type === 'pull-request' &&
+          isPullRequestReviewActionDisabled(source.reviewStatus, event))
+      ) {
+        return;
+      }
+
+      const pendingComments = reviewCommentsRef.current.filter(
+        (comment) => !comment.isReadOnly && !comment.threadId && comment.body.trim(),
+      );
+      const pendingIds = new Set(pendingComments.map((comment) => comment.id));
+      setPullRequestReviewSubmitting(event);
+      void interactive
+        .onSubmitReview(
+          event,
+          pendingComments.map((comment) => ({
+            body: comment.body,
+            filePath: comment.filePath,
+            lineNumber: comment.lineNumber,
+            side: comment.side,
+            ...getReviewCommentRangeProps(comment),
+          })),
+        )
+        .then(() => {
+          setLocalReviewComments((current) =>
+            current.filter((comment) => !pendingIds.has(comment.id)),
+          );
+        })
+        .catch((error: unknown) => {
+          window.alert(error instanceof Error ? error.message : String(error));
+        })
+        .finally(() => setPullRequestReviewSubmitting(null));
+    },
+    [interactive, pullRequestReviewSubmitting, snapshot.repository.source],
+  );
+  const closePullRequest = useCallback(() => {
+    const source = snapshot.repository.source;
+    if (
+      !interactive?.onClosePullRequest ||
+      pullRequestCloseSubmitting ||
+      source.type !== 'pull-request' ||
+      source.reviewStatus?.close?.disabled === true ||
+      !source.reviewStatus?.close
+    ) {
+      return;
+    }
+
+    setPullRequestCloseSubmitting(true);
+    void Promise.resolve(interactive.onClosePullRequest())
+      .catch((error: unknown) => {
+        window.alert(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setPullRequestCloseSubmitting(false));
+  }, [interactive, pullRequestCloseSubmitting, snapshot.repository.source]);
+  useEffect(() => {
+    interactiveRef.current = interactive;
+  }, [interactive]);
+
+  useEffect(() => {
+    if (!walkthroughRequestPending || walkthroughRequestId === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    void Promise.resolve(interactiveRef.current?.onGenerateWalkthrough())
+      .catch(() => {})
+      .finally(() => {
+        if (cancelled) {
+          return;
+        }
+        walkthroughRequestPendingRef.current = false;
+        setWalkthroughRequestPending(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [walkthroughRequestId, walkthroughRequestPending]);
+
+  const startWalkthroughGeneration = useCallback(() => {
+    if (
+      !interactive ||
+      interactive.walkthroughStatus === 'generating' ||
+      walkthroughRequestPendingRef.current
+    ) {
+      return;
+    }
+
+    walkthroughRequestPendingRef.current = true;
+    setWalkthroughRequestPending(true);
+    setWalkthroughRequestId((current) => current + 1);
+  }, [interactive]);
+  useEffect(() => {
+    if (sidebarMode === 'walkthrough' && interactive?.walkthroughStatus === 'idle') {
+      startWalkthroughGeneration();
+    }
+  }, [interactive?.walkthroughStatus, sidebarMode, startWalkthroughGeneration]);
+  useEffect(() => {
+    if (sidebarMode !== 'comments' || generalComments.length === 0) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        isNativeInputTarget(event.target)
+      ) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      if (key !== 'j' && key !== 'k') {
+        return;
+      }
+
+      event.preventDefault();
+      navigateGeneralComment(key === 'j' ? 1 : -1);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [generalComments.length, navigateGeneralComment, sidebarMode]);
+  const submitGeneralComment = useCallback(() => {
+    const body = generalCommentDraft.trim();
+    if (!interactive || !body || generalCommentSubmitting) {
+      return;
+    }
+
+    setGeneralCommentError(null);
+    setGeneralCommentSubmitting(true);
+    void Promise.resolve(interactive.onSubmitGeneralComment(body))
+      .then(() => setGeneralCommentDraft(''))
+      .catch((error: unknown) => {
+        setGeneralCommentError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setGeneralCommentSubmitting(false));
+  }, [generalCommentDraft, generalCommentSubmitting, interactive]);
+  const startEditGeneralComment = useCallback((comment: PullRequestGeneralComment) => {
+    if (!comment.canEdit) {
+      return;
+    }
+
+    setEditingGeneralCommentId(comment.id);
+    setGeneralCommentEditDraft(comment.body);
+    setGeneralCommentEditError(null);
+  }, []);
+  const cancelEditGeneralComment = useCallback(() => {
+    if (generalCommentEditSubmitting) {
+      return;
+    }
+
+    setEditingGeneralCommentId(null);
+    setGeneralCommentEditDraft('');
+    setGeneralCommentEditError(null);
+  }, [generalCommentEditSubmitting]);
+  const saveGeneralCommentEdit = useCallback(() => {
+    const commentId = editingGeneralCommentId;
+    const body = generalCommentEditDraft.trim();
+    if (!interactive || !commentId || !body || generalCommentEditSubmitting) {
+      return;
+    }
+
+    setGeneralCommentEditError(null);
+    setGeneralCommentEditSubmitting(true);
+    void Promise.resolve(interactive.onUpdateGeneralComment(commentId, body))
+      .then(() => {
+        setEditingGeneralCommentId(null);
+        setGeneralCommentEditDraft('');
+      })
+      .catch((error: unknown) => {
+        setGeneralCommentEditError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setGeneralCommentEditSubmitting(false));
+  }, [editingGeneralCommentId, generalCommentEditDraft, generalCommentEditSubmitting, interactive]);
+  const resizeSidebar = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const handle = event.currentTarget;
+    const shell = handle.parentElement;
+    if (!shell) {
+      return;
+    }
+
+    const shellLeft = shell.getBoundingClientRect().left;
+    handle.setPointerCapture(event.pointerId);
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+
+    const cleanup = () => {
+      handle.releasePointerCapture(event.pointerId);
+      handle.removeEventListener('pointermove', handleMove);
+      handle.removeEventListener('pointerup', handleEnd);
+      handle.removeEventListener('pointercancel', handleEnd);
+      handle.classList.remove('dragging');
+      document.body.style.cursor = '';
+    };
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      setSidebarWidth(clampSidebarWidth(moveEvent.clientX - shellLeft));
+    };
+
+    const handleEnd = () => {
+      cleanup();
+      setSidebarWidth((width) => {
+        writeSharedSidebarWidth(width);
+        return width;
+      });
+    };
+
+    handle.addEventListener('pointermove', handleMove);
+    handle.addEventListener('pointerup', handleEnd);
+    handle.addEventListener('pointercancel', handleEnd);
   }, []);
 
   const toggleCollapsed = useCallback(
@@ -364,72 +1429,135 @@ export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthrough
     diffLineHeight,
     diffStyle: snapshot.preferences.diffStyle,
     disableWorkerPool: true,
-    focusCommentId: null,
-    focusCommentRequest: 0,
-    gitIdentity: null,
+    focusCommentId,
+    focusCommentRequest,
+    gitIdentity,
     hunkNavigation: null,
     initialMarkdownPreviewSectionIds,
     isPullRequest: snapshot.repository.source.type === 'pull-request',
-    isReadOnly: true,
+    isReadOnly: !interactive,
     itemVersionByKey,
-    keymap: createDefaultConfig().keymap,
+    keymap,
     loadingSectionIds: new Set<string>(),
-    onAskCodex: noop,
-    onCreateComment: noop,
-    onDeleteComment: noop,
+    onCreateComment: createComment,
+    onDeleteComment: deleteComment,
     onLoadSection: noop,
-    onOpenFile: noop,
+    onResolveThread: interactive?.onResolveDiscussion ?? noop,
+    onSaveCommentEdit: updateExistingReviewComment,
     onSelectPathFromScroll: noop,
-    onSubmitComment: noop,
+    onSubmitComment: submitComment,
     onToggleCollapsed: toggleCollapsed,
     onToggleViewed: toggleViewed,
-    onUpdateComment: noop,
+    onUpdateComment: updateComment,
     searchQuery: '',
     showWhitespace: snapshot.preferences.showWhitespace,
     source: snapshot.repository.source,
     viewed,
     wordWrap: snapshot.preferences.wordWrap,
   };
+  const source = snapshot.repository.source;
+  const sourceDescriptionActions =
+    interactive && source.type === 'pull-request' ? (
+      <PullRequestReviewButtons
+        disabled={pullRequestReviewSubmitting != null || pullRequestCloseSubmitting}
+        onClosePullRequest={closePullRequest}
+        onSubmitReview={submitReview}
+        reviewStatus={source.reviewStatus}
+      />
+    ) : undefined;
+  const sourceDescription =
+    source.type === 'pull-request' ? (
+      <PullRequestSourceDescription actions={sourceDescriptionActions} source={source} />
+    ) : null;
 
   const renderWalkthroughDiffBlocks = (
     blocks: ReadonlyArray<ReviewDiffBlock>,
     blockScrollTarget: WalkthroughBlockScrollTarget | null,
     onActiveBlockChange: (blockId: string) => void,
-  ) => (
-    <div className="wt-stop wt-diff-surface">
-      <ReviewCodeView
-        {...commonReviewProps}
-        allowViewedToggle
-        blocks={blocks}
-        bottomInset={walkthroughCodeViewBottomInset}
-        files={[]}
-        forceExpandedPaths={new Set()}
-        onActiveBlockChange={onActiveBlockChange}
-        scrollTarget={blockScrollTarget}
-        selectedPath={null}
-        walkthroughNotes={emptyWalkthroughNotes}
-      />
-    </div>
-  );
+  ) => {
+    return (
+      <div className="wt-stop wt-diff-surface">
+        <ReviewCodeView
+          {...commonReviewProps}
+          allowViewedToggle
+          blocks={blocks}
+          bottomInset={walkthroughCodeViewBottomInset}
+          files={[]}
+          forceExpandedPaths={new Set()}
+          onActiveBlockChange={onActiveBlockChange}
+          scrollTarget={blockScrollTarget}
+          selectedPath={null}
+          showSourceDescription
+          sourceDescriptionActions={sourceDescriptionActions}
+          walkthroughNotes={emptyWalkthroughNotes}
+        />
+      </div>
+    );
+  };
 
   const sourceLabel =
     snapshot.repository.source.type === 'working-tree'
       ? ''
       : ` · ${getSourceLabel(snapshot.repository.source)}`;
   const rootLabel = `${compactPath(snapshot.repository.root)}${snapshot.branch ? ` (${snapshot.branch})` : ''}`;
+  const walkthroughStatus =
+    walkthroughRequestPending && interactive?.walkthroughStatus !== 'ready'
+      ? 'generating'
+      : interactive?.walkthroughStatus;
+  const walkthroughReady = !interactive || walkthroughStatus === 'ready';
+  const walkthroughFailed = walkthroughStatus === 'failed';
+  const walkthroughStatusTitle = walkthroughFailed
+    ? 'Walkthrough unavailable'
+    : 'Generating walkthrough…';
+  const walkthroughStatusDescription = walkthroughFailed
+    ? (interactive?.walkthroughError ?? 'Fix the generation issue, then try again.')
+    : null;
+  const requestWalkthrough = () => {
+    startWalkthroughGeneration();
+  };
 
   return (
     <div
-      className="app-shell share-shell"
-      style={{ gridTemplateColumns: '292px 0 minmax(0, 1fr)' }}
+      className={`app-shell share-shell${interactive ? ' merge-request-shell' : ''}`}
+      style={{ gridTemplateColumns: `${sidebarWidth}px 0 minmax(0, 1fr)` }}
     >
       <aside className="squircle sidebar">
         <div className="sidebar-header">
           <div className="sidebar-path-row">
-            <div className="sidebar-path" title={snapshot.repository.root}>
+            {interactive ? (
+              <button
+                aria-label="Back to Codiff"
+                className="merge-request-nav-button merge-request-home-button"
+                onClick={interactive.onHome}
+                title="Back to Codiff"
+                type="button"
+              >
+                <img
+                  alt=""
+                  aria-hidden
+                  className="merge-request-nav-icon"
+                  draggable={false}
+                  src="/icon.png"
+                />
+              </button>
+            ) : null}
+            <div className="sidebar-path" title={title ?? snapshot.repository.root}>
+              {title ? `${title} · ` : null}
               {rootLabel}
               {sourceLabel}
             </div>
+            {externalUrl ? (
+              <a
+                aria-label="Open merge request in GitLab"
+                className="merge-request-nav-button"
+                href={externalUrl}
+                rel="noreferrer"
+                target="_blank"
+                title="Open merge request in GitLab"
+              >
+                <ExternalLink aria-hidden size={16} />
+              </a>
+            ) : null}
           </div>
         </div>
         <div className="sidebar-search-row">
@@ -446,7 +1574,7 @@ export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthrough
         <div aria-label="Review order" className="sidebar-mode-toggle" role="tablist">
           <button
             aria-selected={sidebarMode === 'tree'}
-            onClick={() => setSidebarMode('tree')}
+            onClick={() => changeSidebarMode('tree')}
             role="tab"
             type="button"
           >
@@ -454,12 +1582,35 @@ export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthrough
           </button>
           <button
             aria-selected={sidebarMode === 'walkthrough'}
-            onClick={() => setSidebarMode('walkthrough')}
+            onClick={() => changeSidebarMode('walkthrough')}
             role="tab"
             type="button"
           >
             Walkthrough
           </button>
+          {interactive || generalCommentCount > 0 ? (
+            <button
+              aria-label={
+                generalCommentCount > 0 ? `Comments (${generalCommentCount})` : 'Comments'
+              }
+              aria-selected={sidebarMode === 'comments'}
+              onClick={() => changeSidebarMode('comments')}
+              role="tab"
+              title={
+                generalCommentCount > 0
+                  ? `${generalCommentCount} ${generalCommentCount === 1 ? 'comment' : 'comments'}`
+                  : 'Comments'
+              }
+              type="button"
+            >
+              <span>Comments</span>
+              {generalCommentCount > 0 ? (
+                <span aria-hidden className="sidebar-tab-count">
+                  {generalCommentCount}
+                </span>
+              ) : null}
+            </button>
+          ) : null}
         </div>
         {sidebarMode === 'tree' ? (
           <SharedFileTree
@@ -468,7 +1619,13 @@ export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthrough
             selectedPath={visibleSelectedPath}
             showWhitespace={snapshot.preferences.showWhitespace}
           />
-        ) : (
+        ) : sidebarMode === 'comments' ? (
+          <SidebarGeneralCommentList
+            comments={generalComments}
+            focusedCommentId={focusedGeneralCommentId}
+            onActivateComment={activateGeneralComment}
+          />
+        ) : walkthroughReady ? (
           <NarrativeSidebar
             allowCommit={false}
             files={visibleFiles}
@@ -476,11 +1633,44 @@ export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthrough
             showWhitespace={snapshot.preferences.showWhitespace}
             walkthrough={sharedWalkthrough}
           />
+        ) : (
+          <div className="sidebar-walkthrough-status-shell">
+            <div
+              className={`sidebar-walkthrough-status${walkthroughFailed ? '' : ' codex'}`}
+              title={walkthroughStatusDescription ?? undefined}
+            >
+              <strong>{walkthroughStatusTitle}</strong>
+              {walkthroughStatusDescription ? <span>{walkthroughStatusDescription}</span> : null}
+            </div>
+          </div>
         )}
       </aside>
-      <div aria-hidden className="sidebar-resizer" />
-      <main className="review">
-        {sidebarMode === 'tree' ? (
+      <div aria-hidden className="sidebar-resizer" onPointerDown={resizeSidebar} />
+      <main className="review codiff-web-review">
+        {sidebarMode === 'comments' ? (
+          <MergeRequestCommentsView
+            draft={generalCommentDraft}
+            editDraft={generalCommentEditDraft}
+            editError={generalCommentEditError}
+            editingCommentId={editingGeneralCommentId}
+            editSubmitting={generalCommentEditSubmitting}
+            error={generalCommentError}
+            focusedCommentId={focusedGeneralCommentId}
+            focusedCommentRequest={generalCommentScrollRequest}
+            gitIdentity={gitIdentity}
+            interactive={Boolean(interactive)}
+            keymap={keymap}
+            onCancelEdit={cancelEditGeneralComment}
+            onChangeDraft={setGeneralCommentDraft}
+            onChangeEditDraft={setGeneralCommentEditDraft}
+            onSaveEdit={saveGeneralCommentEdit}
+            onStartEdit={startEditGeneralComment}
+            onSubmit={submitGeneralComment}
+            sourceDescription={sourceDescription}
+            submitting={generalCommentSubmitting}
+            threads={generalCommentThreads}
+          />
+        ) : sidebarMode === 'tree' ? (
           visibleFiles.length === 0 ? (
             <div className="empty-state">
               <div className="empty-panel squircle">
@@ -497,10 +1687,11 @@ export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthrough
               onSelectPathFromScroll={updateSelectedPathFromScroll}
               scrollTarget={treeScrollTarget}
               selectedPath={visibleSelectedPath}
+              sourceDescriptionActions={sourceDescriptionActions}
               walkthroughNotes={emptyWalkthroughNotes}
             />
           )
-        ) : (
+        ) : walkthroughReady ? (
           <NarrativeWalkthroughView
             allowCommit={false}
             files={snapshot.files}
@@ -512,8 +1703,118 @@ export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthrough
             showWhitespace={snapshot.preferences.showWhitespace}
             walkthrough={sharedWalkthrough}
           />
+        ) : walkthroughFailed ? (
+          <div className="empty-state">
+            <div className="empty-panel squircle">
+              <strong>{walkthroughStatusTitle}</strong>
+              <p>{walkthroughStatusDescription}</p>
+              <div className="empty-panel-actions">
+                <button onClick={requestWalkthrough} type="button">
+                  Try again
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="loading codex italic">Generating walkthrough…</div>
         )}
       </main>
     </div>
+  );
+}
+
+export function SharedWalkthroughApp({ snapshot }: { snapshot: SharedWalkthroughSnapshot }) {
+  return <ReviewSurface snapshot={snapshot} />;
+}
+
+export function MergeRequestReviewApp({
+  externalUrl,
+  gitIdentity,
+  initialMode,
+  onClosePullRequest,
+  onGenerateWalkthrough,
+  onHome,
+  onModeChange,
+  onResolveDiscussion,
+  onSubmitComment,
+  onSubmitGeneralComment,
+  onSubmitReview,
+  onUpdateComment,
+  onUpdateGeneralComment,
+  preferences,
+  state,
+  title,
+  walkthrough,
+  walkthroughError,
+  walkthroughStatus,
+}: MergeRequestReviewAppProps) {
+  const placeholderWalkthrough = useMemo<NarrativeWalkthrough>(
+    () => ({
+      agent: 'codex',
+      chapters: [],
+      focus: 'Generate a walkthrough to review this merge request in narrative order.',
+      generatedAt: new Date(state.generatedAt).toISOString(),
+      kind: 'narrative',
+      repo: {
+        branch: state.branch,
+        root: state.root,
+      },
+      source: state.source,
+      support: [],
+      title,
+      version: 4,
+    }),
+    [state.branch, state.generatedAt, state.root, state.source, title],
+  );
+  const resolvedPreferences = useMemo(
+    () => ({
+      ...defaultSharedPreferences,
+      ...preferences,
+    }),
+    [preferences],
+  );
+  const snapshot = useMemo<SharedWalkthroughSnapshot>(
+    () => ({
+      branch: state.branch,
+      codiffVersion: 'web',
+      exportedAt: new Date(state.generatedAt).toISOString(),
+      files: state.files,
+      kind: 'codiff-walkthrough-share',
+      preferences: resolvedPreferences,
+      repository: {
+        generalComments: state.generalComments,
+        root: state.root,
+        source: state.source,
+        title,
+      },
+      reviewComments: state.reviewComments,
+      version: 1,
+      walkthrough: walkthrough ?? placeholderWalkthrough,
+    }),
+    [placeholderWalkthrough, resolvedPreferences, state, title, walkthrough],
+  );
+
+  return (
+    <ReviewSurface
+      externalUrl={externalUrl}
+      gitIdentity={gitIdentity}
+      initialMode={initialMode}
+      interactive={{
+        onClosePullRequest,
+        onGenerateWalkthrough,
+        onHome,
+        onResolveDiscussion,
+        onSubmitComment,
+        onSubmitGeneralComment,
+        onSubmitReview,
+        onUpdateComment,
+        onUpdateGeneralComment,
+        walkthroughError,
+        walkthroughStatus,
+      }}
+      onModeChange={onModeChange}
+      snapshot={snapshot}
+      title={title}
+    />
   );
 }

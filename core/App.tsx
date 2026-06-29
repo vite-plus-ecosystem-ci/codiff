@@ -13,6 +13,7 @@ import {
   CopyCommentsButton,
   DiffSearchPanel,
   FirstRunPanel,
+  isPullRequestReviewActionDisabled,
   PullRequestReviewButtons,
   RepositoryChangeBanner,
   RepositoryLoadErrorPanel,
@@ -94,9 +95,7 @@ import {
 import {
   SIDEBAR_COLLAPSE_THRESHOLD,
   clampSidebarWidth,
-  readSidebarCollapsed,
   readSidebarWidth,
-  writeSidebarCollapsed,
   writeSidebarWidth,
 } from './lib/sidebar-width.ts';
 import {
@@ -234,7 +233,7 @@ export default function App() {
   const [planLoadError, setPlanLoadError] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [loadingSectionIds, setLoadingSectionIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => readSidebarCollapsed());
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('tree');
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => readSidebarWidth());
   const [state, setState] = useState<RepositoryState | null>(null);
@@ -1127,11 +1126,7 @@ export default function App() {
   }, []);
 
   const toggleSidebar = useCallback(() => {
-    setSidebarCollapsed((current) => {
-      const next = !current;
-      writeSidebarCollapsed(next);
-      return next;
-    });
+    setSidebarCollapsed((current) => !current);
   }, []);
 
   const toggleWordWrap = useCallback(() => {
@@ -1140,7 +1135,6 @@ export default function App() {
 
   const expandSidebar = useCallback(() => {
     setSidebarCollapsed(false);
-    writeSidebarCollapsed(false);
   }, []);
 
   const openFile = useCallback((file: ChangedFile) => {
@@ -1499,7 +1493,6 @@ export default function App() {
         // Collapse immediately mid-drag — no resistance, no snap on release
         collapsed = true;
         setSidebarCollapsed(true);
-        writeSidebarCollapsed(true);
         cleanup();
         return;
       }
@@ -2124,7 +2117,11 @@ export default function App() {
   const submitPullRequestReview = useCallback(
     (event: PullRequestReviewEvent) => {
       const currentState = stateRef.current;
-      if (currentState?.source.type !== 'pull-request' || pullRequestReviewSubmitting) {
+      if (
+        currentState?.source.type !== 'pull-request' ||
+        pullRequestReviewSubmitting ||
+        isPullRequestReviewActionDisabled(currentState.source.reviewStatus, event)
+      ) {
         return;
       }
 
@@ -2349,6 +2346,7 @@ export default function App() {
     onLoadSection: loadDiffSection,
     onOpenFile: openFile,
     onRefreshMarkdown: refreshMarkdownFile,
+    onSaveCommentEdit: updateComment,
     onSelectPathFromScroll: updateSelectedPathFromScroll,
     onSubmitComment: submitPullRequestComment,
     onToggleCollapsed: toggleCollapsed,
@@ -2357,6 +2355,13 @@ export default function App() {
     searchQuery: diffSearchQuery,
     showWhitespace,
     source: state.source,
+    sourceDescriptionActions: isPullRequest ? (
+      <PullRequestReviewButtons
+        disabled={pullRequestReviewSubmitting != null}
+        onSubmitReview={submitPullRequestReview}
+        reviewStatus={state.source.type === 'pull-request' ? state.source.reviewStatus : undefined}
+      />
+    ) : undefined,
     viewed,
     wordWrap,
   };
@@ -2378,6 +2383,7 @@ export default function App() {
           onSelectPathFromScroll={ignoreWalkthroughPathScroll}
           scrollTarget={blockScrollTarget}
           selectedPath={null}
+          showSourceDescription
           walkthroughNotes={emptyWalkthroughNotes}
         />
       </div>
@@ -2458,13 +2464,6 @@ export default function App() {
             reviewCommentsPrefix={preferences.reviewCommentsPrefix}
             showWhitespace={showWhitespace}
           />
-          {isPullRequest ? (
-            <PullRequestReviewButtons
-              disabled={pullRequestReviewSubmitting != null}
-              onSubmitReview={submitPullRequestReview}
-              submittingEvent={pullRequestReviewSubmitting}
-            />
-          ) : null}
         </div>
       ) : null}
       <aside className="squircle sidebar">

@@ -134,7 +134,9 @@ export const getReviewCommentsDigest = (comments: ReadonlyArray<ReviewComment>) 
           comment.codexReply?.body,
         )}:${getCommentTextDigest(comment.codexReply?.error)}:${
           comment.remoteSubmit?.status ?? ''
-        }:${comment.remoteSubmit?.error ?? ''}`,
+        }:${comment.remoteSubmit?.error ?? ''}:${comment.threadId ?? ''}:${
+          comment.canResolveThread === true ? '1' : '0'
+        }:${comment.isThreadResolved === true ? '1' : '0'}`,
     )
     .join('\0');
 
@@ -300,15 +302,19 @@ export const getReviewCommentsFromState = (state: RepositoryState): ReadonlyArra
               {
                 author: comment.author,
                 body: comment.body,
+                ...(comment.canEdit ? { canEdit: true } : {}),
+                ...(comment.canResolveThread ? { canResolveThread: true } : {}),
                 filePath: comment.filePath,
                 id: comment.id,
                 ...(comment.isOutdated ? { isOutdated: true } : {}),
                 isReadOnly: true,
+                ...(comment.isThreadResolved ? { isThreadResolved: true } : {}),
                 lineNumber: comment.lineNumber,
                 sectionId: section.id,
                 side: comment.side,
                 ...getReviewCommentRangeProps(comment),
                 submittedAt: comment.submittedAt,
+                ...(comment.threadId ? { threadId: comment.threadId } : {}),
                 url: comment.url,
               },
             ]

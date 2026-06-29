@@ -1,6 +1,8 @@
 import { CaretDownIcon as CaretDown } from '@phosphor-icons/react/CaretDown';
 import { CaretUpIcon as CaretUp } from '@phosphor-icons/react/CaretUp';
 import { CheckIcon as Check } from '@phosphor-icons/react/Check';
+import { PowerIcon as Power } from '@phosphor-icons/react/Power';
+import { SealQuestionIcon as SealQuestion } from '@phosphor-icons/react/SealQuestion';
 import { XIcon as X } from '@phosphor-icons/react/X';
 import { Copy as LucideCopy } from 'lucide-react';
 import {
@@ -15,7 +17,7 @@ import type { CodiffKeymap } from '../../config/types.ts';
 import type { RepositoryLoadError, ReviewComment } from '../../lib/app-types.ts';
 import { getReloadShortcutLabel } from '../../lib/keyboard.ts';
 import { buildReviewCommentsMarkdown } from '../../lib/review-comments.ts';
-import type { ChangedFile, PullRequestReviewEvent } from '../../types.ts';
+import type { ChangedFile, PullRequestReviewEvent, PullRequestReviewStatus } from '../../types.ts';
 import { useCopiedState } from './useCopiedState.ts';
 
 export function ReviewSourceLoading() {
@@ -338,44 +340,91 @@ export function CopyCommentsButton({
   );
 }
 
+const getPullRequestReviewActionStatus = (
+  reviewStatus: PullRequestReviewStatus | undefined,
+  event: PullRequestReviewEvent,
+) => (event === 'APPROVE' ? reviewStatus?.approve : reviewStatus?.requestChanges);
+
+export const isPullRequestReviewActionDisabled = (
+  reviewStatus: PullRequestReviewStatus | undefined,
+  event: PullRequestReviewEvent,
+) => getPullRequestReviewActionStatus(reviewStatus, event)?.disabled === true;
+
+const getPullRequestReviewActionTitle = (
+  reviewStatus: PullRequestReviewStatus | undefined,
+  event: PullRequestReviewEvent,
+  fallback: string,
+) => getPullRequestReviewActionStatus(reviewStatus, event)?.reason ?? fallback;
+
 export function PullRequestReviewButtons({
   disabled,
+  onClosePullRequest,
   onSubmitReview,
-  submittingEvent,
+  reviewStatus,
 }: {
   disabled: boolean;
+  onClosePullRequest?: () => void;
   onSubmitReview: (event: PullRequestReviewEvent) => void;
-  submittingEvent: PullRequestReviewEvent | null;
+  reviewStatus?: PullRequestReviewStatus;
 }) {
+  const approveBlocked = isPullRequestReviewActionDisabled(reviewStatus, 'APPROVE');
+  const requestChangesBlocked = isPullRequestReviewActionDisabled(reviewStatus, 'REQUEST_CHANGES');
+  const closeStatus = reviewStatus?.close;
+  const closeVisible = onClosePullRequest && closeStatus && closeStatus.disabled !== true;
+  if (approveBlocked && requestChangesBlocked && !closeVisible) {
+    return null;
+  }
+
   return (
-    <>
-      <button
-        aria-label="Approve review"
-        className="review-submit-button approve"
-        disabled={disabled}
-        onClick={() => onSubmitReview('APPROVE')}
-        title="Approve review"
-        type="button"
-      >
-        <Check aria-hidden className="review-submit-icon approve" size={22} weight="bold" />
-      </button>
-      <button
-        aria-label="Request changes"
-        className="review-submit-button request-changes"
-        disabled={disabled}
-        onClick={() => onSubmitReview('REQUEST_CHANGES')}
-        title="Request changes"
-        type="button"
-      >
-        <X
-          aria-hidden
-          className={`review-submit-icon request-changes${
-            submittingEvent === 'REQUEST_CHANGES' ? ' submitting' : ''
-          }`}
-          size={22}
-          weight="bold"
-        />
-      </button>
-    </>
+    <div aria-label="Pull request review actions" className="source-description-review-actions">
+      {!approveBlocked ? (
+        <button
+          aria-label="Approve review"
+          className="codiff-open-button review-submit-button approve"
+          disabled={disabled}
+          onClick={() => onSubmitReview('APPROVE')}
+          title={getPullRequestReviewActionTitle(reviewStatus, 'APPROVE', 'Approve review')}
+          type="button"
+        >
+          <Check aria-hidden className="review-submit-icon approve" size={15} weight="bold" />
+          <span>Approve</span>
+        </button>
+      ) : null}
+      {!requestChangesBlocked ? (
+        <button
+          aria-label="Request changes"
+          className="codiff-open-button review-submit-button request-changes"
+          disabled={disabled}
+          onClick={() => onSubmitReview('REQUEST_CHANGES')}
+          title={getPullRequestReviewActionTitle(
+            reviewStatus,
+            'REQUEST_CHANGES',
+            'Request changes',
+          )}
+          type="button"
+        >
+          <SealQuestion
+            aria-hidden
+            className="review-submit-icon request-changes"
+            size={15}
+            weight="bold"
+          />
+          <span>Request Changes</span>
+        </button>
+      ) : null}
+      {closeVisible ? (
+        <button
+          aria-label="Close merge request"
+          className="codiff-open-button review-submit-button close"
+          disabled={disabled}
+          onClick={onClosePullRequest}
+          title={closeStatus.reason ?? 'Close merge request'}
+          type="button"
+        >
+          <Power aria-hidden className="review-submit-icon close" size={15} weight="bold" />
+          <span>Close</span>
+        </button>
+      ) : null}
+    </div>
   );
 }

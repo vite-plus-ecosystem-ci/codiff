@@ -28,6 +28,7 @@
   :root {
     --app-bg: #f8f8f6;
     --code-bg: #ffffff;
+    --codiff-link: var(--tree-selection-focus);
     --danger: #a33a3a;
     --diff-addition: rgb(31 122 68);
     --diff-deletion: rgb(184 49 47);
@@ -53,6 +54,7 @@
     :root {
       --app-bg: #141414;
       --code-bg: #1c1c1c;
+      --codiff-link: var(--tree-selection-focus);
       --danger: #e07878;
       --diff-addition: rgb(111 208 148);
       --diff-deletion: rgb(238 126 126);
@@ -78,6 +80,7 @@
   :root[data-theme='light'] {
     --app-bg: #f8f8f6;
     --code-bg: #ffffff;
+    --codiff-link: var(--tree-selection-focus);
     --danger: #a33a3a;
     --diff-addition: rgb(31 122 68);
     --diff-deletion: rgb(184 49 47);
@@ -102,6 +105,7 @@
   :root[data-theme='dark'] {
     --app-bg: #141414;
     --code-bg: #1c1c1c;
+    --codiff-link: var(--tree-selection-focus);
     --danger: #e07878;
     --diff-addition: rgb(111 208 148);
     --diff-deletion: rgb(238 126 126);
@@ -300,7 +304,7 @@ html[data-codiff-platform='darwin'] .plan-header {
   --mdx-editor-annotation-bg: color-mix(in srgb, var(--sidebar-ref) 22%, transparent);
   --mdx-editor-font-size: 14px;
   --mdx-editor-line-height: 1.55;
-  --mdx-editor-padding: 18px 24px 26px;
+  --mdx-editor-padding: 8px 12px;
   display: block;
 }
 
@@ -953,6 +957,44 @@ html[data-codiff-platform='darwin'] .sidebar {
   padding-left: 0;
 }
 
+.merge-request-shell .sidebar-path-row {
+  gap: 6px;
+}
+
+.merge-request-nav-button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  flex: none;
+  height: 28px;
+  justify-content: center;
+  padding: 0;
+  text-decoration: none;
+  width: 28px;
+}
+
+.merge-request-nav-button:not(.merge-request-home-button):hover {
+  background: rgb(127 127 127 / 0.12);
+  color: var(--sidebar-text);
+}
+
+.merge-request-nav-icon {
+  border-radius: 5px;
+  display: block;
+  height: 20px;
+  width: 20px;
+}
+
+.merge-request-walkthrough-status {
+  color: var(--muted);
+  font: 13px/1.4 var(--font-sans);
+  padding: 18px 14px;
+}
+
 .sidebar-path {
   color: var(--sidebar-text);
   flex: 1;
@@ -978,12 +1020,16 @@ html[data-codiff-platform='darwin'] .sidebar {
   display: grid;
   flex: none;
   gap: 6px;
-  grid-template-columns: minmax(54px, 0.75fr) minmax(108px, 1.45fr) minmax(70px, 0.95fr);
+  grid-template-columns: minmax(48px, 0.75fr) minmax(96px, 1.35fr) minmax(68px, 0.9fr);
   padding: 0 8px;
 }
 
 .share-shell .sidebar-mode-toggle {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.merge-request-shell .sidebar-mode-toggle {
+  grid-template-columns: minmax(42px, 0.65fr) minmax(88px, 1.05fr) minmax(102px, 1.3fr);
 }
 
 .sidebar-mode-toggle button {
@@ -1010,13 +1056,20 @@ html[data-codiff-platform='darwin'] .sidebar {
   text-overflow: ellipsis;
 }
 
-.sidebar-tab-dot {
-  background: var(--sidebar-ref);
-  border-radius: 50%;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sidebar-ref) 16%, transparent);
+.sidebar-tab-count {
+  background: rgb(127 127 127 / 0.16);
+  border-radius: 999px;
+  color: var(--muted);
   flex: none;
-  height: 7px;
-  width: 7px;
+  font: 700 10px/1 var(--font-mono);
+  min-width: 16px;
+  padding: 3px 5px;
+  text-align: center;
+}
+
+.sidebar-mode-toggle button[aria-selected='true'] .sidebar-tab-count {
+  background: rgb(127 127 127 / 0.22);
+  color: var(--sidebar-text);
 }
 
 .sidebar-mode-toggle button:hover:not(:disabled) {
@@ -1260,6 +1313,36 @@ html[data-codiff-platform='darwin'] .sidebar {
   user-select: none;
 }
 
+.sidebar-comment-list.history-list {
+  padding-top: 6px;
+}
+
+.sidebar-comment-entry.history-entry {
+  grid-template-columns: 34px minmax(0, 1fr);
+}
+
+.sidebar-comment-entry .history-entry-ref {
+  font-size: 11px;
+}
+
+.sidebar-comment-entry .history-entry-meta {
+  gap: 6px;
+}
+
+.sidebar-comments-empty {
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  font: 12px/1.35 var(--font-sans);
+  gap: 4px;
+  padding: 12px;
+}
+
+.sidebar-comments-empty strong {
+  color: var(--sidebar-text);
+  font-weight: 700;
+}
+
 .walkthrough-list {
   flex: 1;
   min-height: 0;
@@ -1284,6 +1367,10 @@ html[data-codiff-platform='darwin'] .sidebar {
   min-height: 0;
   overflow: hidden;
   position: relative;
+}
+
+.codiff-web-review {
+  flex-direction: column;
 }
 
 .window-drag-region {
@@ -1531,28 +1618,47 @@ html[data-codiff-platform='darwin'] .sidebar {
   font-weight: 600;
 }
 
-.source-description-author {
+.source-description-review-actions {
   align-items: center;
-  color: var(--text);
   display: inline-flex;
-  font: 600 13px/1 var(--font-sans);
-  gap: 7px;
-  max-width: 280px;
-  min-width: 0;
+  flex: none;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
-.source-description-author .gravatar {
-  border-radius: 50%;
-  corner-shape: round;
-  font-size: 9px;
-  height: 22px;
-  width: 22px;
+.codiff-source-description-panel {
+  background: var(--code-bg);
+  border-radius: var(--codiff-diff-radius);
+  box-shadow:
+    0 0 0 1px var(--file-border),
+    6px 18px 80px -54px rgb(0 0 0 / 0.78);
+  corner-shape: squircle;
+  flex: none;
+  overflow: clip;
 }
 
-.source-description-author span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.codiff-source-description-panel-body {
+  background: var(--code-bg);
+}
+
+.source-description-comment.review-comment {
+  padding: 8px;
+}
+
+.source-description-comment-anonymous.review-comment {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.source-description-author-header.review-comment-header {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.source-description-body.review-comment-body {
+  background: color-mix(in srgb, var(--file-bg) 96%, var(--text) 2%);
+}
+
+.source-description-markdown.codiff-markdown-preview:not(.editable) {
+  padding: 0;
 }
 
 .source-description-markdown.codiff-markdown-preview:not(.editable) :is(h1, h2, h3, h4, h5, h6) {
@@ -1560,6 +1666,160 @@ html[data-codiff-platform='darwin'] .sidebar {
   font-size: 15px;
   margin: 14px 0 6px;
   padding-bottom: 0;
+}
+
+.merge-request-comments-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 12px 48px;
+}
+
+.merge-request-comments-source-description {
+  --codiff-diff-radius: 28px;
+
+  border-radius: var(--codiff-diff-radius);
+  box-shadow:
+    0 0 0 1px var(--file-border),
+    6px 18px 80px -54px rgb(0 0 0 / 0.78);
+  corner-shape: squircle;
+  flex: none;
+  overflow: clip;
+}
+
+.merge-request-comments-source-description .codiff-source-description-panel {
+  box-shadow: none;
+}
+
+.merge-request-comments-header {
+  color: var(--text);
+  flex: none;
+  padding: 2px 4px 0;
+}
+
+.merge-request-comments-header h2 {
+  font: 700 20px/1.25 var(--font-sans);
+  margin: 0;
+}
+
+.general-comment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.general-comment-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.general-comment-card.review-comment,
+.general-comment-composer .review-comment {
+  padding-right: min(48px, 4vw);
+}
+
+.general-comment-card.focused .review-comment-body {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tree-selection-focus) 52%, transparent);
+}
+
+.general-comment-header time {
+  color: var(--muted);
+  font: 12px/1.3 var(--font-sans);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.general-comment-edit-actions {
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+}
+
+.general-comment-input.review-comment-input {
+  padding: 8px 12px;
+}
+
+.general-comment-markdown-editor.review-comment-markdown-editor {
+  min-height: 0;
+}
+
+.general-comment-markdown-editor.review-comment-markdown-editor .mdx-editor-content {
+  min-height: 0;
+}
+
+.codiff-safe-markdown-view {
+  display: block;
+}
+
+.codiff-safe-markdown-view .codiff-safe-markdown-segment {
+  min-height: 0;
+}
+
+.codiff-safe-markdown-view .codiff-safe-markdown-segment .mdx-editor-content {
+  min-height: 0;
+}
+
+.codiff-markdown-details {
+  background: color-mix(in srgb, var(--file-bg) 98%, var(--text) 2%);
+  border: 1px solid var(--file-border);
+  border-radius: 12px;
+  corner-shape: squircle;
+  margin: 8px;
+  overflow: clip;
+}
+
+.codiff-markdown-details > summary {
+  color: var(--text);
+  cursor: pointer;
+  font: 600 13px/1.4 var(--font-sans);
+  list-style: none;
+  padding: 8px 10px;
+}
+
+.codiff-markdown-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.codiff-markdown-details > summary::before {
+  content: '\25B8';
+  display: inline-block;
+  font-size: 20px;
+  line-height: 0.5;
+  margin-right: 8px;
+}
+
+.codiff-markdown-details > summary:hover {
+  background: var(--hover-wash);
+}
+
+.codiff-markdown-details[open] > summary {
+  border-bottom: 1px solid var(--file-border);
+}
+
+.codiff-markdown-details[open] > summary::before {
+  content: '\25BE';
+}
+
+.codiff-markdown-details > summary code {
+  background: var(--inline-code-bg);
+  border-radius: 6px;
+  corner-shape: squircle;
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 1px 4px;
+}
+
+.general-comment-composer.review-comment-thread {
+  flex: none;
+  overflow: visible;
+  padding-left: 0;
 }
 
 .commit-details-trailers {
@@ -1665,62 +1925,177 @@ html[data-codiff-platform='darwin'] .sidebar {
 
 .codiff-markdown-preview:not(.editable) {
   color: var(--text);
+  font: 14px/1.55 var(--font-sans);
+  overflow-wrap: anywhere;
+  padding: 18px 24px 26px;
   white-space: normal;
+  word-break: normal;
 }
 
-.codiff-markdown-preview-editor {
-  --codiff-readonly-markdown-accent: var(--tree-selection-focus);
-  --mdx-editor-accent: var(--codiff-readonly-markdown-accent);
-  --mdx-editor-accent-contrast: #fff;
-  --mdx-editor-accent-soft: var(--tree-selection-bg);
-  --mdx-editor-bg: transparent;
-  --mdx-editor-border: transparent;
-  --mdx-editor-code-bg: var(--inline-code-bg);
-  --mdx-editor-font: var(--font-sans);
-  --mdx-editor-font-size: 14px;
-  --mdx-editor-hover: var(--hover-wash);
-  --mdx-editor-line-height: 1.55;
-  --mdx-editor-mono-font: var(--font-mono);
-  --mdx-editor-muted: var(--muted);
-  --mdx-editor-padding: 18px 24px 26px;
-  --mdx-editor-selection: var(--tree-selection-bg);
-  --mdx-editor-text: var(--text);
-  display: block;
-}
-
-.codiff-markdown-preview-editor .mdx-editor-content {
-  border: 0;
-  border-radius: 0;
-}
-
-.source-description-markdown-editor {
-  --mdx-editor-font-size: 13px;
-  --mdx-editor-line-height: 1.5;
-  --mdx-editor-padding: 0 24px 22px;
-}
-
-.codiff-markdown-preview-editor .mdx-editor-content a,
-.review-comment-codex-reply-markdown .mdx-editor-content a {
-  color: var(--codiff-readonly-markdown-accent);
+.codiff-markdown-preview:not(.editable) a {
+  color: var(--codiff-link, var(--tree-selection-focus, #3d87f5));
   text-decoration: none;
 }
 
-.codiff-markdown-preview-editor .mdx-editor-content a:hover,
-.review-comment-codex-reply-markdown .mdx-editor-content a:hover {
+.codiff-markdown-preview:not(.editable) a:hover {
   text-decoration: underline;
-  text-decoration-color: currentColor;
+  text-underline-offset: 2px;
 }
 
-.codiff-readonly-markdown-loading {
-  align-items: center;
+.codiff-markdown-preview:not(.editable) a:focus-visible {
+  border-radius: 3px;
+  corner-shape: squircle;
+  outline: 1px solid var(--codiff-link, var(--tree-selection-focus, #3d87f5));
+  outline-offset: 2px;
+}
+
+.codiff-markdown-preview:not(.editable) > :first-child {
+  margin-top: 0;
+}
+
+.codiff-markdown-preview:not(.editable) > :last-child {
+  margin-bottom: 0;
+}
+
+.codiff-markdown-preview:not(.editable) h1,
+.codiff-markdown-preview:not(.editable) h2,
+.codiff-markdown-preview:not(.editable) h3,
+.codiff-markdown-preview:not(.editable) h4,
+.codiff-markdown-preview:not(.editable) h5,
+.codiff-markdown-preview:not(.editable) h6 {
+  color: var(--text);
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 22px 0 10px;
+}
+
+.codiff-markdown-preview:not(.editable) h1 {
+  border-bottom: 1px solid var(--file-border);
+  font-size: 24px;
+  padding-bottom: 8px;
+}
+
+.codiff-markdown-preview:not(.editable) h2 {
+  border-bottom: 1px solid var(--file-border);
+  font-size: 20px;
+  padding-bottom: 6px;
+}
+
+.codiff-markdown-preview:not(.editable) h3 {
+  font-size: 17px;
+}
+
+.codiff-markdown-preview:not(.editable) p,
+.codiff-markdown-preview:not(.editable) blockquote,
+.codiff-markdown-preview:not(.editable) ol,
+.codiff-markdown-preview:not(.editable) ul,
+.codiff-markdown-preview:not(.editable) pre,
+.codiff-markdown-preview:not(.editable) table {
+  margin: 0 0 14px;
+}
+
+.codiff-markdown-preview:not(.editable) .codiff-markdown-added {
+  border-radius: 0 6px 6px 0;
+  position: relative;
+}
+
+.codiff-markdown-preview:not(.editable) .codiff-markdown-added::before {
+  background: var(--diff-addition);
+  border-radius: 0;
+  bottom: 0;
+  content: '';
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: 3px;
+}
+
+.codiff-markdown-preview:not(.editable)
+  :is(h1, h2, h3, h4, h5, h6, p, blockquote, pre).codiff-markdown-added {
+  margin-inline: -10px;
+  padding: 6px 10px 6px 14px;
+}
+
+.codiff-markdown-preview:not(.editable) ol,
+.codiff-markdown-preview:not(.editable) ul {
+  padding-left: 22px;
+}
+
+.codiff-markdown-preview:not(.editable) ol {
+  list-style: decimal;
+}
+
+.codiff-markdown-preview:not(.editable) ul {
+  list-style: disc;
+}
+
+.codiff-markdown-preview:not(.editable) li::marker {
+  color: var(--tree-selection-focus);
+}
+
+.codiff-markdown-preview:not(.editable) :is(ol, ul).codiff-markdown-added {
+  margin-inline: -10px;
+  padding: 6px 10px 6px 34px;
+}
+
+.codiff-markdown-preview:not(.editable) li + li {
+  margin-top: 4px;
+}
+
+.codiff-markdown-preview:not(.editable) blockquote {
+  background: rgb(127 127 127 / 0.06);
+  border-left: 3px solid var(--file-border);
   color: var(--muted);
-  display: flex;
-  font: 13px/1.4 var(--font-sans);
-  min-height: 180px;
-  padding: 24px;
+  padding-left: 12px;
+}
+
+.codiff-markdown-preview:not(.editable) pre {
+  background: rgb(127 127 127 / 0.09);
+  border: 1px solid rgb(127 127 127 / 0.14);
+  border-radius: 8px;
+  corner-shape: squircle;
+  font: 13px/1.45 var(--font-mono);
+  overflow-x: hidden;
+  padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.codiff-markdown-code-block {
+  background: rgb(127 127 127 / 0.09);
+  border-radius: 8px;
+  box-shadow: none;
+  corner-shape: squircle;
+  display: block;
+  margin: 0 0 14px;
+  max-inline-size: 100%;
+  min-inline-size: 0;
+  overflow: clip;
+}
+
+.codiff-markdown-preview:not(.editable) .codiff-markdown-code-added {
+  margin-inline: -10px;
+  padding-inline: 10px;
+}
+
+.codiff-markdown-preview:not(.editable) code {
+  font-family: var(--font-mono);
+}
+
+.codiff-markdown-preview:not(.editable) hr {
+  border: 0;
+  border-top: 1px solid var(--file-border);
+  margin: 20px 0;
+}
+
+.codiff-markdown-preview:not(.editable) hr.codiff-markdown-added {
+  margin-inline: -10px;
+  padding: 6px 10px;
 }
 
 .codiff-markdown-document-editor,
+.codiff-markdown-preview-editor,
+.codiff-readonly-markdown-editor,
 .codiff-markdown-snapshot-editor,
 .codiff-plan-editor {
   --mdx-editor-accent: var(--tree-selection-focus);
@@ -1741,7 +2116,18 @@ html[data-codiff-platform='darwin'] .sidebar {
 .codiff-markdown-snapshot-editor {
   --mdx-editor-font-size: 14px;
   --mdx-editor-line-height: 1.55;
-  --mdx-editor-padding: 18px 24px 26px;
+  --mdx-editor-padding: 8px 12px;
+}
+
+:is(
+  .codiff-markdown-document-editor,
+  .codiff-markdown-preview-editor,
+  .codiff-markdown-snapshot-editor,
+  .codiff-plan-editor,
+  .codiff-readonly-markdown-editor,
+  .review-comment-markdown-editor
+):is(.mdx-editor, .mdx-editor-persistent, .mdx-editor-shell) {
+  --mdx-editor-padding: 8px 12px;
 }
 
 .codiff-markdown-document-editor
@@ -2018,7 +2404,7 @@ html[data-codiff-platform='darwin'] .sidebar {
   box-shadow: none !important;
 }
 
-.codiff-selected-item .codiff-file-header {
+.codiff-file-header.selected {
   box-shadow:
     inset 0 -1px 0 var(--file-border),
     inset 0 0 0 1px rgb(61 135 245 / 0.52);
@@ -2032,7 +2418,7 @@ html[data-codiff-platform='darwin'] .sidebar {
   corner-shape: squircle;
 }
 
-.codiff-selected-item .codiff-file-header.collapsed {
+.codiff-file-header.collapsed.selected {
   box-shadow: inset 0 0 0 1px rgb(61 135 245 / 0.52);
 }
 
@@ -2343,6 +2729,42 @@ html[data-codiff-platform='darwin'] .sidebar {
   padding: 2px 0 2px 16px;
 }
 
+diffs-container .review-comment-thread {
+  padding: 8px 16px;
+}
+
+.review-comment-thread-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  inline-size: 100%;
+  min-inline-size: 0;
+}
+
+.review-comment-thread-footer {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  min-inline-size: 0;
+  padding-inline-start: 42px;
+}
+
+.review-comment-thread-actions {
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+}
+
+.review-comment-thread-error {
+  color: var(--danger);
+  flex: 1;
+  font: 12px/1.35 var(--font-sans);
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
 .review-comment {
   align-items: flex-start;
   display: grid;
@@ -2415,29 +2837,16 @@ html[data-codiff-platform='darwin'] .sidebar {
   align-items: center;
   border-bottom: 1px solid var(--file-border);
   color: var(--muted);
-  display: grid;
+  display: flex;
   font: 12px/1.3 var(--font-sans);
   gap: 8px;
   min-height: 34px;
-  padding: 4px 4px 4px 10px;
-}
-
-.review-comment-header.with-comment-action {
-  grid-template-columns: auto minmax(0, 1fr) auto auto 26px;
-}
-
-.review-comment-header.read-only {
-  grid-template-columns: auto minmax(0, 1fr);
-  padding-right: 10px;
-}
-
-.review-comment-header.codex {
-  grid-template-columns: minmax(0, 1fr);
-  padding-right: 10px;
+  padding: 8px;
 }
 
 .review-comment-header strong {
   color: var(--text);
+  min-width: 0;
   font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2450,11 +2859,20 @@ html[data-codiff-platform='darwin'] .sidebar {
   white-space: nowrap;
 }
 
+.review-comment-header .general-comment-edit-actions {
+  margin-left: auto;
+  overflow: visible;
+}
+
+.review-comment-header > .review-comment-action:first-of-type {
+  margin-left: auto;
+}
+
 .review-comment-action {
   align-items: center;
   background: transparent;
   border: 1px solid var(--file-border);
-  border-radius: var(--review-comment-radius);
+  border-radius: var(--review-comment-radius, 12px);
   box-shadow:
     0 0 0 1px rgb(255 255 255 / 0) inset,
     0 10px 32px -24px rgb(0 0 0 / 0),
@@ -2463,9 +2881,12 @@ html[data-codiff-platform='darwin'] .sidebar {
   corner-shape: squircle;
   cursor: pointer;
   display: inline-flex;
+  flex: none;
   font: 700 11px/1 var(--font-sans);
   gap: 4px;
   height: 24px;
+  inline-size: fit-content;
+  max-inline-size: max-content;
   padding: 0 8px;
   transform: scale(1);
   transition:
@@ -2506,7 +2927,7 @@ html[data-codiff-platform='darwin'] .sidebar {
   align-items: center;
   background: transparent;
   border: 0;
-  border-radius: var(--review-comment-radius);
+  border-radius: var(--review-comment-radius, 12px);
   color: var(--muted);
   corner-shape: squircle;
   cursor: pointer;
@@ -2555,7 +2976,7 @@ html[data-codiff-platform='darwin'] .sidebar {
   --mdx-editor-hover: var(--hover-wash);
   --mdx-editor-line-height: 1.45;
   --mdx-editor-muted: var(--muted);
-  --mdx-editor-padding: 8px;
+  --mdx-editor-padding: 8px 12px;
   --mdx-editor-selection: var(--tree-selection-bg);
   --mdx-editor-text: var(--text);
   display: block;
@@ -2564,6 +2985,27 @@ html[data-codiff-platform='darwin'] .sidebar {
 
 .review-comment-markdown-editor .mdx-editor-content {
   min-height: 76px;
+}
+
+.review-comment-edit-shell {
+  min-height: 76px;
+  position: relative;
+}
+
+.review-comment-edit-shell.loading .review-comment-edit-editor {
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+.review-comment-edit-shell.ready .review-comment-edit-editor {
+  opacity: 1;
+  position: relative;
+}
+
+.review-comment-edit-preview {
+  pointer-events: none;
 }
 
 .review-comment-markdown-editor [class*='_placeholder_'] {
@@ -2648,38 +3090,6 @@ html[data-codiff-platform='darwin'] .sidebar {
   color: var(--danger);
 }
 
-.review-comment-codex-reply-markdown {
-  --codiff-readonly-markdown-accent: var(--tree-selection-focus);
-  --mdx-editor-accent: var(--codiff-readonly-markdown-accent);
-  --mdx-editor-accent-contrast: #fff;
-  --mdx-editor-accent-soft: var(--tree-selection-bg);
-  --mdx-editor-bg: transparent;
-  --mdx-editor-border: transparent;
-  --mdx-editor-code-bg: var(--inline-code-bg);
-  --mdx-editor-font: var(--font-sans);
-  --mdx-editor-font-size: 13px;
-  --mdx-editor-hover: var(--hover-wash);
-  --mdx-editor-line-height: 1.5;
-  --mdx-editor-mono-font: var(--font-mono);
-  --mdx-editor-muted: var(--muted);
-  --mdx-editor-padding: 0;
-  --mdx-editor-selection: var(--tree-selection-bg);
-  --mdx-editor-text: var(--text);
-  display: block;
-}
-
-.review-comment-codex-reply-markdown.codiff-readonly-markdown-loading {
-  min-height: 76px;
-  padding: 0;
-  place-content: center;
-}
-
-.review-comment-codex-reply-markdown .mdx-editor-content {
-  border: 0;
-  border-radius: 0;
-  min-height: 0;
-}
-
 .review-comment-codex-reply p,
 .review-comment-codex-reply ul,
 .review-comment-codex-reply pre {
@@ -2740,8 +3150,7 @@ html[data-codiff-platform='darwin'] .sidebar {
   z-index: 12;
 }
 
-.copy-comments-button,
-.review-submit-button {
+.copy-comments-button {
   -webkit-backdrop-filter: blur(22px) saturate(1.35);
   align-items: center;
   backdrop-filter: blur(22px) saturate(1.35);
@@ -2772,8 +3181,15 @@ html[data-codiff-platform='darwin'] .sidebar {
   color: var(--text);
 }
 
-.copy-comments-button:hover,
-.review-submit-button:hover:not(:disabled) {
+.review-submit-button.approve {
+  color: var(--viewed);
+}
+
+.review-submit-button.close {
+  color: var(--text);
+}
+
+.copy-comments-button:hover {
   box-shadow:
     0 0 0 1px rgb(255 255 255 / 0.2) inset,
     0 0 0 1px var(--file-border),
@@ -2783,13 +3199,11 @@ html[data-codiff-platform='darwin'] .sidebar {
   transform: scale(1.05);
 }
 
-.copy-comments-button:active,
-.review-submit-button:active:not(:disabled) {
+.copy-comments-button:active {
   transform: scale(0.95);
 }
 
 .review-submit-button:disabled {
-  color: var(--muted);
   cursor: default;
   opacity: 0.58;
 }
@@ -2797,14 +3211,6 @@ html[data-codiff-platform='darwin'] .sidebar {
 .copy-comments-button.copied {
   background: color-mix(in srgb, var(--code-bg) 80%, var(--viewed) 14%);
   color: var(--viewed);
-}
-
-.review-submit-button.approve {
-  color: var(--viewed);
-}
-
-.review-submit-button.request-changes {
-  color: var(--danger);
 }
 
 .copy-comments-icon {
@@ -2900,6 +3306,10 @@ html[data-codiff-platform='darwin'] .sidebar {
   background: var(--text);
   border: 0;
   border-radius: 14px;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0) inset,
+    0 10px 32px -24px rgb(0 0 0 / 0),
+    0 8px 20px -16px rgb(0 0 0 / 0);
   color: var(--app-bg);
   corner-shape: squircle;
   cursor: pointer;
@@ -2907,6 +3317,23 @@ html[data-codiff-platform='darwin'] .sidebar {
   font-weight: 700;
   min-height: 34px;
   padding: 0 14px;
+  transform: scale(1);
+  transition:
+    background 160ms ease,
+    box-shadow 250ms ease,
+    transform 250ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.empty-panel-actions button:hover:not(:disabled) {
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.2) inset,
+    0 10px 32px -24px rgb(0 0 0 / 0.92),
+    0 8px 20px -16px rgb(0 0 0 / 0.82);
+  transform: scale(1.05);
+}
+
+.empty-panel-actions button:active:not(:disabled) {
+  transform: scale(0.95);
 }
 
 .empty-panel-actions button:disabled {
@@ -3205,8 +3632,12 @@ html[data-codiff-platform='darwin'] .sidebar {
 @container sidebar (max-width: 260px) {
   .sidebar-mode-toggle {
     gap: 4px;
-    grid-template-columns: minmax(42px, 0.65fr) minmax(84px, 1.35fr) minmax(54px, 0.9fr);
+    grid-template-columns: minmax(42px, 0.75fr) minmax(82px, 1.35fr) minmax(58px, 0.9fr);
     padding-inline: 8px;
+  }
+
+  .merge-request-shell .sidebar-mode-toggle {
+    grid-template-columns: minmax(40px, 0.65fr) minmax(78px, 1.05fr) minmax(88px, 1.3fr);
   }
 
   .sidebar-mode-toggle button {
@@ -3215,8 +3646,8 @@ html[data-codiff-platform='darwin'] .sidebar {
     padding-inline: 4px;
   }
 
-  .sidebar-tab-dot {
-    height: 6px;
-    width: 6px;
+  .sidebar-tab-count {
+    min-width: 14px;
+    padding-inline: 4px;
   }
 }

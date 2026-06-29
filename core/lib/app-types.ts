@@ -18,6 +18,7 @@ export type ReviewCommentAnnotationMetadata = {
 };
 
 type MarkdownPreviewAnnotationMetadata = {
+  addedLines: ReadonlySet<number>;
   contents: string;
   editable: boolean;
   layoutKey: string;
@@ -89,6 +90,8 @@ export type DiffLineCount = {
 export type ReviewComment = {
   author?: PullRequestExistingReviewComment['author'];
   body: string;
+  canEdit?: boolean;
+  canResolveThread?: boolean;
   codexReply?: {
     body?: string;
     error?: string;
@@ -98,6 +101,7 @@ export type ReviewComment = {
   id: string;
   isOutdated?: boolean;
   isReadOnly?: boolean;
+  isThreadResolved?: boolean;
   lineNumber: number;
   remoteSubmit?: {
     error?: string;
@@ -108,6 +112,7 @@ export type ReviewComment = {
   startLineNumber?: number;
   startSide?: 'additions' | 'deletions';
   submittedAt?: string;
+  threadId?: string;
   url?: string;
 };
 

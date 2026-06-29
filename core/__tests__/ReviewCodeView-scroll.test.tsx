@@ -550,6 +550,38 @@ test('review comment drafts resync clean external updates and reset on comment s
   }
 });
 
+test('read-only review comments render safe details blocks', async () => {
+  const file = createChangedFile('src/review.ts');
+  const comment = {
+    author: { login: 'ai-reviewer', name: 'AI Code Reviewer' },
+    body: '<details>\n<summary>Review rationale</summary>\n\nThis branch needs attention.\n\n</details>',
+    filePath: file.path,
+    id: 'comment-details',
+    isReadOnly: true,
+    lineNumber: 1,
+    sectionId: file.sections[0].id,
+    side: 'additions',
+  } satisfies ReviewComment;
+
+  const view = await renderReact(
+    <ReviewCodeViewHarness comments={[comment]} files={[file]} isPullRequest />,
+  );
+
+  try {
+    await waitFor(() => {
+      expect(view.container.querySelector('.review-comment-thread details')).not.toBeNull();
+    });
+    const details = view.container.querySelector<HTMLDetailsElement>(
+      '.review-comment-thread details',
+    );
+    expect(details?.open).toBe(false);
+    expect(details?.querySelector('summary')?.textContent).toBe('Review rationale');
+    expect(view.container.textContent).toContain('AI Code Reviewer');
+  } finally {
+    await view.cleanup();
+  }
+});
+
 test('walkthrough hunk viewed state is keyed independently from file path', async () => {
   const filePath = 'src/shared.ts';
   const firstFile = { ...createChangedFile(filePath), fingerprint: 'first-hunk' };
