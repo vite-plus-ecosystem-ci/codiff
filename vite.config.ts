@@ -7,6 +7,9 @@ import { defineConfig } from 'vite-plus';
 
 export default defineConfig({
   base: './',
+  build: {
+    chunkSizeWarningLimit: 10 * 1024,
+  },
   fmt: {
     experimentalSortImports: {
       newlinesBetween: false,
