@@ -14,12 +14,12 @@
     "./styles.css": "./App.css"
   },
   "dependencies": {
-    "@nkzw/mdx-editor": "0.1.5",
+    "@nkzw/mdx-editor": "^0.2.0",
     "@nkzw/use-relative-time": "^1.2.3",
     "@phosphor-icons/react": "^2.1.10",
     "@pierre/diffs": "1.2.12",
     "@pierre/trees": "1.0.0-beta.5",
-    "lucide-react": "^1.22.0"
+    "lucide-react": "^1.23.0"
   },
   "peerDependencies": {
     "react": "^19.2.0",
