@@ -337,7 +337,9 @@ export const getReviewCommentsFromState = (state: RepositoryState): ReadonlyArra
               {
                 author: comment.author,
                 body: comment.body,
+                ...(comment.canDelete ? { canDelete: true } : {}),
                 ...(comment.canEdit ? { canEdit: true } : {}),
+                ...(comment.canReplyThread === false ? { canReplyThread: false } : {}),
                 ...(comment.canResolveThread ? { canResolveThread: true } : {}),
                 filePath: comment.filePath,
                 id: comment.id,

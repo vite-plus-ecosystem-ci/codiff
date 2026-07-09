@@ -253,11 +253,14 @@ export type PlanCommentAuthor = {
   email?: string;
   id: string;
   name: string;
+  username?: string;
 };
 
 export type PlanCommentMessage = {
   author: PlanCommentAuthor;
   body: string;
+  canDelete?: boolean;
+  canEdit?: boolean;
   createdAt: string;
   id: string;
   updatedAt: string;
@@ -265,6 +268,8 @@ export type PlanCommentMessage = {
 
 export type PlanCommentThread = {
   anchor: MarkdownAnnotationAnchor;
+  canReply?: boolean;
+  canResolve?: boolean;
   createdAt: string;
   createdBy: PlanCommentAuthor;
   id: string;
@@ -651,6 +656,7 @@ export type GitIdentity = {
   email: string;
   gravatarUrl?: string;
   name: string;
+  username?: string;
 };
 
 export type DiffSectionContentRequest = {
@@ -720,7 +726,9 @@ export type PullRequestReviewComment = {
 
 export type PullRequestExistingReviewComment = PullRequestReviewComment & {
   author: ReviewAuthor;
+  canDelete?: boolean;
   canEdit?: boolean;
+  canReplyThread?: boolean;
   canResolveThread?: boolean;
   id: string;
   isOutdated?: boolean;
@@ -732,6 +740,7 @@ export type PullRequestExistingReviewComment = PullRequestReviewComment & {
 export type PullRequestGeneralComment = {
   author: ReviewAuthor;
   body: string;
+  canDelete?: boolean;
   canEdit?: boolean;
   id: string;
   submittedAt?: string;
@@ -739,6 +748,8 @@ export type PullRequestGeneralComment = {
 };
 
 export type PullRequestGeneralCommentThread = {
+  canReply?: boolean;
+  canResolve?: boolean;
   comments: ReadonlyArray<PullRequestGeneralComment>;
   id: string;
   isResolved?: boolean;

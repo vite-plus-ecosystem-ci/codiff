@@ -3,7 +3,7 @@ import useRelativeTime from '@nkzw/use-relative-time';
 import { ChatCircleIcon as ChatCircle } from '@phosphor-icons/react/ChatCircle';
 import type { FileTreeRowDecorationRenderer } from '@pierre/trees';
 import { FileTree, useFileTree } from '@pierre/trees/react';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, X } from 'lucide-react';
 import {
   Suspense,
   useCallback,
@@ -31,6 +31,7 @@ import {
   ReviewCodeView,
   type ReviewDiffBlock,
 } from './app/components/ReviewCodeView.tsx';
+import { DiffLineCountBadge } from './app/components/Sidebar.tsx';
 import { NarrativeSidebar } from './app/components/walkthrough/NarrativeSidebar.tsx';
 import {
   NarrativeWalkthroughView,
@@ -56,6 +57,7 @@ import {
   getDiffLineCountTitle,
   getFirstVisibleSection,
   getItemId,
+  getTotalDiffLineCount,
   isMarkdownFilePath,
 } from './lib/diff.ts';
 import { compactPath, fileTreeSort, fuzzyMatches, sortFiles, statusForTree } from './lib/files.ts';
@@ -122,6 +124,19 @@ const writeSharedSidebarWidth = (width: number) => {
 export type MergeRequestWalkthroughStatus = 'failed' | 'generating' | 'idle' | 'ready';
 export type MergeRequestReviewMode = 'comments' | 'tree' | 'walkthrough';
 
+export type SharedWalkthroughCommenting = {
+  canComment: boolean;
+  onDeleteComment: (commentId: string) => Promise<void>;
+  onDeleteGeneralComment: (commentId: string) => Promise<void>;
+  onReplyGeneralComment: (threadId: string, body: string) => Promise<void>;
+  onResolveDiscussion: (discussionId: string, resolved: boolean) => Promise<void>;
+  onSignIn: () => Promise<void> | void;
+  onSubmitComment: (comment: PullRequestReviewComment) => Promise<PullRequestExistingReviewComment>;
+  onSubmitGeneralComment: (body: string) => Promise<void>;
+  onUpdateComment: (commentId: string, body: string) => Promise<void>;
+  onUpdateGeneralComment: (commentId: string, body: string) => Promise<void>;
+};
+
 export type MergeRequestReviewAppProps = {
   externalUrl: string;
   gitIdentity?: GitIdentity | null;
@@ -140,6 +155,7 @@ export type MergeRequestReviewAppProps = {
   onSubmitReview: (
     event: PullRequestReviewEvent,
     comments: ReadonlyArray<PullRequestReviewComment>,
+    body?: string,
   ) => Promise<void>;
   onUpdateComment: (commentId: string, body: string) => Promise<void>;
   onUpdateDescription?: (body: string) => Promise<void> | void;
@@ -296,6 +312,7 @@ function GeneralCommentCard({
   keymap,
   onCancelEdit,
   onChangeEditDraft,
+  onDelete,
   onSaveEdit,
   onStartEdit,
 }: {
@@ -308,6 +325,7 @@ function GeneralCommentCard({
   keymap: CodiffKeymap;
   onCancelEdit: () => void;
   onChangeEditDraft: (draft: string) => void;
+  onDelete: (commentId: string) => void;
   onSaveEdit: () => void;
   onStartEdit: (comment: PullRequestGeneralComment) => void;
 }) {
@@ -357,7 +375,7 @@ function GeneralCommentCard({
       <div className="review-comment-body source-description-body">
         <div
           className={`review-comment-header read-only general-comment-header${
-            comment.canEdit || editing ? ' with-comment-action' : ''
+            comment.canEdit || comment.canDelete || editing ? ' with-comment-action' : ''
           }`}
         >
           <strong title={`@${comment.author.login}`}>{displayName}</strong>
@@ -381,15 +399,30 @@ function GeneralCommentCard({
                 {editSubmitting ? 'Saving' : 'Save'}
               </button>
             </span>
-          ) : comment.canEdit ? (
-            <button
-              className="review-comment-action"
-              onClick={() => onStartEdit(comment)}
-              type="button"
-            >
-              Edit
-            </button>
-          ) : null}
+          ) : (
+            <>
+              {comment.canEdit ? (
+                <button
+                  className="review-comment-action"
+                  onClick={() => onStartEdit(comment)}
+                  type="button"
+                >
+                  Edit
+                </button>
+              ) : null}
+              {comment.canDelete ? (
+                <button
+                  aria-label="Delete comment"
+                  className="review-comment-delete"
+                  onClick={() => onDelete(comment.id)}
+                  title="Delete comment"
+                  type="button"
+                >
+                  <X aria-hidden className="review-comment-delete-icon" size={14} />
+                </button>
+              ) : null}
+            </>
+          )}
         </div>
         {editing ? (
           <>
@@ -427,6 +460,7 @@ function GeneralCommentCard({
 }
 
 function GeneralCommentThreadCard({
+  canComment,
   editDraft,
   editError,
   editingCommentId,
@@ -435,10 +469,14 @@ function GeneralCommentThreadCard({
   keymap,
   onCancelEdit,
   onChangeEditDraft,
+  onDelete,
+  onReply,
+  onResolve,
   onSaveEdit,
   onStartEdit,
   thread,
 }: {
+  canComment: boolean;
   editDraft: string;
   editError: string | null;
   editingCommentId: string | null;
@@ -447,10 +485,48 @@ function GeneralCommentThreadCard({
   keymap: CodiffKeymap;
   onCancelEdit: () => void;
   onChangeEditDraft: (draft: string) => void;
+  onDelete: (commentId: string) => void;
+  onReply: (threadId: string, body: string) => Promise<void>;
+  onResolve: (threadId: string, resolved: boolean) => Promise<void>;
   onSaveEdit: () => void;
   onStartEdit: (comment: PullRequestGeneralComment) => void;
   thread: PullRequestGeneralCommentThread;
 }) {
+  const [replyDraft, setReplyDraft] = useState('');
+  const [replyError, setReplyError] = useState<string | null>(null);
+  const [replying, setReplying] = useState(false);
+  const [showReply, setShowReply] = useState(false);
+  const [resolving, setResolving] = useState(false);
+  const resolved = thread.isResolved === true;
+  const submitReply = useCallback(() => {
+    const body = replyDraft.trim();
+    if (!body || replying) {
+      return;
+    }
+    setReplyError(null);
+    setReplying(true);
+    void onReply(thread.id, body)
+      .then(() => {
+        setReplyDraft('');
+        setShowReply(false);
+      })
+      .catch((error: unknown) => {
+        setReplyError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setReplying(false));
+  }, [onReply, replyDraft, replying, thread.id]);
+  const toggleResolved = useCallback(() => {
+    if (resolving) {
+      return;
+    }
+    setResolving(true);
+    void onResolve(thread.id, !resolved)
+      .catch((error: unknown) => {
+        window.alert(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setResolving(false));
+  }, [onResolve, resolved, resolving, thread.id]);
+
   return (
     <section className="general-comment-thread">
       {thread.comments.map((comment) => (
@@ -465,10 +541,47 @@ function GeneralCommentThreadCard({
           keymap={keymap}
           onCancelEdit={onCancelEdit}
           onChangeEditDraft={onChangeEditDraft}
+          onDelete={onDelete}
           onSaveEdit={onSaveEdit}
           onStartEdit={onStartEdit}
         />
       ))}
+      {thread.canReply && canComment && !resolved ? (
+        showReply ? (
+          <GeneralCommentComposer
+            disabled={false}
+            draft={replyDraft}
+            error={replyError}
+            gitIdentity={null}
+            keymap={keymap}
+            onChangeDraft={setReplyDraft}
+            onSubmit={submitReply}
+            submitting={replying}
+          />
+        ) : (
+          <div className="review-comment-thread-footer">
+            <button
+              className="review-comment-action"
+              onClick={() => setShowReply(true)}
+              type="button"
+            >
+              Reply
+            </button>
+          </div>
+        )
+      ) : null}
+      {thread.canResolve ? (
+        <div className="review-comment-thread-footer">
+          <button
+            className="review-comment-action"
+            disabled={resolving}
+            onClick={toggleResolved}
+            type="button"
+          >
+            {resolving ? 'Saving' : resolved ? 'Reopen' : 'Resolve'}
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -568,9 +681,7 @@ function GeneralCommentComposer({
               className="review-comment-action"
               disabled={!canSubmit}
               onClick={onSubmit}
-              title={
-                canSubmit ? 'Submit merge request comment' : 'Write a comment before commenting'
-              }
+              title={canSubmit ? 'Submit comment' : 'Write a comment before commenting'}
               type="button"
             >
               <ChatCircle aria-hidden className="review-comment-action-icon" size={14} />
@@ -579,7 +690,7 @@ function GeneralCommentComposer({
           </div>
           <Suspense fallback={<div className="review-comment-input" />}>
             <MarkdownEditor
-              ariaLabel="Add merge request comment"
+              ariaLabel="Add comment"
               className="review-comment-markdown-editor"
               colorScheme="inherit"
               contentClassName="review-comment-input"
@@ -601,6 +712,8 @@ function GeneralCommentComposer({
 }
 
 function MergeRequestCommentsView({
+  canComment,
+  commenting,
   draft,
   editDraft,
   editError,
@@ -610,7 +723,6 @@ function MergeRequestCommentsView({
   focusedCommentId,
   focusedCommentRequest,
   gitIdentity,
-  interactive,
   keymap,
   onCancelEdit,
   onChangeDraft,
@@ -622,6 +734,8 @@ function MergeRequestCommentsView({
   submitting,
   threads,
 }: {
+  canComment: boolean;
+  commenting?: SharedWalkthroughCommenting;
   draft: string;
   editDraft: string;
   editError: string | null;
@@ -631,7 +745,6 @@ function MergeRequestCommentsView({
   focusedCommentId: string | null;
   focusedCommentRequest: number;
   gitIdentity: GitIdentity | null;
-  interactive: boolean;
   keymap: CodiffKeymap;
   onCancelEdit: () => void;
   onChangeDraft: (draft: string) => void;
@@ -667,6 +780,7 @@ function MergeRequestCommentsView({
         <div className="general-comment-list">
           {threads.map((thread) => (
             <GeneralCommentThreadCard
+              canComment={canComment}
               editDraft={editDraft}
               editError={editError}
               editingCommentId={editingCommentId}
@@ -676,6 +790,19 @@ function MergeRequestCommentsView({
               keymap={keymap}
               onCancelEdit={onCancelEdit}
               onChangeEditDraft={onChangeEditDraft}
+              onDelete={(commentId) => {
+                void commenting?.onDeleteGeneralComment(commentId).catch((error: unknown) => {
+                  window.alert(error instanceof Error ? error.message : String(error));
+                });
+              }}
+              onReply={(threadId, body) =>
+                commenting?.onReplyGeneralComment(threadId, body) ??
+                Promise.reject(new Error('Replying is unavailable.'))
+              }
+              onResolve={(threadId, resolved) =>
+                commenting?.onResolveDiscussion(threadId, resolved) ??
+                Promise.reject(new Error('Resolving is unavailable.'))
+              }
               onSaveEdit={onSaveEdit}
               onStartEdit={onStartEdit}
               thread={thread}
@@ -686,13 +813,13 @@ function MergeRequestCommentsView({
         <div className="empty-state">
           <div className="empty-panel squircle">
             <strong>No comments yet</strong>
-            <span>Add a merge request comment to start the discussion.</span>
+            <span>Add a comment to start the discussion.</span>
           </div>
         </div>
       )}
-      {interactive ? (
+      {canComment ? (
         <GeneralCommentComposer
-          disabled={!interactive}
+          disabled={false}
           draft={draft}
           error={error}
           gitIdentity={gitIdentity}
@@ -701,6 +828,12 @@ function MergeRequestCommentsView({
           onSubmit={onSubmit}
           submitting={submitting}
         />
+      ) : commenting ? (
+        <div className="general-comment-sign-in">
+          <button className="codiff-open-button" onClick={commenting.onSignIn} type="button">
+            Sign in with GitLab to comment
+          </button>
+        </div>
       ) : null}
     </div>
   );
@@ -845,6 +978,7 @@ function SharedFileTree({
 }
 
 type ReviewSurfaceProps = {
+  commenting?: SharedWalkthroughCommenting;
   externalUrl?: string;
   gitIdentity?: GitIdentity | null;
   initialMode?: MergeRequestReviewMode;
@@ -864,6 +998,7 @@ type ReviewSurfaceProps = {
     onSubmitReview: (
       event: PullRequestReviewEvent,
       comments: ReadonlyArray<PullRequestReviewComment>,
+      body?: string,
     ) => Promise<void>;
     onUpdateComment: (commentId: string, body: string) => Promise<void>;
     onUpdateDescription?: (body: string) => Promise<void> | void;
@@ -882,6 +1017,7 @@ type ReviewSurfaceProps = {
 };
 
 function ReviewSurface({
+  commenting,
   externalUrl,
   gitIdentity = null,
   initialMode,
@@ -893,6 +1029,14 @@ function ReviewSurface({
   sourceDescriptionFooterAsideKey,
   title,
 }: ReviewSurfaceProps) {
+  const canComment = commenting?.canComment ?? Boolean(interactive);
+  const submitReviewComment = commenting?.onSubmitComment ?? interactive?.onSubmitComment;
+  const submitGeneralDiscussion =
+    commenting?.onSubmitGeneralComment ?? interactive?.onSubmitGeneralComment;
+  const updateReviewComment = commenting?.onUpdateComment ?? interactive?.onUpdateComment;
+  const updateGeneralDiscussion =
+    commenting?.onUpdateGeneralComment ?? interactive?.onUpdateGeneralComment;
+  const resolveDiscussion = commenting?.onResolveDiscussion ?? interactive?.onResolveDiscussion;
   const sharedWalkthrough = useMemo(
     () => ({
       ...snapshot.walkthrough,
@@ -983,6 +1127,14 @@ function ReviewSurface({
       ),
     [fileSearchQuery, snapshot.files, snapshot.preferences.showWhitespace],
   );
+  const totalLineCount = useMemo(
+    () =>
+      getTotalDiffLineCount(
+        visibleFiles.map((file) => getDiffLineCount(file, snapshot.preferences.showWhitespace)),
+      ),
+    [snapshot.preferences.showWhitespace, visibleFiles],
+  );
+  const showTotalLineCount = sidebarMode !== 'comments' && totalLineCount.countable;
   const visibleSelectedPath =
     selectedPath && visibleFiles.some((file) => file.path === selectedPath)
       ? selectedPath
@@ -1043,7 +1195,7 @@ function ReviewSurface({
 
   const createComment = useCallback(
     (comment: Omit<ReviewComment, 'body' | 'id'>) => {
-      if (!interactive) {
+      if (!canComment) {
         return;
       }
 
@@ -1086,7 +1238,7 @@ function ReviewSurface({
       setLocalReviewComments((current) => [...current, { ...comment, body: '', id }]);
       bumpItemVersion(comment.filePath);
     },
-    [bumpItemVersion, interactive],
+    [bumpItemVersion, canComment],
   );
   const activateGeneralComment = useCallback(
     (commentId: string) => {
@@ -1128,21 +1280,27 @@ function ReviewSurface({
   }, []);
   const updateExistingReviewComment = useCallback(
     async (commentId: string, body: string) => {
-      if (!interactive) {
+      if (!updateReviewComment) {
         return;
       }
       const comment = reviewCommentsRef.current.find((candidate) => candidate.id === commentId);
-      await interactive.onUpdateComment(commentId, body);
+      await updateReviewComment(commentId, body);
       setEditedReviewCommentBodies((current) => ({ ...current, [commentId]: body }));
       if (comment) {
         bumpItemVersion(comment.filePath);
       }
     },
-    [bumpItemVersion, interactive],
+    [bumpItemVersion, updateReviewComment],
   );
   const deleteComment = useCallback(
     (commentId: string) => {
       const comment = reviewCommentsRef.current.find((candidate) => candidate.id === commentId);
+      if (comment?.isReadOnly && comment.canDelete && commenting?.onDeleteComment) {
+        void commenting.onDeleteComment(commentId).catch((error: unknown) => {
+          window.alert(error instanceof Error ? error.message : String(error));
+        });
+        return;
+      }
       setFocusCommentId((current) => (current === commentId ? null : current));
       setLocalReviewComments((current) =>
         current.filter((candidate) => candidate.id !== commentId),
@@ -1151,13 +1309,13 @@ function ReviewSurface({
         bumpItemVersion(comment.filePath);
       }
     },
-    [bumpItemVersion],
+    [bumpItemVersion, commenting],
   );
   const submitComment = useCallback(
     (commentId: string) => {
       const comment = reviewCommentsRef.current.find((candidate) => candidate.id === commentId);
       if (
-        !interactive ||
+        !submitReviewComment ||
         !comment ||
         comment.isReadOnly ||
         !comment.body.trim() ||
@@ -1173,8 +1331,7 @@ function ReviewSurface({
             : candidate,
         ),
       );
-      void interactive
-        .onSubmitComment(toPullRequestReviewComment(comment))
+      void submitReviewComment(toPullRequestReviewComment(comment))
         .then(() => {
           setFocusCommentId((current) => (current === commentId ? null : current));
           setLocalReviewComments((current) =>
@@ -1199,10 +1356,10 @@ function ReviewSurface({
           bumpItemVersion(comment.filePath);
         });
     },
-    [bumpItemVersion, interactive],
+    [bumpItemVersion, submitReviewComment],
   );
   const submitReview = useCallback(
-    (event: PullRequestReviewEvent) => {
+    (event: PullRequestReviewEvent, body?: string) => {
       const source = snapshot.repository.source;
       if (
         !interactive ||
@@ -1218,8 +1375,11 @@ function ReviewSurface({
       );
       const pendingIds = new Set(pendingComments.map((comment) => comment.id));
       setPullRequestReviewSubmitting(event);
-      void interactive
-        .onSubmitReview(event, pendingComments.map(toPullRequestReviewComment))
+      const formattedComments = pendingComments.map(toPullRequestReviewComment);
+      const submission = body
+        ? interactive.onSubmitReview(event, formattedComments, body)
+        : interactive.onSubmitReview(event, formattedComments);
+      void submission
         .then(() => {
           setLocalReviewComments((current) =>
             current.filter((comment) => !pendingIds.has(comment.id)),
@@ -1351,19 +1511,19 @@ function ReviewSurface({
   }, [generalComments.length, navigateGeneralComment, sidebarMode]);
   const submitGeneralComment = useCallback(() => {
     const body = generalCommentDraft.trim();
-    if (!interactive || !body || generalCommentSubmitting) {
+    if (!submitGeneralDiscussion || !body || generalCommentSubmitting) {
       return;
     }
 
     setGeneralCommentError(null);
     setGeneralCommentSubmitting(true);
-    void Promise.resolve(interactive.onSubmitGeneralComment(body))
+    void Promise.resolve(submitGeneralDiscussion(body))
       .then(() => setGeneralCommentDraft(''))
       .catch((error: unknown) => {
         setGeneralCommentError(error instanceof Error ? error.message : String(error));
       })
       .finally(() => setGeneralCommentSubmitting(false));
-  }, [generalCommentDraft, generalCommentSubmitting, interactive]);
+  }, [generalCommentDraft, generalCommentSubmitting, submitGeneralDiscussion]);
   const startEditGeneralComment = useCallback((comment: PullRequestGeneralComment) => {
     if (!comment.canEdit) {
       return;
@@ -1385,13 +1545,13 @@ function ReviewSurface({
   const saveGeneralCommentEdit = useCallback(() => {
     const commentId = editingGeneralCommentId;
     const body = generalCommentEditDraft.trim();
-    if (!interactive || !commentId || !body || generalCommentEditSubmitting) {
+    if (!updateGeneralDiscussion || !commentId || !body || generalCommentEditSubmitting) {
       return;
     }
 
     setGeneralCommentEditError(null);
     setGeneralCommentEditSubmitting(true);
-    void Promise.resolve(interactive.onUpdateGeneralComment(commentId, body))
+    void Promise.resolve(updateGeneralDiscussion(commentId, body))
       .then(() => {
         setEditingGeneralCommentId(null);
         setGeneralCommentEditDraft('');
@@ -1400,7 +1560,12 @@ function ReviewSurface({
         setGeneralCommentEditError(error instanceof Error ? error.message : String(error));
       })
       .finally(() => setGeneralCommentEditSubmitting(false));
-  }, [editingGeneralCommentId, generalCommentEditDraft, generalCommentEditSubmitting, interactive]);
+  }, [
+    editingGeneralCommentId,
+    generalCommentEditDraft,
+    generalCommentEditSubmitting,
+    updateGeneralDiscussion,
+  ]);
   const resizeSidebar = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) {
       return;
@@ -1526,14 +1691,14 @@ function ReviewSurface({
     hunkNavigation: null,
     initialMarkdownPreviewSectionIds,
     isPullRequest: snapshot.repository.source.type === 'pull-request',
-    isReadOnly: !interactive,
+    isReadOnly: !canComment,
     itemVersionByKey,
     keymap,
     loadingSectionIds: new Set<string>(),
     onCreateComment: createComment,
     onDeleteComment: deleteComment,
     onLoadSection: noop,
-    onResolveThread: interactive?.onResolveDiscussion ?? noop,
+    onResolveThread: resolveDiscussion ?? noop,
     onSaveCommentEdit: updateExistingReviewComment,
     onSelectPathFromScroll: noop,
     onSubmitComment: submitComment,
@@ -1762,7 +1927,7 @@ function ReviewSurface({
           >
             Walkthrough
           </button>
-          {interactive || generalCommentCount > 0 ? (
+          {commenting || interactive || generalCommentCount > 0 ? (
             <button
               aria-label={
                 generalCommentCount > 0 ? `Comments (${generalCommentCount})` : 'Comments'
@@ -1826,12 +1991,25 @@ function ReviewSurface({
             </div>
           </div>
         )}
-        {settingsBar ? <div className="sidebar-settings-bar">{settingsBar}</div> : null}
+        {settingsBar || showTotalLineCount ? (
+          <div className="sidebar-settings-bar">
+            {settingsBar}
+            {showTotalLineCount ? (
+              <DiffLineCountBadge
+                ariaLabelPrefix="Total change"
+                className="sidebar-total-line-count sidebar-settings-line-count"
+                lineCount={totalLineCount}
+              />
+            ) : null}
+          </div>
+        ) : null}
       </aside>
       <div aria-hidden className="sidebar-resizer" onPointerDown={resizeSidebar} />
       <main className="review codiff-web-review">
         {sidebarMode === 'comments' ? (
           <MergeRequestCommentsView
+            canComment={canComment}
+            commenting={commenting}
             draft={generalCommentDraft}
             editDraft={generalCommentEditDraft}
             editError={generalCommentEditError}
@@ -1841,7 +2019,6 @@ function ReviewSurface({
             focusedCommentId={focusedGeneralCommentId}
             focusedCommentRequest={generalCommentScrollRequest}
             gitIdentity={gitIdentity}
-            interactive={Boolean(interactive)}
             keymap={keymap}
             onCancelEdit={cancelEditGeneralComment}
             onChangeDraft={setGeneralCommentDraft}
@@ -1915,13 +2092,24 @@ function ReviewSurface({
 }
 
 export function SharedWalkthroughApp({
+  commenting,
+  gitIdentity,
   settingsBar,
   snapshot,
 }: {
+  commenting?: SharedWalkthroughCommenting;
+  gitIdentity?: GitIdentity | null;
   settingsBar?: ReactNode;
   snapshot: SharedWalkthroughSnapshot;
 }) {
-  return <ReviewSurface settingsBar={settingsBar} snapshot={snapshot} />;
+  return (
+    <ReviewSurface
+      commenting={commenting}
+      gitIdentity={gitIdentity}
+      settingsBar={settingsBar}
+      snapshot={snapshot}
+    />
+  );
 }
 
 export function MergeRequestReviewApp({

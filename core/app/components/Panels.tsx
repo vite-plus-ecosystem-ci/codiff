@@ -1,3 +1,4 @@
+import { MarkdownEditor, type MarkdownEditorHandle } from '@nkzw/mdx-editor';
 import { CaretDownIcon as CaretDown } from '@phosphor-icons/react/CaretDown';
 import { CaretUpIcon as CaretUp } from '@phosphor-icons/react/CaretUp';
 import { CheckIcon as Check } from '@phosphor-icons/react/Check';
@@ -10,6 +11,7 @@ import { Copy as LucideCopy } from 'lucide-react';
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -369,6 +371,175 @@ const getPullRequestReviewActionTitle = (
   fallback: string,
 ) => getPullRequestReviewActionStatus(reviewStatus, event)?.reason ?? fallback;
 
+function PullRequestReviewAction({
+  disabled,
+  event,
+  icon,
+  label,
+  onSubmitReview,
+  title,
+}: {
+  disabled: boolean;
+  event: PullRequestReviewEvent;
+  icon: ReactNode;
+  label: string;
+  onSubmitReview: (event: PullRequestReviewEvent, body?: string) => void;
+  title: string;
+}) {
+  const [body, setBody] = useState('');
+  const [open, setOpen] = useState(false);
+  const [previousDisabled, setPreviousDisabled] = useState(disabled);
+  const editorRef = useRef<MarkdownEditorHandle>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const popoverId = useId();
+  const trimmedBody = body.trim();
+  const isApprove = event === 'APPROVE';
+  const commentLabel = isApprove ? 'Add approval comment' : 'Add request changes comment';
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      editorRef.current?.focus({ defaultSelection: 'rootEnd', preventScroll: true });
+    });
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false);
+      }
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      // oxlint-disable-next-line @nkzw/no-instanceof
+      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [open]);
+
+  if (disabled !== previousDisabled) {
+    setPreviousDisabled(disabled);
+    if (disabled) {
+      setOpen(false);
+    }
+  }
+
+  const submitWithComment = useCallback(() => {
+    if (disabled || !trimmedBody) {
+      return;
+    }
+    onSubmitReview(event, trimmedBody);
+    setBody('');
+    setOpen(false);
+  }, [disabled, event, onSubmitReview, trimmedBody]);
+
+  const handleEditorKeyDown = useCallback(
+    (keyboardEvent: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (
+        keyboardEvent.key !== 'Enter' ||
+        (!keyboardEvent.metaKey && !keyboardEvent.ctrlKey) ||
+        !trimmedBody
+      ) {
+        return;
+      }
+      keyboardEvent.preventDefault();
+      keyboardEvent.stopPropagation();
+      submitWithComment();
+    },
+    [submitWithComment, trimmedBody],
+  );
+
+  return (
+    <div className="review-submit-action" ref={rootRef}>
+      <div
+        className={`codiff-open-button review-submit-button ${
+          isApprove ? 'approve' : 'request-changes'
+        }`}
+        data-disabled={disabled || undefined}
+      >
+        <button
+          aria-label={isApprove ? 'Approve review' : 'Request changes'}
+          className="review-submit-primary"
+          disabled={disabled}
+          onClick={() => {
+            setOpen(false);
+            onSubmitReview(event);
+          }}
+          title={title}
+          type="button"
+        >
+          {icon}
+          <span>{label}</span>
+        </button>
+        <span aria-hidden className="review-submit-divider">
+          |
+        </span>
+        <button
+          aria-controls={popoverId}
+          aria-expanded={open}
+          aria-label={commentLabel}
+          className="review-submit-toggle"
+          disabled={disabled}
+          onClick={() => setOpen((current) => !current)}
+          title={commentLabel}
+          type="button"
+        >
+          <CaretDown
+            aria-hidden
+            className={`review-submit-chevron${open ? ' expanded' : ''}`}
+            size={13}
+            weight="bold"
+          />
+        </button>
+      </div>
+      {open ? (
+        <div
+          aria-label={`${label} with comment`}
+          className="review-submit-popover"
+          id={popoverId}
+          role="group"
+        >
+          <MarkdownEditor
+            ariaLabel={commentLabel}
+            className="review-comment-markdown-editor review-submit-popover-editor"
+            colorScheme="inherit"
+            contentClassName="review-comment-input general-comment-input"
+            density="compact"
+            onChange={setBody}
+            onKeyDown={handleEditorKeyDown}
+            placeholder={isApprove ? 'Add an approval comment…' : 'Add a change request comment…'}
+            readOnly={disabled}
+            ref={editorRef}
+            spellCheck
+            value={body}
+            variant="embedded"
+          />
+          <div className="review-submit-popover-footer">
+            <button
+              className={`codiff-open-button review-submit-popover-submit ${
+                isApprove ? 'approve' : 'request-changes'
+              }`}
+              disabled={disabled || !trimmedBody}
+              onClick={submitWithComment}
+              type="button"
+            >
+              {icon}
+              <span>{label}</span>
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function PullRequestReviewButtons({
   children,
   disabled,
@@ -379,7 +550,7 @@ export function PullRequestReviewButtons({
   children?: ReactNode;
   disabled: boolean;
   onClosePullRequest?: () => void;
-  onSubmitReview: (event: PullRequestReviewEvent) => void;
+  onSubmitReview: (event: PullRequestReviewEvent, body?: string) => void;
   reviewStatus?: PullRequestReviewStatus;
 }) {
   const approveBlocked = isPullRequestReviewActionDisabled(reviewStatus, 'APPROVE');
@@ -398,39 +569,37 @@ export function PullRequestReviewButtons({
     >
       {children}
       {!approveBlocked ? (
-        <button
-          aria-label="Approve review"
-          className="codiff-open-button review-submit-button approve"
+        <PullRequestReviewAction
           disabled={disabled}
-          onClick={() => onSubmitReview('APPROVE')}
+          event="APPROVE"
+          icon={
+            <Check aria-hidden className="review-submit-icon approve" size={15} weight="bold" />
+          }
+          label="Approve"
+          onSubmitReview={onSubmitReview}
           title={getPullRequestReviewActionTitle(reviewStatus, 'APPROVE', 'Approve review')}
-          type="button"
-        >
-          <Check aria-hidden className="review-submit-icon approve" size={15} weight="bold" />
-          <span>Approve</span>
-        </button>
+        />
       ) : null}
       {!requestChangesBlocked ? (
-        <button
-          aria-label="Request changes"
-          className="codiff-open-button review-submit-button request-changes"
+        <PullRequestReviewAction
           disabled={disabled}
-          onClick={() => onSubmitReview('REQUEST_CHANGES')}
+          event="REQUEST_CHANGES"
+          icon={
+            <SealQuestion
+              aria-hidden
+              className="review-submit-icon request-changes"
+              size={15}
+              weight="bold"
+            />
+          }
+          label="Request Changes"
+          onSubmitReview={onSubmitReview}
           title={getPullRequestReviewActionTitle(
             reviewStatus,
             'REQUEST_CHANGES',
             'Request changes',
           )}
-          type="button"
-        >
-          <SealQuestion
-            aria-hidden
-            className="review-submit-icon request-changes"
-            size={15}
-            weight="bold"
-          />
-          <span>Request Changes</span>
-        </button>
+        />
       ) : null}
       {closeVisible ? (
         <button

@@ -54,6 +54,33 @@ export type WalkthroughBlockScrollTarget = {
   request: number;
 };
 
+export const getWalkthroughBlockScrollTarget = ({
+  activeBlockId,
+  firstSupportBlockId,
+  mode,
+  stopScrollRequest,
+  supportScrollRequest,
+}: {
+  activeBlockId: string | null | undefined;
+  firstSupportBlockId: string | null;
+  mode: NarrativeNavigation['mode'];
+  stopScrollRequest: number;
+  supportScrollRequest: number;
+}): WalkthroughBlockScrollTarget | null =>
+  mode === 'support' && firstSupportBlockId
+    ? {
+        behavior: 'smooth',
+        blockId: firstSupportBlockId,
+        request: supportScrollRequest,
+      }
+    : mode === 'stop' && activeBlockId && stopScrollRequest > 0
+      ? {
+          behavior: 'smooth',
+          blockId: activeBlockId,
+          request: stopScrollRequest,
+        }
+      : null;
+
 const getFocusedRunDiffs = (
   item: WalkthroughHunkGroup,
   files: ReadonlyArray<ChangedFile>,
@@ -609,20 +636,13 @@ export function NarrativeWalkthroughView({
     [supportBlocks, walkthroughBlocks.blocks],
   );
   const activeBlockId = walkthroughBlocks.firstBlockIdByStop[navigation.scrollTarget.index];
-  const reviewBlockScrollTarget: WalkthroughBlockScrollTarget | null =
-    navigation.mode === 'support' && firstSupportBlockId
-      ? {
-          behavior: 'smooth',
-          blockId: firstSupportBlockId,
-          request: navigation.supportScrollRequest,
-        }
-      : navigation.mode === 'stop' && activeBlockId
-        ? {
-            behavior: 'smooth',
-            blockId: activeBlockId,
-            request: navigation.scrollTarget.nonce,
-          }
-        : null;
+  const reviewBlockScrollTarget = getWalkthroughBlockScrollTarget({
+    activeBlockId,
+    firstSupportBlockId,
+    mode: navigation.mode,
+    stopScrollRequest: navigation.scrollTarget.nonce,
+    supportScrollRequest: navigation.supportScrollRequest,
+  });
   const handleActiveBlockChange = useCallback(
     (blockId: string) => {
       onActiveReviewTargetChange(getBlockReviewTarget(reviewBlocks, blockId));

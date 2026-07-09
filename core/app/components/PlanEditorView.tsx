@@ -49,6 +49,7 @@ const getAuthor = (identity: GitIdentity | null): PlanCommentAuthor => {
   return {
     ...(identity?.email ? { email: identity.email } : {}),
     ...(identity?.gravatarUrl ? { avatarUrl: identity.gravatarUrl } : {}),
+    ...(identity?.username ? { username: identity.username } : {}),
     id: identity?.email || 'local-user',
     name,
   };

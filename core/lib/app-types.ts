@@ -84,7 +84,9 @@ export type ReviewComment = {
   anchor?: 'file' | 'line';
   author?: PullRequestExistingReviewComment['author'];
   body: string;
+  canDelete?: boolean;
   canEdit?: boolean;
+  canReplyThread?: boolean;
   canResolveThread?: boolean;
   codexReply?: {
     body?: string;

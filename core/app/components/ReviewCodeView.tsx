@@ -591,7 +591,6 @@ function SourceDescriptionHeader({
       <span className="codiff-file-path-row">
         <SourceDescriptionTitle
           canEdit={editableTitle}
-          key={title}
           label={label}
           onUpdateTitle={onUpdateTitle}
           title={title}
@@ -1578,6 +1577,7 @@ function ReviewCommentEditor({
             className={`review-comment-header${
               (isPullRequest && !comment.isReadOnly) ||
               canEditExistingComment ||
+              comment.canDelete ||
               editingExistingComment
                 ? ' with-comment-action'
                 : ''
@@ -1612,6 +1612,17 @@ function ReviewCommentEditor({
                 type="button"
               >
                 Edit
+              </button>
+            ) : null}
+            {comment.isReadOnly && comment.canDelete ? (
+              <button
+                aria-label="Delete comment"
+                className="review-comment-delete"
+                onClick={() => onDeleteComment(comment.id)}
+                title="Delete comment"
+                type="button"
+              >
+                <X aria-hidden className="review-comment-delete-icon" size={14} weight="bold" />
               </button>
             ) : null}
             {!comment.isReadOnly && onAskCodex ? (
@@ -1859,16 +1870,18 @@ function ReviewCommentThreadGroup({
   }>({ error: null, submitting: false, threadId: null });
   const lastComment = comments.at(-1);
   const threadId = lastComment?.threadId;
+  const threadResolved = comments.some((comment) => comment.isThreadResolved === true);
   const canResolveThread =
     isPullRequest &&
     threadId != null &&
-    comments.some((comment) => comment.canResolveThread === true) &&
-    !comments.some((comment) => comment.isThreadResolved === true);
+    comments.some((comment) => comment.canResolveThread === true);
   const canReplyToThread =
     isPullRequest &&
     threadId != null &&
     comments.some((comment) => comment.isReadOnly) &&
-    !comments.some((comment) => !comment.isReadOnly);
+    !comments.some((comment) => !comment.isReadOnly) &&
+    !comments.some((comment) => comment.canReplyThread === false) &&
+    !threadResolved;
   const hasThreadActions = canReplyToThread || canResolveThread;
   const resolving = resolveState.threadId === threadId && resolveState.submitting;
   const resolveError = resolveState.threadId === threadId ? resolveState.error : null;
@@ -1885,7 +1898,7 @@ function ReviewCommentThreadGroup({
       return;
     }
     setResolveState({ error: null, submitting: true, threadId });
-    void Promise.resolve(onResolveThread(threadId, true))
+    void Promise.resolve(onResolveThread(threadId, !threadResolved))
       .then(() => setResolveState({ error: null, submitting: false, threadId }))
       .catch((error: unknown) => {
         setResolveState({
@@ -1894,7 +1907,7 @@ function ReviewCommentThreadGroup({
           threadId,
         });
       });
-  }, [onResolveThread, resolving, threadId]);
+  }, [onResolveThread, resolving, threadId, threadResolved]);
 
   return (
     <div className="review-comment-thread-group">
@@ -1947,7 +1960,7 @@ function ReviewCommentThreadGroup({
                 onClick={handleResolve}
                 type="button"
               >
-                {resolving ? 'Resolving' : 'Resolve'}
+                {resolving ? 'Saving' : threadResolved ? 'Reopen' : 'Resolve'}
               </button>
             ) : null}
           </div>

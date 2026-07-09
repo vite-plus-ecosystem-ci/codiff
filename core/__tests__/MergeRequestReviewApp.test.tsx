@@ -99,6 +99,62 @@ test('merge request review shells expose explicit theme preferences for scoped C
   }
 });
 
+test('merge request sidebars show total line counts in tree and walkthrough modes', async () => {
+  const originalScrollBy = HTMLElement.prototype.scrollBy;
+  HTMLElement.prototype.scrollBy = vi.fn() as typeof HTMLElement.prototype.scrollBy;
+  const view = await renderReact(
+    <MergeRequestReviewApp
+      externalUrl={state.source.url}
+      onGenerateWalkthrough={vi.fn()}
+      onHome={vi.fn()}
+      onSubmitComment={vi.fn()}
+      onSubmitGeneralComment={vi.fn()}
+      onSubmitReview={vi.fn()}
+      onUpdateComment={vi.fn()}
+      onUpdateGeneralComment={vi.fn()}
+      settingsBar={<button aria-label="Settings" type="button" />}
+      state={{
+        ...state,
+        files: [
+          createChangedFile('src/app.ts', {
+            kind: 'pull-request',
+            patch: 'diff --git a/src/app.ts b/src/app.ts\n@@ -1,2 +1,3 @@\n-old\n+new\n+extra\n',
+          }),
+          createChangedFile('src/other.ts', {
+            kind: 'pull-request',
+            patch:
+              'diff --git a/src/other.ts b/src/other.ts\n@@ -1 +1,2 @@\n-before\n+after\n+next\n',
+          }),
+        ],
+      }}
+      title="Review in Codiff"
+      walkthrough={walkthrough}
+      walkthroughStatus="ready"
+    />,
+  );
+
+  try {
+    const getTotal = () =>
+      view.container.querySelector<HTMLElement>(
+        '[aria-label="Total change: 4 added lines, 2 removed lines"]',
+      );
+    expect(getTotal()?.textContent).toBe('+4-2');
+    expect(getTotal()?.closest('.sidebar-settings-bar')).not.toBeNull();
+    expect(getTotal()?.closest('.sidebar-total-row')).toBeNull();
+    expect(getTotal()?.closest('.sidebar-settings-bar')?.textContent).not.toContain('Total:');
+
+    const tabs = view.container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    await act(async () => tabs[1]?.click());
+    expect(getTotal()?.textContent).toBe('+4-2');
+
+    await act(async () => tabs[2]?.click());
+    expect(getTotal()).toBeNull();
+  } finally {
+    HTMLElement.prototype.scrollBy = originalScrollBy;
+    await view.cleanup();
+  }
+});
+
 test('merge request reviews expose navigation, actions, and lazy walkthrough generation', async () => {
   const onGenerateWalkthrough = vi.fn();
   const onHome = vi.fn();
@@ -160,7 +216,10 @@ test('merge request reviews expose navigation, actions, and lazy walkthrough gen
     );
     expect(approve?.closest('.codiff-source-description-header')).not.toBeNull();
     expect(approve?.closest('.review-action-bar')).toBeNull();
-    expect(approve?.classList.contains('codiff-open-button')).toBe(true);
+    expect(approve?.classList.contains('codiff-open-button')).toBe(false);
+    expect(
+      approve?.closest('.review-submit-button')?.classList.contains('codiff-open-button'),
+    ).toBe(true);
     await act(async () => approve?.click());
     expect(onSubmitReview).toHaveBeenCalledWith('APPROVE', []);
 
@@ -169,7 +228,10 @@ test('merge request reviews expose navigation, actions, and lazy walkthrough gen
     );
     expect(requestChanges?.closest('.codiff-source-description-header')).not.toBeNull();
     expect(requestChanges?.closest('.review-action-bar')).toBeNull();
-    expect(requestChanges?.classList.contains('codiff-open-button')).toBe(true);
+    expect(requestChanges?.classList.contains('codiff-open-button')).toBe(false);
+    expect(
+      requestChanges?.closest('.review-submit-button')?.classList.contains('codiff-open-button'),
+    ).toBe(true);
     await act(async () => requestChanges?.click());
     expect(onSubmitReview).toHaveBeenLastCalledWith('REQUEST_CHANGES', []);
 
@@ -190,7 +252,7 @@ test('merge request reviews expose navigation, actions, and lazy walkthrough gen
 test('merge request source descriptions use comment editing controls when editable', async () => {
   const onUpdateDescription = vi.fn(async () => {});
   const onUpdateTitle = vi.fn(async () => {});
-  const view = await renderReact(
+  const renderEditableReview = (sourceTitle = state.source.title) => (
     <MergeRequestReviewApp
       externalUrl={state.source.url}
       onGenerateWalkthrough={vi.fn()}
@@ -208,13 +270,15 @@ test('merge request source descriptions use comment editing controls when editab
           ...state.source,
           canEditDescription: true,
           canEditTitle: true,
+          title: sourceTitle,
         },
       }}
       title="Review in Codiff"
       walkthrough={null}
       walkthroughStatus="idle"
-    />,
+    />
   );
+  const view = await renderReact(renderEditableReview());
 
   try {
     await waitFor(() => {
@@ -228,6 +292,7 @@ test('merge request source descriptions use comment editing controls when editab
     });
     const title = view.container.querySelector<HTMLTextAreaElement>('[aria-label="Edit title"]');
     expect(title).not.toBeNull();
+    title!.focus();
     await setInputValue(title!, 'Updated review title');
     await act(async () => {
       title!.dispatchEvent(new Event('change', { bubbles: true }));
@@ -239,6 +304,9 @@ test('merge request source descriptions use comment editing controls when editab
       await Promise.resolve();
     });
     expect(onUpdateTitle).toHaveBeenCalledWith('Updated review title');
+    await view.rerender(renderEditableReview('Updated review title'));
+    expect(view.container.querySelector('[aria-label="Edit title"]')).toBe(title);
+    expect(document.activeElement).toBe(title);
     const edit = view.container.querySelector<HTMLButtonElement>(
       '.source-description-author-header .review-comment-action',
     );

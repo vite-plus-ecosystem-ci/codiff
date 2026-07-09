@@ -1,5 +1,8 @@
 import { expect, test } from 'vite-plus/test';
-import { getWalkthroughNavigationKeyDirection } from '../app/components/walkthrough/NarrativeWalkthroughView.tsx';
+import {
+  getWalkthroughBlockScrollTarget,
+  getWalkthroughNavigationKeyDirection,
+} from '../app/components/walkthrough/NarrativeWalkthroughView.tsx';
 import { parseSectionDiffWithOptions } from '../lib/diff.ts';
 import {
   buildCommitModel,
@@ -212,6 +215,44 @@ test('walkthrough keyboard navigation ignores editor shortcut chords', () => {
   expect(getWalkthroughNavigationKeyDirection(keyEvent('k', { metaKey: true }))).toBe(0);
   expect(getWalkthroughNavigationKeyDirection(keyEvent('k', { ctrlKey: true }))).toBe(0);
   expect(getWalkthroughNavigationKeyDirection(keyEvent('j', { shiftKey: true }))).toBe(0);
+});
+
+test('walkthrough scrolling skips the initial stop but keeps explicit navigation', () => {
+  expect(
+    getWalkthroughBlockScrollTarget({
+      activeBlockId: 'walkthrough:first',
+      firstSupportBlockId: null,
+      mode: 'stop',
+      stopScrollRequest: 0,
+      supportScrollRequest: 0,
+    }),
+  ).toBeNull();
+  expect(
+    getWalkthroughBlockScrollTarget({
+      activeBlockId: 'walkthrough:first',
+      firstSupportBlockId: null,
+      mode: 'stop',
+      stopScrollRequest: 1,
+      supportScrollRequest: 0,
+    }),
+  ).toEqual({
+    behavior: 'smooth',
+    blockId: 'walkthrough:first',
+    request: 1,
+  });
+  expect(
+    getWalkthroughBlockScrollTarget({
+      activeBlockId: 'walkthrough:first',
+      firstSupportBlockId: 'walkthrough:support',
+      mode: 'support',
+      stopScrollRequest: 0,
+      supportScrollRequest: 1,
+    }),
+  ).toEqual({
+    behavior: 'smooth',
+    blockId: 'walkthrough:support',
+    request: 1,
+  });
 });
 
 test('formatWalkthroughFileLineRows gives each visible file its own count', () => {

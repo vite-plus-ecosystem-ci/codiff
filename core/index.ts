@@ -1,4 +1,11 @@
-export { SharedPlanApp } from './SharedPlanApp.tsx';
+export {
+  getPlanCommentAffordancePosition,
+  getPlanCommentColorIndex,
+  getPlanCommentIdentityColorIndex,
+  getSharedPlanDownloadContent,
+  SharedPlanApp,
+  type SharedPlanCommenting,
+} from './SharedPlanApp.tsx';
 export {
   MergeRequestReviewApp,
   ReadOnlyGeneralCommentCard,
@@ -6,6 +13,7 @@ export {
   type MergeRequestReviewAppProps,
   type MergeRequestReviewMode,
   type MergeRequestWalkthroughStatus,
+  type SharedWalkthroughCommenting,
 } from './SharedWalkthroughApp.tsx';
 export type {
   ChangedFile,
@@ -14,6 +22,7 @@ export type {
   DiffSection,
   GitIdentity,
   NarrativeWalkthrough,
+  PlanCommentThread,
   PullRequestGeneralComment,
   PullRequestGeneralCommentThread,
   PullRequestExistingReviewComment,

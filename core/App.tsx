@@ -2306,7 +2306,7 @@ export default function App() {
   );
 
   const submitPullRequestReview = useCallback(
-    (event: PullRequestReviewEvent) => {
+    (event: PullRequestReviewEvent, body?: string) => {
       const currentState = stateRef.current;
       if (
         currentState?.source.type !== 'pull-request' ||
@@ -2323,6 +2323,7 @@ export default function App() {
       setPullRequestReviewSubmitting(event);
       void window.codiff
         .submitPullRequestReview({
+          ...(body ? { body } : {}),
           comments: pendingComments.map(toPullRequestReviewComment),
           event,
           source: currentState.source,
