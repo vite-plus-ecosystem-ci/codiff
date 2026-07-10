@@ -170,7 +170,6 @@ export type MergeRequestReviewAppProps = {
   >;
   settingsBar?: ReactNode;
   sourceDescriptionFooterAside?: ReactNode;
-  sourceDescriptionFooterAsideKey?: string;
   state: RepositoryState;
   title: string;
   walkthrough: NarrativeWalkthrough | null;
@@ -1012,7 +1011,6 @@ type ReviewSurfaceProps = {
   settingsBar?: ReactNode;
   snapshot: SharedWalkthroughSnapshot;
   sourceDescriptionFooterAside?: ReactNode;
-  sourceDescriptionFooterAsideKey?: string;
   title?: string;
 };
 
@@ -1026,7 +1024,6 @@ function ReviewSurface({
   settingsBar,
   snapshot,
   sourceDescriptionFooterAside,
-  sourceDescriptionFooterAsideKey,
   title,
 }: ReviewSurfaceProps) {
   const canComment = commenting?.canComment ?? Boolean(interactive);
@@ -1774,28 +1771,6 @@ function ReviewSurface({
     ) : (
       (sourceDescriptionFooterMain ?? sourceDescriptionFooterAside)
     );
-  const sourceDescriptionFooterKey =
-    interactive && sourceMergeState && !isTerminalMergeState
-      ? [
-          'merge',
-          pullRequestMergeSubmitting ? 'submitting' : 'idle',
-          sourceMergeState.sha,
-          String(sourceMergeState.autoMergeEnabled),
-          String(sourceMergeState.canCancelAutoMerge),
-          String(sourceMergeState.canMerge),
-          String(sourceMergeState.canSetAutoMerge),
-          sourceMergeState.status,
-          sourceMergeState.statusLabel,
-          String(sourceMergeState.options.removeSourceBranch),
-          String(sourceMergeState.options.squash),
-          ...sourceMergeState.checks.map(
-            (check) => `${check.status}:${check.label}:${check.detail ?? ''}:${check.url ?? ''}`,
-          ),
-          sourceDescriptionFooterAsideKey ? `aside:${sourceDescriptionFooterAsideKey}` : '',
-        ].join('|')
-      : sourceDescriptionFooter
-        ? (sourceDescriptionFooterAsideKey ?? 'custom')
-        : '';
   const sourceDescription =
     source.type === 'pull-request' ? (
       <PullRequestSourceDescription
@@ -1829,7 +1804,6 @@ function ReviewSurface({
           showSourceDescription
           sourceDescriptionActions={sourceDescriptionActions}
           sourceDescriptionFooter={sourceDescriptionFooter}
-          sourceDescriptionFooterKey={sourceDescriptionFooterKey}
           walkthroughNotes={emptyWalkthroughNotes}
         />
       </div>
@@ -2065,7 +2039,6 @@ function ReviewSurface({
               selectedPath={visibleSelectedPath}
               sourceDescriptionActions={sourceDescriptionActions}
               sourceDescriptionFooter={sourceDescriptionFooter}
-              sourceDescriptionFooterKey={sourceDescriptionFooterKey}
               walkthroughNotes={emptyWalkthroughNotes}
             />
           )
@@ -2150,7 +2123,6 @@ export function MergeRequestReviewApp({
   preferences,
   settingsBar,
   sourceDescriptionFooterAside,
-  sourceDescriptionFooterAsideKey,
   state,
   title,
   walkthrough,
@@ -2230,7 +2202,6 @@ export function MergeRequestReviewApp({
       settingsBar={settingsBar}
       snapshot={snapshot}
       sourceDescriptionFooterAside={sourceDescriptionFooterAside}
-      sourceDescriptionFooterAsideKey={sourceDescriptionFooterAsideKey}
       title={title}
     />
   );

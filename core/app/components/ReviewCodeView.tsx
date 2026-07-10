@@ -13,6 +13,7 @@ import {
   type CodeViewOptions,
   type CodeViewScrollTarget,
   type DiffLineAnnotation,
+  type FileDiffLoadedFiles,
   type FileDiffMetadata,
   type LineAnnotation,
   type SelectedLineRange,
@@ -73,8 +74,10 @@ import {
   getDiffLineCountFromVisibleSections,
   getItemId,
   getMarkdownPreviewContents,
+  getSectionForFileDiff,
   getVisibleDiffSections,
   isMarkdownFilePath,
+  loadSectionContents,
   shouldLoadDiffSectionContents,
 } from '../../lib/diff.ts';
 import { getItemVersion } from '../../lib/item-version.ts';
@@ -213,7 +216,7 @@ function CodeViewHeader({
     walkthroughNote,
   } = meta;
   const canOpenFile = file.status !== 'deleted';
-  const canLoadSection = section.loadState === 'deferred' && shouldLoadDiffSectionContents(section);
+  const canLoadSection = shouldLoadDiffSectionContents(section);
 
   return (
     <div
@@ -1831,6 +1834,10 @@ const groupReviewCommentsByThread = (comments: ReadonlyArray<ReviewComment>) => 
 
 const noopResolveThread = () => {};
 
+// The CodeView header host is measured by a ResizeObserver, so no manual
+// layout pass is needed when the description body settles.
+const noopLayoutReady = () => {};
+
 function ReviewCommentThreadGroup({
   agentId,
   agentLabel,
@@ -2394,6 +2401,7 @@ export function ReviewCodeView({
   onDeleteComment,
   onLoadImageContent,
   onLoadSection,
+  onLoadSectionContents,
   onOpenFile,
   onRefreshMarkdown,
   onResolveThread = noopResolveThread,
@@ -2415,7 +2423,6 @@ export function ReviewCodeView({
   source,
   sourceDescriptionActions,
   sourceDescriptionFooter,
-  sourceDescriptionFooterKey,
   theme = 'system',
   viewed,
   walkthroughNotes,
@@ -2452,6 +2459,7 @@ export function ReviewCodeView({
   onDeleteComment: (commentId: string) => void;
   onLoadImageContent?: (request: DiffImageContentRequest) => Promise<DiffImageContentResult>;
   onLoadSection: (file: ChangedFile, section: DiffSection) => void;
+  onLoadSectionContents?: (file: ChangedFile, section: DiffSection) => Promise<FileDiffLoadedFiles>;
   onOpenFile?: (file: ChangedFile) => void;
   onRefreshMarkdown?: (file: ChangedFile, section: DiffSection) => Promise<boolean>;
   onResolveThread?: (threadId: string, resolved: boolean) => Promise<void> | void;
@@ -2473,7 +2481,6 @@ export function ReviewCodeView({
   source: ReviewSource;
   sourceDescriptionActions?: ReactNode;
   sourceDescriptionFooter?: ReactNode;
-  sourceDescriptionFooterKey?: string;
   theme?: CodiffPreferences['theme'];
   viewed: Record<string, string>;
   walkthroughNotes: ReadonlyMap<string, WalkthroughNote>;
@@ -2561,7 +2568,6 @@ export function ReviewCodeView({
   const sourceDescriptionAriaLabel = shouldShowCommitMessage
     ? 'Preview commit message'
     : 'Preview source description';
-  const [sourceDescriptionLayoutPass, setSourceDescriptionLayoutPass] = useState(0);
   const [collapsedSourceDescriptionItemId, setCollapsedSourceDescriptionItemId] = useState<
     string | null
   >(null);
@@ -2615,10 +2621,6 @@ export function ReviewCodeView({
     }));
   }, []);
 
-  const markSourceDescriptionLayoutReady = useCallback((_layoutKey: string) => {
-    setSourceDescriptionLayoutPass((current) => current + 1);
-  }, []);
-
   const {
     firstItemByBlockId,
     firstItemByPath,
@@ -2634,58 +2636,6 @@ export function ReviewCodeView({
     const nextItemMetadata = new Map<string, CodeViewItemMetadata>();
     const nextSearchTargetsByBaseItemId = new Map<string, Array<RenderedSearchTarget>>();
     const fontLayoutKey = `line-height:${diffLineHeight}`;
-
-    if (sourceDescriptionItemId) {
-      const sourceDescriptionLayoutKey = `${sourceDescriptionItemId}:${sourceTitle}:${sourceDescription}:${sourceAuthor?.displayName ?? ''}:${sourceAuthor?.title ?? ''}:${sourceAuthor?.avatarUrl ?? ''}:${sourceDescriptionCollapsed ? 'collapsed' : 'open'}:${sourceDescriptionFooterKey ?? ''}`;
-      nextItems.push({
-        annotations: [
-          {
-            lineNumber: 1,
-            metadata: {
-              header: (
-                <>
-                  <SourceDescriptionBody
-                    ariaLabel={sourceDescriptionAriaLabel}
-                    author={sourceAuthor}
-                    canEdit={canEditSourceDescription}
-                    description={sourceDescription}
-                    keymap={keymap}
-                    layoutKey={sourceDescriptionLayoutKey}
-                    onLayoutReady={markSourceDescriptionLayoutReady}
-                    onUpdateDescription={onUpdateSourceDescription}
-                    onUploadDescriptionAsset={onUploadSourceDescriptionAsset}
-                  />
-                  {sourceDescriptionFooter ? (
-                    <div className="codiff-source-description-footer">
-                      {sourceDescriptionFooter}
-                    </div>
-                  ) : null}
-                </>
-              ),
-              type: 'walkthrough-header',
-            },
-          } satisfies LineAnnotation<ReviewAnnotationMetadata>,
-        ].filter(
-          () =>
-            (sourceDescriptionHasContent || canEditSourceDescription) &&
-            !sourceDescriptionCollapsed,
-        ),
-        // The header (rendered via renderCustomHeader) carries the title; the body is the
-        // collapsible content.
-        collapsed: sourceDescriptionCollapsed,
-        file: {
-          cacheKey: sourceDescriptionLayoutKey,
-          contents: ' ',
-          lang: 'text',
-          name: shouldShowCommitMessage ? 'commit-message.md' : 'source-description.md',
-        },
-        id: sourceDescriptionItemId,
-        type: 'file',
-        version: getItemVersion(
-          `${sourceDescriptionLayoutKey}:${fontLayoutKey}:${sourceDescriptionLayoutPass}`,
-        ),
-      });
-    }
 
     for (const block of reviewBlocks) {
       if (block.header) {
@@ -2916,7 +2866,6 @@ export function ReviewCodeView({
     };
   }, [
     collapsed,
-    canEditSourceDescription,
     commentLayoutPassByItem,
     commentsBySection,
     diffLineHeight,
@@ -2926,27 +2875,12 @@ export function ReviewCodeView({
     imagePreviewLayoutPassBySection,
     isReadOnly,
     itemVersionByKey,
-    keymap,
-    markSourceDescriptionLayoutReady,
     markdownPreviewLayoutPassBySection,
     markdownPreviewSections,
     onLoadImageContent,
-    onUpdateSourceDescription,
-    onUploadSourceDescriptionAsset,
     reviewBlocks,
     selectedPath,
     showWhitespace,
-    sourceAuthor,
-    sourceDescriptionAriaLabel,
-    sourceDescription,
-    sourceDescriptionCollapsed,
-    sourceDescriptionFooter,
-    sourceDescriptionFooterKey,
-    sourceDescriptionHasContent,
-    sourceDescriptionItemId,
-    sourceDescriptionLayoutPass,
-    sourceTitle,
-    shouldShowCommitMessage,
     source.type,
     viewed,
     reviewIdentityByPath,
@@ -3090,6 +3024,26 @@ export function ReviewCodeView({
     ],
   );
 
+  // Lets the library fetch full file contents when the user expands unchanged
+  // context on a patch-only diff; the partial FileDiffMetadata is hydrated in
+  // place (see `parseSectionDiffWithOptions` for the identity contract).
+  const loadDiffFiles = useMemo(() => {
+    if (!onLoadSectionContents || isReadOnly) {
+      return undefined;
+    }
+
+    return (fileDiff: FileDiffMetadata) => {
+      const target = getSectionForFileDiff(fileDiff);
+      if (!target) {
+        return Promise.reject(
+          new Error(`No loadable diff section registered for '${fileDiff.name}'.`),
+        );
+      }
+
+      return loadSectionContents(target.file, target.section, onLoadSectionContents);
+    };
+  }, [isReadOnly, onLoadSectionContents]);
+
   const codeViewOptions: CodeViewOptions<ReviewAnnotationMetadata> = useMemo(
     () =>
       ({
@@ -3107,6 +3061,7 @@ export function ReviewCodeView({
           paddingBottom: bottomInset,
         },
         lineHoverHighlight: 'both',
+        loadDiffFiles,
         onGutterUtilityClick: (range, context) => {
           if (isReadOnly) {
             return;
@@ -3127,10 +3082,7 @@ export function ReviewCodeView({
             return;
           }
 
-          if (
-            meta.section.loadState === 'deferred' &&
-            shouldLoadDiffSectionContents(meta.section)
-          ) {
+          if (shouldLoadDiffSectionContents(meta.section)) {
             onLoadSection(meta.file, meta.section);
             return;
           }
@@ -3170,10 +3122,6 @@ export function ReviewCodeView({
         onPostRender: (node, _instance, _phase, context) => {
           const metadata = itemMetadata.get(context.item.id);
           const isWalkthroughHeaderItem = context.item.id.endsWith(':walkthrough-header');
-          node.classList.toggle(
-            'codiff-source-description-item',
-            context.item.id === sourceDescriptionItemId,
-          );
           node.classList.toggle('codiff-walkthrough-header-item', isWalkthroughHeaderItem);
           node.classList.toggle('codiff-selected-item', metadata?.isSelected === true);
           node.classList.toggle(
@@ -3187,8 +3135,7 @@ export function ReviewCodeView({
           );
           node.classList.toggle(
             'codiff-loadable-summary-item',
-            metadata?.section.loadState === 'deferred' &&
-              shouldLoadDiffSectionContents(metadata.section),
+            metadata != null && shouldLoadDiffSectionContents(metadata.section),
           );
           node.classList.toggle(
             'codiff-loading-summary-item',
@@ -3212,10 +3159,10 @@ export function ReviewCodeView({
       diffStyle,
       isReadOnly,
       itemMetadata,
+      loadDiffFiles,
       loadingSectionIds,
       onCreateComment,
       onLoadSection,
-      sourceDescriptionItemId,
       theme,
       wordWrap,
     ],
@@ -3449,10 +3396,6 @@ export function ReviewCodeView({
     };
 
     for (const item of items) {
-      if (item.id === sourceDescriptionItemId) {
-        continue;
-      }
-
       const itemTop = viewer.getTopForItem(item.id);
       if (itemTop == null) {
         continue;
@@ -3598,15 +3541,7 @@ export function ReviewCodeView({
       clearCommentLineHighlight();
     }
     handle.scrollTo(target.scrollTarget);
-  }, [
-    clearCommentLineHighlight,
-    diffLineHeight,
-    diffStyle,
-    hunkNavigation,
-    itemMetadata,
-    items,
-    sourceDescriptionItemId,
-  ]);
+  }, [clearCommentLineHighlight, diffLineHeight, diffStyle, hunkNavigation, itemMetadata, items]);
 
   // Enter on a navigated hunk starts a review comment on its selection and moves
   // focus into the new comment input.
@@ -3734,23 +3669,65 @@ export function ReviewCodeView({
     scheduleSearchHighlights();
   }, [resolvedActiveSearchMatch, scheduleSearchHighlights]);
 
+  // Rendered as a non-virtualized element at the top of the CodeView scroll
+  // content. Height changes (async markdown layout, editing) are re-measured
+  // by the viewer automatically.
+  const renderCodeViewHeader = useCallback(
+    () => (
+      <div className="codiff-source-description-panel codiff-code-view-source-description">
+        <SourceDescriptionHeader
+          actions={sourceDescriptionActions}
+          canCollapse={sourceDescription.length > 0 || canEditSourceDescription}
+          canEditTitle={canEditSourceTitle}
+          isCollapsed={sourceDescriptionCollapsed}
+          label={sourceDescriptionLabel}
+          onToggleCollapsed={toggleSourceDescriptionCollapsed}
+          onUpdateTitle={onUpdateSourceTitle}
+          title={sourceTitle}
+        />
+        {!sourceDescriptionCollapsed &&
+        (sourceDescriptionHasContent || canEditSourceDescription) ? (
+          <div className="codiff-source-description-panel-body">
+            <SourceDescriptionBody
+              ariaLabel={sourceDescriptionAriaLabel}
+              author={sourceAuthor}
+              canEdit={canEditSourceDescription}
+              description={sourceDescription}
+              keymap={keymap}
+              layoutKey="code-view-header"
+              onLayoutReady={noopLayoutReady}
+              onUpdateDescription={onUpdateSourceDescription}
+              onUploadDescriptionAsset={onUploadSourceDescriptionAsset}
+            />
+            {sourceDescriptionFooter ? (
+              <div className="codiff-source-description-footer">{sourceDescriptionFooter}</div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    ),
+    [
+      canEditSourceDescription,
+      canEditSourceTitle,
+      keymap,
+      onUpdateSourceDescription,
+      onUpdateSourceTitle,
+      onUploadSourceDescriptionAsset,
+      sourceAuthor,
+      sourceDescription,
+      sourceDescriptionActions,
+      sourceDescriptionAriaLabel,
+      sourceDescriptionCollapsed,
+      sourceDescriptionFooter,
+      sourceDescriptionHasContent,
+      sourceDescriptionLabel,
+      sourceTitle,
+      toggleSourceDescriptionCollapsed,
+    ],
+  );
+
   const renderCustomHeader = useCallback(
     (item: CodeViewItem<ReviewAnnotationMetadata>) => {
-      if (item.id === sourceDescriptionItemId) {
-        return (
-          <SourceDescriptionHeader
-            actions={sourceDescriptionActions}
-            canCollapse={sourceDescription.length > 0 || canEditSourceDescription}
-            canEditTitle={canEditSourceTitle}
-            isCollapsed={sourceDescriptionCollapsed}
-            label={sourceDescriptionLabel}
-            onToggleCollapsed={toggleSourceDescriptionCollapsed}
-            onUpdateTitle={onUpdateSourceTitle}
-            title={sourceTitle}
-          />
-        );
-      }
-
       const meta = itemMetadata.get(item.id);
       return meta ? (
         <CodeViewHeader
@@ -3770,8 +3747,6 @@ export function ReviewCodeView({
     },
     [
       allowViewedToggle,
-      canEditSourceDescription,
-      canEditSourceTitle,
       canCreateFileComments,
       createFileComment,
       itemMetadata,
@@ -3781,14 +3756,6 @@ export function ReviewCodeView({
       onOpenFile,
       onToggleCollapsed,
       onToggleViewed,
-      onUpdateSourceTitle,
-      sourceDescription,
-      sourceDescriptionCollapsed,
-      sourceDescriptionItemId,
-      sourceDescriptionLabel,
-      sourceDescriptionActions,
-      sourceTitle,
-      toggleSourceDescriptionCollapsed,
       toggleMarkdownPreview,
     ],
   );
@@ -3926,6 +3893,7 @@ export function ReviewCodeView({
       options={codeViewOptions}
       ref={codeViewRef}
       renderAnnotation={renderAnnotation}
+      renderCodeViewHeader={sourceDescriptionItemId ? renderCodeViewHeader : undefined}
       renderCustomHeader={renderCustomHeader}
       selectedLines={isReadOnly ? null : selectedLines}
     />
@@ -3947,6 +3915,7 @@ export function ReviewCodeView({
         options={codeViewOptions}
         ref={codeViewRef}
         renderAnnotation={renderAnnotation}
+        renderCodeViewHeader={sourceDescriptionItemId ? renderCodeViewHeader : undefined}
         renderCustomHeader={renderCustomHeader}
         selectedLines={isReadOnly ? null : selectedLines}
       />
