@@ -43,6 +43,7 @@ vi.mock('@pierre/diffs/react', async () => {
           annotation: { metadata: unknown },
           item: CodeViewItem<unknown>,
         ) => React.ReactNode;
+        renderCodeViewHeader?: () => React.ReactNode;
         renderCustomHeader?: (item: CodeViewItem<unknown>) => React.ReactNode;
       },
       ref: React.ForwardedRef<unknown>,
@@ -109,11 +110,21 @@ vi.mock('@pierre/diffs/react', async () => {
       return React.createElement(
         'div',
         { className: props.className },
-        props.items.map((item) =>
-          React.createElement(
+        props.renderCodeViewHeader
+          ? React.createElement(
+              'div',
+              { 'data-diffs-code-view-header': '' },
+              props.renderCodeViewHeader(),
+            )
+          : null,
+        props.items.map((item) => {
+          const customHeader = props.renderCustomHeader?.(item);
+          return React.createElement(
             'div',
             { key: item.id },
-            props.renderCustomHeader ? props.renderCustomHeader(item) : null,
+            customHeader == null
+              ? null
+              : React.createElement('div', { slot: 'header-custom' }, customHeader),
             'annotations' in item && Array.isArray(item.annotations)
               ? item.annotations.map((annotation, index) =>
                   React.createElement(
@@ -123,8 +134,8 @@ vi.mock('@pierre/diffs/react', async () => {
                   ),
                 )
               : null,
-          ),
-        ),
+          );
+        }),
       );
     }),
     WorkerPoolContextProvider: ({ children }: { children: React.ReactNode }) =>

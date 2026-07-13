@@ -960,14 +960,19 @@ test('read-only markdown previews trigger CodeView layout remeasurement after he
     const markdownPreview = app.container.querySelector<HTMLElement>(
       '[aria-label="Preview plan.md"]',
     );
-    // The source description lives in the first custom header, whose height is
-    // observed by CodeView directly instead of tracked through item versions.
+    // The source description renders in CodeView's header region, where height
+    // changes are observed by the viewer directly instead of item versions.
     const sourceDescription = app.container.querySelector<HTMLElement>(
       '[data-diffs-code-view-header] [aria-label="Preview source description"]',
     );
 
     expect(markdownPreview).not.toBeNull();
     expect(sourceDescription).not.toBeNull();
+    expect(
+      sourceDescription
+        ?.closest('[data-diffs-code-view-header]')
+        ?.closest('[slot="header-custom"]'),
+    ).toBeNull();
 
     await act(async () => {
       markdownPreview?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
@@ -993,11 +998,15 @@ test('source description remains visible when a review has no diff items', async
   const app = await renderReact(<ReviewCodeViewHarness files={[]} isReadOnly source={source} />);
 
   try {
+    const sourceDescription = app.container.querySelector(
+      '[data-diffs-code-view-header] [aria-label="Preview source description"]',
+    );
+    expect(sourceDescription).not.toBeNull();
     expect(
-      app.container.querySelector(
-        '[data-diffs-code-view-header] [aria-label="Preview source description"]',
-      ),
-    ).not.toBeNull();
+      sourceDescription
+        ?.closest('[data-diffs-code-view-header]')
+        ?.closest('[slot="header-custom"]'),
+    ).toBeNull();
   } finally {
     await app.cleanup();
   }

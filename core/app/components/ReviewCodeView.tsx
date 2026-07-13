@@ -3842,41 +3842,29 @@ export function ReviewCodeView({
     ],
   );
 
-  const firstCodeViewItemId = codeViewItems[0]?.id ?? null;
   const renderCustomHeader = useCallback(
     (item: CodeViewItem<ReviewAnnotationMetadata>) => {
       const meta = itemMetadata.get(item.id);
-      const sourceHeader =
-        sourceDescriptionItemId && item.id === firstCodeViewItemId ? (
-          <div data-diffs-code-view-header="">{renderCodeViewHeader()}</div>
-        ) : null;
-
       return meta ? (
-        <Fragment>
-          {sourceHeader}
-          <CodeViewHeader
-            allowViewedToggle={allowViewedToggle}
-            canCreateFileComment={canCreateFileComments}
-            isSectionLoading={loadingSectionIds.has(meta.section.id)}
-            meta={meta}
-            onCreateFileComment={() => createFileComment(meta, item.id)}
-            onLoadSection={onLoadSection}
-            onOpenFile={onOpenFile}
-            onToggleCollapsed={onToggleCollapsed}
-            onToggleMarkdownPreview={toggleMarkdownPreview}
-            onToggleViewed={onToggleViewed}
-            readOnly={isReadOnly}
-          />
-        </Fragment>
-      ) : (
-        sourceHeader
-      );
+        <CodeViewHeader
+          allowViewedToggle={allowViewedToggle}
+          canCreateFileComment={canCreateFileComments}
+          isSectionLoading={loadingSectionIds.has(meta.section.id)}
+          meta={meta}
+          onCreateFileComment={() => createFileComment(meta, item.id)}
+          onLoadSection={onLoadSection}
+          onOpenFile={onOpenFile}
+          onToggleCollapsed={onToggleCollapsed}
+          onToggleMarkdownPreview={toggleMarkdownPreview}
+          onToggleViewed={onToggleViewed}
+          readOnly={isReadOnly}
+        />
+      ) : null;
     },
     [
       allowViewedToggle,
       canCreateFileComments,
       createFileComment,
-      firstCodeViewItemId,
       itemMetadata,
       isReadOnly,
       loadingSectionIds,
@@ -3884,8 +3872,6 @@ export function ReviewCodeView({
       onOpenFile,
       onToggleCollapsed,
       onToggleViewed,
-      renderCodeViewHeader,
-      sourceDescriptionItemId,
       toggleMarkdownPreview,
     ],
   );
@@ -4033,6 +4019,7 @@ export function ReviewCodeView({
       options={codeViewOptions}
       ref={codeViewRef}
       renderAnnotation={renderAnnotation}
+      renderCodeViewHeader={sourceDescriptionItemId ? renderCodeViewHeader : undefined}
       renderCustomHeader={renderCustomHeader}
       selectedLines={isReadOnly ? null : selectedLines}
     />
@@ -4054,6 +4041,7 @@ export function ReviewCodeView({
         options={codeViewOptions}
         ref={codeViewRef}
         renderAnnotation={renderAnnotation}
+        renderCodeViewHeader={sourceDescriptionItemId ? renderCodeViewHeader : undefined}
         renderCustomHeader={renderCustomHeader}
         selectedLines={isReadOnly ? null : selectedLines}
       />
