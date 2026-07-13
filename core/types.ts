@@ -586,6 +586,16 @@ export type NarrativeWalkthroughResult =
       status: 'unavailable';
     };
 
+export type NarrativeWalkthroughRequestOptions = {
+  /** Ignore an exact cache hit and replace it with a newly generated result. */
+  force?: boolean;
+  /**
+   * The walkthrough currently shown. Regeneration uses its prose as continuity
+   * while re-anchoring every stop against the current diff.
+   */
+  previousWalkthrough?: NarrativeWalkthrough;
+};
+
 /** Commit the selected files from a walkthrough's staging set. */
 export type WalkthroughCommitRequest = {
   /** Body of the commit message (everything after the subject line). */

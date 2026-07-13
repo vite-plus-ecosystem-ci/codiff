@@ -78,9 +78,11 @@ const {
   writeWindowState,
 } = require('./window-state.cjs');
 const {
+  getNarrativeWalkthroughCacheKey,
   normalizeNarrativeWalkthrough,
   readNarrativeWalkthrough,
 } = require('./narrative-walkthrough.cjs');
+const { readStoredWalkthrough, writeStoredWalkthrough } = require('./walkthrough-store.cjs');
 const { uploadSharedSnapshot } = require('./shared-walkthrough-upload.cjs');
 const {
   resolvePlanShareTarget,
@@ -1496,7 +1498,7 @@ ipcMain.handle('codiff:installTerminalHelper', async (event) => {
   return getTerminalHelperStatus();
 });
 
-ipcMain.handle('codiff:getNarrativeWalkthrough', async (event, source) => {
+ipcMain.handle('codiff:getNarrativeWalkthrough', async (event, source, options) => {
   const launchOptions = windowLaunchOptions.get(event.sender.id);
   const progressGeneration = (walkthroughProgressGenerations.get(event.sender.id) || 0) + 1;
   walkthroughProgressGenerations.set(event.sender.id, progressGeneration);
@@ -1572,13 +1574,68 @@ ipcMain.handle('codiff:getNarrativeWalkthrough', async (event, source) => {
       launchOptions?.walkthroughContext,
       await agent.readSessionContext(launchOptions?.[agent.sessionLaunchOptionKey]),
     );
-    return readNarrativeWalkthrough(
+    const agentOptions = getAgentOptions(agent);
+    const walkthroughPrompt = config.settings.walkthroughPrompt;
+    const cacheKey = getNarrativeWalkthroughCacheKey(
       state,
       agent,
-      { ...getAgentOptions(agent), onProgress: reportProgress },
+      agentOptions.model,
       walkthroughContext,
-      config.settings.walkthroughPrompt,
+      walkthroughPrompt,
     );
+    if (!options?.force) {
+      const cachedWalkthrough = readStoredWalkthrough(cacheKey);
+      if (cachedWalkthrough) {
+        return {
+          status: 'ready',
+          walkthrough: {
+            ...cachedWalkthrough,
+            ...(walkthroughContext ? { context: walkthroughContext } : {}),
+            agent: agent.id,
+            repo: {
+              branch: state.branch,
+              root: state.root,
+            },
+            source: state.source,
+          },
+        };
+      }
+    }
+
+    let generatedModel = agentOptions.model;
+    const onModelFallback = agentOptions.onModelFallback;
+    const result = await readNarrativeWalkthrough(
+      state,
+      agent,
+      {
+        ...agentOptions,
+        onModelFallback: async (fallbackModel, originalModel) => {
+          generatedModel = fallbackModel;
+          await onModelFallback(fallbackModel, originalModel);
+        },
+        onProgress: reportProgress,
+      },
+      walkthroughContext,
+      walkthroughPrompt,
+      options?.previousWalkthrough,
+    );
+    if (result.status === 'ready') {
+      const generatedCacheKey = getNarrativeWalkthroughCacheKey(
+        state,
+        agent,
+        generatedModel,
+        walkthroughContext,
+        walkthroughPrompt,
+      );
+      try {
+        const cacheableWalkthrough = { ...result.walkthrough };
+        delete cacheableWalkthrough.context;
+        writeStoredWalkthrough(generatedCacheKey, cacheableWalkthrough);
+      } catch {
+        // Caching is optional; a filesystem failure must not hide a generated result.
+      }
+    }
+    return result;
   } catch (error) {
     return {
       reason: error instanceof Error ? error.message : String(error),

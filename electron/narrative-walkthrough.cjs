@@ -2,6 +2,7 @@
 
 // Narrative walkthrough generation and normalization trust boundary.
 
+const { createHash } = require('node:crypto');
 const {
   cleanText,
   normalizeEnum,
@@ -52,6 +53,7 @@ const INCLUDED_WALKTHROUGH_FILES = 8;
 const INCLUDED_WALKTHROUGH_HUNKS = 12;
 const TIMEOUT_MS_PER_EXTRA_FILE = 1_000;
 const TIMEOUT_MS_PER_EXTRA_HUNK = 2_000;
+const WALKTHROUGH_CACHE_KEY_VERSION = 1;
 
 /** @param {unknown} value @param {string} [fallback] */
 const cleanRich = (value, fallback = '') => {
@@ -565,6 +567,29 @@ const getPromptPatchBudgets = (fileCount) =>
         total: MAX_TOTAL_PATCH_CHARS,
       };
 
+/** @param {RepositoryState['source']} source */
+const buildPromptSource = (source) => {
+  if (source.type !== 'pull-request') {
+    return source;
+  }
+
+  return {
+    ...(typeof source.description === 'string'
+      ? { description: truncate(source.description, MAX_PROSE_CHARS) }
+      : {}),
+    ...(source.headSha ? { headSha: source.headSha } : {}),
+    ...(source.host ? { host: source.host } : {}),
+    ...(source.number != null ? { number: source.number } : {}),
+    ...(source.owner ? { owner: source.owner } : {}),
+    ...(source.projectPath ? { projectPath: source.projectPath } : {}),
+    ...(source.provider ? { provider: source.provider } : {}),
+    ...(source.repo ? { repo: source.repo } : {}),
+    ...(source.title ? { title: source.title } : {}),
+    type: source.type,
+    url: source.url,
+  };
+};
+
 /** @param {RepositoryState} state */
 const buildPromptInput = (state) => {
   const patchBudget = getPromptPatchBudgets(state.files.length);
@@ -613,12 +638,8 @@ const buildPromptInput = (state) => {
         status: file.status,
       };
     }),
-    generatedAt: state.generatedAt,
     root: state.root,
-    source:
-      state.source.type === 'pull-request' && typeof state.source.description === 'string'
-        ? { ...state.source, description: truncate(state.source.description, MAX_PROSE_CHARS) }
-        : state.source,
+    source: buildPromptSource(state.source),
   };
 
   return { hunkIdByAlias, input };
@@ -646,6 +667,52 @@ ${prompt}
 Use these instructions to customize language, tone, and review detail. If they conflict with the JSON schema, repository digest, hunk ids, or review-order constraints above, keep Codiff's constraints and the digest as the source of truth.
 `
     : '';
+};
+
+/**
+ * Summarize the walkthrough being replaced without carrying stale hunk ids or
+ * anchors into the next request.
+ * @param {unknown} previousWalkthrough
+ */
+const buildPreviousWalkthroughInput = (previousWalkthrough) => {
+  if (!previousWalkthrough || typeof previousWalkthrough !== 'object') {
+    return '';
+  }
+
+  const walkthrough = /** @type {any} */ (previousWalkthrough);
+  const chapters = (Array.isArray(walkthrough.chapters) ? walkthrough.chapters : [])
+    .map((chapter) => ({
+      blurb: oneLine(chapter?.blurb),
+      stops: (Array.isArray(chapter?.stops) ? chapter.stops : []).map((stop) => ({
+        prose: truncate(cleanText(stop?.prose), MAX_PROSE_CHARS),
+        title: oneLine(stop?.title),
+      })),
+      title: oneLine(chapter?.title),
+    }))
+    .filter((chapter) => chapter.title || chapter.stops.length > 0);
+  if (chapters.length === 0) {
+    return '';
+  }
+
+  const commit =
+    walkthrough.commit && typeof walkthrough.commit === 'object'
+      ? {
+          body: truncate(cleanText(walkthrough.commit.body), MAX_PROSE_CHARS),
+          title: oneLine(walkthrough.commit.title),
+        }
+      : undefined;
+  const summary = {
+    chapters,
+    ...(commit?.body || commit?.title ? { commit } : {}),
+    focus: oneLine(walkthrough.focus),
+    title: oneLine(walkthrough.title),
+  };
+
+  return `Previous walkthrough to update:
+${JSON.stringify(summary)}
+
+Re-author it for the current digest. Keep stops that are still accurate, revise changed explanations, add new review ideas, and remove ideas whose code is gone. Re-anchor every stop to the current digest's hunk aliases; never reuse ids or anchors from the previous walkthrough. Return the complete updated walkthrough.
+`;
 };
 
 /** @param {RepositoryState} state */
@@ -725,7 +792,13 @@ Grouping contract:
 `;
 };
 
-const buildNarrativeWalkthroughRequest = (state, context, agentLabel = 'Codex', customPrompt) => {
+const buildNarrativeWalkthroughRequest = (
+  state,
+  context,
+  agentLabel = 'Codex',
+  customPrompt,
+  previousWalkthrough,
+) => {
   const { hunkIdByAlias, input } = buildPromptInput(state);
   return {
     hunkIdByAlias,
@@ -738,16 +811,68 @@ ${buildWalkthroughSizingGuidance(state)}
 
 ${buildWalkthroughContextInput(context, agentLabel)}
 ${buildCustomPromptInput(customPrompt)}
+${buildPreviousWalkthroughInput(previousWalkthrough)}
 Repository change digest:
 ${JSON.stringify(input)}
 `,
   };
 };
 
-const buildNarrativeWalkthroughPrompt = (state, context, agentLabel = 'Codex', customPrompt) =>
-  buildNarrativeWalkthroughRequest(state, context, agentLabel, customPrompt).prompt;
+const buildNarrativeWalkthroughPrompt = (
+  state,
+  context,
+  agentLabel = 'Codex',
+  customPrompt,
+  previousWalkthrough,
+) =>
+  buildNarrativeWalkthroughRequest(state, context, agentLabel, customPrompt, previousWalkthrough)
+    .prompt;
 
-const readNarrativeWalkthrough = async (state, agent, agentOptions, context, customPrompt) => {
+/**
+ * Cache identity for the exact model input. The previous walkthrough is
+ * intentionally excluded: forced regeneration replaces the cached result for
+ * the current diff rather than creating a second cache lineage.
+ *
+ * @param {RepositoryState} state
+ * @param {Agent} agent
+ * @param {unknown} model
+ * @param {WalkthroughContext | null | undefined} context
+ * @param {unknown} customPrompt
+ */
+const getNarrativeWalkthroughCacheKey = (state, agent, model, context, customPrompt) => {
+  const prompt = buildNarrativeWalkthroughPrompt(state, context, agent.label, customPrompt);
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        agent: agent.id,
+        diff: state.files.map((file) => ({
+          fingerprint: file.fingerprint,
+          oldPath: file.oldPath,
+          path: file.path,
+          status: file.status,
+          sections: file.sections.map((section) => ({
+            hunkIds: getSectionWalkthroughHunks(file, section).map((hunk) => hunk.id),
+            id: section.id,
+            kind: section.kind,
+          })),
+        })),
+        model: agent.normalizeModel(model),
+        prompt,
+        responseSchema: narrativeWalkthroughResponseSchema,
+        version: WALKTHROUGH_CACHE_KEY_VERSION,
+      }),
+    )
+    .digest('hex');
+};
+
+const readNarrativeWalkthrough = async (
+  state,
+  agent,
+  agentOptions,
+  context,
+  customPrompt,
+  previousWalkthrough,
+) => {
   try {
     const timeoutMs = getNarrativeWalkthroughTimeoutMs(state, agent.defaultTimeoutMs);
     const { fileCount, hunkCount } = getWalkthroughSize(state);
@@ -756,6 +881,7 @@ const readNarrativeWalkthrough = async (state, agent, agentOptions, context, cus
       context,
       agent.label,
       customPrompt,
+      previousWalkthrough,
     );
     agentOptions?.onProgress?.('agent-generation');
     const response = await agent.run(
@@ -811,6 +937,7 @@ const readNarrativeWalkthrough = async (state, agent, agentOptions, context, cus
 
 module.exports = {
   buildNarrativeWalkthroughPrompt,
+  getNarrativeWalkthroughCacheKey,
   getNarrativeWalkthroughTimeoutMs,
   narrativeWalkthroughResponseSchema,
   narrativeWalkthroughSchema,

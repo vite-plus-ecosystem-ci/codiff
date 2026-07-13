@@ -5,6 +5,7 @@ import narrativeSchemaJson from '../../core/walkthrough/narrative-walkthrough.sc
 const require = createRequire(import.meta.url);
 const {
   buildNarrativeWalkthroughPrompt,
+  getNarrativeWalkthroughCacheKey,
   getNarrativeWalkthroughTimeoutMs,
   narrativeWalkthroughResponseSchema,
   narrativeWalkthroughSchema,
@@ -15,6 +16,14 @@ const {
     state: any,
     context?: unknown,
     agentLabel?: string,
+    customPrompt?: string,
+    previousWalkthrough?: unknown,
+  ) => string;
+  getNarrativeWalkthroughCacheKey: (
+    state: any,
+    agent: any,
+    model: unknown,
+    context?: unknown,
     customPrompt?: string,
   ) => string;
   getNarrativeWalkthroughTimeoutMs: (state: any, minimumMs?: number) => number;
@@ -44,6 +53,7 @@ const {
     agentOptions: any,
     context?: unknown,
     customPrompt?: string,
+    previousWalkthrough?: unknown,
   ) => Promise<any>;
 };
 
@@ -371,6 +381,143 @@ test('prompts generated walkthroughs with custom user guidance without replacing
   expect(prompt).toContain('Answer in Japanese and use concise reviewer-facing explanations.');
   expect(prompt).toContain('Return JSON only.');
   expect(prompt).toContain('Repository change digest:');
+});
+
+test('passes a compact previous walkthrough into regeneration prompts', () => {
+  const prompt = buildNarrativeWalkthroughPrompt(
+    {
+      branch: 'main',
+      files: files.slice(0, 1),
+      generatedAt: 1,
+      root: '/repo',
+      source: { type: 'working-tree' },
+    },
+    null,
+    'Claude Code',
+    undefined,
+    {
+      chapters: [
+        {
+          blurb: 'Entry point',
+          stops: [
+            {
+              hunkIds: ['stale-hunk'],
+              prose: 'Guards against duplicate submits.',
+              title: 'Prevent double submit',
+            },
+          ],
+          title: 'Runtime',
+        },
+      ],
+      commit: {
+        body: 'Preserve the behavior.',
+        title: 'Guard duplicate submits',
+      },
+      focus: 'Harden the submit path.',
+      title: 'Submit hardening',
+    },
+  );
+
+  expect(prompt).toContain('Previous walkthrough to update:');
+  expect(prompt).toContain('Prevent double submit');
+  expect(prompt).toContain('Guard duplicate submits');
+  expect(prompt).toContain('Re-anchor every stop');
+  expect(prompt).not.toContain('stale-hunk');
+});
+
+test('builds cache keys from semantic generation inputs', () => {
+  const state = {
+    branch: 'main',
+    files: [{ ...files[0], fingerprint: 'fingerprint-1' }],
+    generatedAt: 1,
+    root: '/repo',
+    source: {
+      description: 'Explain the change.',
+      headSha: 'head-1',
+      mergeState: { status: 'checking' },
+      number: 42,
+      provider: 'github',
+      reviewStatus: { approved: false },
+      type: 'pull-request',
+      url: 'https://github.com/nkzw-tech/codiff/pull/42',
+    },
+  };
+  const agent = {
+    id: 'claude',
+    label: 'Claude Code',
+    normalizeModel: (model: unknown) => String(model || 'default'),
+  };
+  const key = getNarrativeWalkthroughCacheKey(state, agent, 'claude-sonnet', null);
+  const metadataChangedKey = getNarrativeWalkthroughCacheKey(
+    {
+      ...state,
+      generatedAt: 2,
+      source: {
+        ...state.source,
+        mergeState: { status: 'ready' },
+        reviewStatus: { approved: true },
+      },
+    },
+    agent,
+    'claude-sonnet',
+    null,
+  );
+  const diffChangedKey = getNarrativeWalkthroughCacheKey(
+    {
+      ...state,
+      files: [
+        {
+          ...files[0],
+          sections: [
+            {
+              ...files[0].sections[0],
+              patch: '@@ -1 +1 @@\n-old\n+new behavior\n',
+            },
+          ],
+        },
+      ],
+    },
+    agent,
+    'claude-sonnet',
+    null,
+  );
+  const unexcerptedDiffChangedKey = getNarrativeWalkthroughCacheKey(
+    {
+      ...state,
+      files: [{ ...state.files[0], fingerprint: 'fingerprint-2' }],
+    },
+    agent,
+    'claude-sonnet',
+    null,
+  );
+  const anchorsChangedKey = getNarrativeWalkthroughCacheKey(
+    {
+      ...state,
+      files: [
+        {
+          ...state.files[0],
+          sections: [{ ...state.files[0].sections[0], id: 'rebased:src/App.tsx:staged' }],
+        },
+      ],
+    },
+    agent,
+    'claude-sonnet',
+    null,
+  );
+
+  expect(metadataChangedKey).toBe(key);
+  expect(diffChangedKey).not.toBe(key);
+  expect(unexcerptedDiffChangedKey).not.toBe(key);
+  expect(anchorsChangedKey).not.toBe(key);
+  expect(getNarrativeWalkthroughCacheKey(state, agent, 'claude-opus', null)).not.toBe(key);
+  expect(
+    getNarrativeWalkthroughCacheKey(state, agent, 'claude-sonnet', null, 'Be concise.'),
+  ).not.toBe(key);
+  expect(
+    getNarrativeWalkthroughCacheKey(state, agent, 'claude-sonnet', {
+      summary: 'Prior discussion',
+    }),
+  ).not.toBe(key);
 });
 
 test('omits blank custom walkthrough prompt guidance', () => {

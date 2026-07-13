@@ -137,6 +137,7 @@ import type {
   SharedWalkthroughSnapshot,
   TerminalHelperStatus,
   NarrativeWalkthrough,
+  NarrativeWalkthroughRequestOptions,
   WalkthroughCommitMessageRequest,
   WalkthroughCommitRequest,
   WalkthroughProgressEvent,
@@ -319,6 +320,7 @@ export default function App() {
   const mainModeRef = useRef<MainMode>('review');
   const sourceRequestRef = useRef(0);
   const stateGenerationRef = useRef(0);
+  const walkthroughRequestRef = useRef(0);
   const markdownRefreshQueueRef = useRef<Promise<void>>(Promise.resolve());
   const viewedRef = useRef<Record<string, string>>({});
   const narrativeWalkthroughRef = useRef<NarrativeWalkthrough | null>(null);
@@ -1744,50 +1746,60 @@ export default function App() {
 
   // Ask the connected agent for a narrative walkthrough of the given source.
   // Results are dropped if the reviewer switched sources while it was running.
-  const loadNarrativeWalkthrough = useCallback((source: ReviewSource) => {
-    const sourceKey = getSourceKey(source);
-    setWalkthroughProgress((current) => ({
-      phase: null,
-      responseLabelIndex: nextWalkthroughResponseLabelIndex(current.responseLabelIndex),
-      stageRevision: current.stageRevision + 1,
-    }));
-    setWalkthroughLoading(true);
-    setWalkthroughError(null);
-    window.codiff
-      .getNarrativeWalkthrough(source)
-      .then((result) => {
-        if (getSourceKey(stateRef.current?.source ?? source) !== sourceKey) {
-          return;
-        }
-
-        if (result.status === 'ready') {
-          setNarrativeWalkthrough(result.walkthrough);
-          setWalkthroughOutdatedPaths(new Set());
-          if (sidebarModeRef.current === 'walkthrough') {
-            setSidebarMode('walkthrough');
-          } else {
-            setWalkthroughUnread(true);
+  const loadNarrativeWalkthrough = useCallback(
+    (source: ReviewSource, options?: NarrativeWalkthroughRequestOptions) => {
+      const request = walkthroughRequestRef.current + 1;
+      walkthroughRequestRef.current = request;
+      const sourceKey = getSourceKey(source);
+      const stateGeneration = stateGenerationRef.current;
+      const isCurrentState = () =>
+        walkthroughRequestRef.current === request &&
+        stateGenerationRef.current === stateGeneration &&
+        getSourceKey(stateRef.current?.source ?? source) === sourceKey;
+      setWalkthroughProgress((current) => ({
+        phase: null,
+        responseLabelIndex: nextWalkthroughResponseLabelIndex(current.responseLabelIndex),
+        stageRevision: current.stageRevision + 1,
+      }));
+      setWalkthroughLoading(true);
+      setWalkthroughError(null);
+      window.codiff
+        .getNarrativeWalkthrough(source, options)
+        .then((result) => {
+          if (!isCurrentState()) {
+            return;
           }
-        } else {
-          setWalkthroughError(result);
-        }
-      })
-      .catch((error: unknown) => {
-        if (getSourceKey(stateRef.current?.source ?? source) !== sourceKey) {
-          return;
-        }
 
-        setWalkthroughError({
-          reason: error instanceof Error ? error.message : String(error),
-          status: 'unavailable',
+          if (result.status === 'ready') {
+            setNarrativeWalkthrough(result.walkthrough);
+            setWalkthroughOutdatedPaths(new Set());
+            if (sidebarModeRef.current === 'walkthrough') {
+              setSidebarMode('walkthrough');
+            } else {
+              setWalkthroughUnread(true);
+            }
+          } else {
+            setWalkthroughError(result);
+          }
+        })
+        .catch((error: unknown) => {
+          if (!isCurrentState()) {
+            return;
+          }
+
+          setWalkthroughError({
+            reason: error instanceof Error ? error.message : String(error),
+            status: 'unavailable',
+          });
+        })
+        .finally(() => {
+          if (walkthroughRequestRef.current === request) {
+            setWalkthroughLoading(false);
+          }
         });
-      })
-      .finally(() => {
-        if (getSourceKey(stateRef.current?.source ?? source) === sourceKey) {
-          setWalkthroughLoading(false);
-        }
-      });
-  }, []);
+    },
+    [],
+  );
 
   // Regenerate the walkthrough on demand, e.g. after an in-place refresh
   // surfaced changes the current walkthrough doesn't narrate. The existing
@@ -1797,7 +1809,10 @@ export default function App() {
     if (!currentState || currentState.files.length === 0 || walkthroughLoading) {
       return;
     }
-    loadNarrativeWalkthrough(currentState.source);
+    loadNarrativeWalkthrough(currentState.source, {
+      force: true,
+      previousWalkthrough: narrativeWalkthroughRef.current ?? undefined,
+    });
   }, [loadNarrativeWalkthrough, walkthroughLoading]);
 
   const changeSidebarMode = useCallback(
