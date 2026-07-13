@@ -1613,9 +1613,8 @@ html[data-codiff-platform='darwin'] .sidebar {
   font-size: 14px;
 }
 
-/* The PR/commit description card renders in CodeView's non-virtualized header
-   region at the top of the scroll content; the host div inherits the
-   scroller's inline padding, so only vertical spacing is needed here. */
+/* The PR/commit description card renders before the first file header; the
+   CodeView scroller supplies the horizontal padding. */
 .code-view [data-diffs-code-view-header] .codiff-code-view-source-description {
   margin-top: 11px;
 }

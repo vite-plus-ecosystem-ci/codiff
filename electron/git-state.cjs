@@ -14,6 +14,7 @@ const {
   readRangeState,
 } = require('./git-state/commit.cjs');
 const {
+  PENDING_REVIEW_COMMENT_ERROR,
   collectResolvedReviewCommentIds,
   createPullRequestHistoryFetchRefspecs,
   createPullRequestSection,
@@ -176,6 +177,7 @@ const readDiffImageContent = (launchPath, request) =>
           : readWorkingTreeDiffImageContent(launchPath, request);
 
 module.exports = {
+  PENDING_REVIEW_COMMENT_ERROR,
   collectResolvedReviewCommentIds,
   createPullRequestHistoryFetchRefspecs,
   createGitLabPosition,

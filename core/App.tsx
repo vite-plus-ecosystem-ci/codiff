@@ -91,6 +91,7 @@ import {
 import {
   buildReviewCommentsMarkdown,
   getCommentKey,
+  getPendingPullRequestReviewComments,
   getReviewCommentRangeProps,
   getReviewCommentsFromState,
   getVisibleReviewComments,
@@ -254,6 +255,10 @@ export default function App() {
     useState<AgentSkillStatus>(defaultAgentSkillStatus);
   const [preferences, setPreferences] = useState<CodiffPreferences>(defaultPreferences);
   const [reviewComments, setReviewComments] = useState<ReadonlyArray<ReviewComment>>([]);
+  const [activeReviewCommentDraftState, setActiveReviewCommentDraftState] = useState<Pick<
+    ReviewComment,
+    'body' | 'id'
+  > | null>(null);
   const [reloadDeltaPaths, setReloadDeltaPaths] = useState<ReadonlySet<string>>(() => new Set());
   const [pullRequestReviewSubmitting, setPullRequestReviewSubmitting] =
     useState<PullRequestReviewEvent | null>(null);
@@ -307,6 +312,7 @@ export default function App() {
   const collapsedRef = useRef<Set<string>>(new Set());
   const expandedGeneratedRef = useRef<Set<string>>(new Set());
   const preferencesRef = useRef<CodiffPreferences>(defaultPreferences);
+  const activeReviewCommentDraftRef = useRef<Pick<ReviewComment, 'body' | 'id'> | null>(null);
   const reviewCommentsRef = useRef<ReadonlyArray<ReviewComment>>([]);
   const selectedPathRef = useRef<string | null>(null);
   const sidebarModeRef = useRef<SidebarMode>('tree');
@@ -2215,16 +2221,34 @@ export default function App() {
     setReviewComments(applyCommentBody);
   }, []);
 
+  const updateActiveReviewCommentDraft = useCallback(
+    (comment: Pick<ReviewComment, 'body' | 'id'> | null) => {
+      activeReviewCommentDraftRef.current = comment;
+      setActiveReviewCommentDraftState((current) => {
+        if (comment == null) {
+          return current == null ? current : null;
+        }
+
+        const body = comment.body.trim().length > 0 ? 'pending' : '';
+        return current?.id === comment.id && current.body === body
+          ? current
+          : { body, id: comment.id };
+      });
+    },
+    [],
+  );
+
   const deleteComment = useCallback(
     (commentId: string) => {
       const comment = reviewCommentsRef.current.find((candidate) => candidate.id === commentId);
+      updateActiveReviewCommentDraft(null);
       setFocusCommentId((current) => (current === commentId ? null : current));
       setReviewComments((current) => current.filter((candidate) => candidate.id !== commentId));
       if (comment) {
         bumpItemVersion(comment.filePath);
       }
     },
-    [bumpItemVersion],
+    [bumpItemVersion, updateActiveReviewCommentDraft],
   );
 
   const updateCodexReply = useCallback(
@@ -2331,6 +2355,7 @@ export default function App() {
       }
 
       updateRemoteSubmit(comment.id, { status: 'submitting' });
+      updateActiveReviewCommentDraft(null);
       void window.codiff
         .submitPullRequestComment({
           comment: toPullRequestReviewComment(comment),
@@ -2369,7 +2394,7 @@ export default function App() {
           });
         });
     },
-    [bumpItemVersion, updateRemoteSubmit],
+    [bumpItemVersion, updateActiveReviewCommentDraft, updateRemoteSubmit],
   );
 
   const submitPullRequestReview = useCallback(
@@ -2383,8 +2408,9 @@ export default function App() {
         return;
       }
 
-      const pendingComments = reviewCommentsRef.current.filter(
-        (comment) => !comment.isReadOnly && !comment.threadId && comment.body.trim(),
+      const pendingComments = getPendingPullRequestReviewComments(
+        reviewCommentsRef.current,
+        activeReviewCommentDraftRef.current,
       );
       if (event === 'COMMENT' && pendingComments.length === 0 && !body?.trim()) {
         return;
@@ -2399,6 +2425,7 @@ export default function App() {
           source: currentState.source,
         })
         .then(() => {
+          updateActiveReviewCommentDraft(null);
           setReviewComments((current) =>
             current.filter((comment) => !pendingCommentIds.has(comment.id)),
           );
@@ -2411,7 +2438,7 @@ export default function App() {
           setPullRequestReviewSubmitting(null);
         });
     },
-    [pullRequestReviewSubmitting],
+    [pullRequestReviewSubmitting, updateActiveReviewCommentDraft],
   );
 
   const installTerminalHelper = useCallback(() => {
@@ -2625,6 +2652,7 @@ export default function App() {
     keymap: codiffConfig.keymap,
     loadingSectionIds,
     onAskCodex: askCodex,
+    onCommentDraftChange: updateActiveReviewCommentDraft,
     onCreateComment: createComment,
     onDeleteComment: deleteComment,
     onLoadImageContent: window.codiff.getDiffImageContent,
@@ -2644,9 +2672,10 @@ export default function App() {
     sourceDescriptionActions: isPullRequest ? (
       <PullRequestReviewButtons
         disabled={pullRequestReviewSubmitting != null}
-        hasPendingComments={reviewComments.some(
-          (comment) => !comment.isReadOnly && !comment.threadId && Boolean(comment.body.trim()),
-        )}
+        hasPendingComments={
+          getPendingPullRequestReviewComments(reviewComments, activeReviewCommentDraftState)
+            .length > 0
+        }
         onSubmitReview={submitPullRequestReview}
         reviewStatus={state.source.type === 'pull-request' ? state.source.reviewStatus : undefined}
         showCommentReview={

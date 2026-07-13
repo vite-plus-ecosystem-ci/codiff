@@ -138,6 +138,23 @@ export const toPullRequestReviewComment = (comment: ReviewComment): PullRequestR
   ...(comment.threadId ? { threadId: comment.threadId } : {}),
 });
 
+const isPendingPullRequestReviewComment = (comment: ReviewComment) =>
+  !comment.isReadOnly &&
+  !comment.threadId &&
+  comment.remoteSubmit?.status !== 'submitting' &&
+  comment.body.trim().length > 0;
+
+export const getPendingPullRequestReviewComments = (
+  comments: ReadonlyArray<ReviewComment>,
+  activeDraft: Pick<ReviewComment, 'body' | 'id'> | null = null,
+) => {
+  return comments.flatMap((comment) => {
+    const candidate =
+      activeDraft?.id === comment.id ? { ...comment, body: activeDraft.body } : comment;
+    return isPendingPullRequestReviewComment(candidate) ? [candidate] : [];
+  });
+};
+
 export const getCommentKey = (
   comment: Pick<
     ReviewComment,

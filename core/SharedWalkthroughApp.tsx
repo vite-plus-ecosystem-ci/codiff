@@ -65,6 +65,7 @@ import { isNativeInputTarget } from './lib/keyboard.ts';
 import { isGeneratedWalkthroughFile } from './lib/narrative-walkthrough-diff.js';
 import {
   getCommentKey,
+  getPendingPullRequestReviewComments,
   getReviewCommentsFromState,
   toPullRequestReviewComment,
 } from './lib/review-comments.ts';
@@ -1103,6 +1104,10 @@ function ReviewSurface({
   const [generalCommentSubmitting, setGeneralCommentSubmitting] = useState(false);
   const [focusCommentId, setFocusCommentId] = useState<string | null>(null);
   const [focusCommentRequest, setFocusCommentRequest] = useState(0);
+  const [activeReviewCommentDraftState, setActiveReviewCommentDraftState] = useState<Pick<
+    ReviewComment,
+    'body' | 'id'
+  > | null>(null);
   const [pullRequestReviewSubmitting, setPullRequestReviewSubmitting] =
     useState<PullRequestReviewEvent | null>(null);
   const [pullRequestCloseSubmitting, setPullRequestCloseSubmitting] = useState(false);
@@ -1110,6 +1115,7 @@ function ReviewSurface({
   const [walkthroughRequestPending, setWalkthroughRequestPending] = useState(false);
   const walkthroughRequestPendingRef = useRef(false);
   const [walkthroughRequestId, setWalkthroughRequestId] = useState(0);
+  const activeReviewCommentDraftRef = useRef<Pick<ReviewComment, 'body' | 'id'> | null>(null);
   const interactiveRef = useRef(interactive);
 
   useEffect(() => {
@@ -1268,12 +1274,30 @@ function ReviewSurface({
     [activateGeneralComment, focusedGeneralCommentId, generalComments],
   );
   const updateComment = useCallback((commentId: string, body: string) => {
-    setLocalReviewComments((current) =>
-      current.map((comment) =>
+    const applyCommentBody = (comments: ReadonlyArray<ReviewComment>) =>
+      comments.map((comment) =>
         comment.id === commentId && !comment.isReadOnly ? { ...comment, body } : comment,
-      ),
-    );
+      );
+
+    reviewCommentsRef.current = applyCommentBody(reviewCommentsRef.current);
+    setLocalReviewComments(applyCommentBody);
   }, []);
+  const updateActiveReviewCommentDraft = useCallback(
+    (comment: Pick<ReviewComment, 'body' | 'id'> | null) => {
+      activeReviewCommentDraftRef.current = comment;
+      setActiveReviewCommentDraftState((current) => {
+        if (comment == null) {
+          return current == null ? current : null;
+        }
+
+        const body = comment.body.trim().length > 0 ? 'pending' : '';
+        return current?.id === comment.id && current.body === body
+          ? current
+          : { body, id: comment.id };
+      });
+    },
+    [],
+  );
   const updateExistingReviewComment = useCallback(
     async (commentId: string, body: string) => {
       if (!updateReviewComment) {
@@ -1291,6 +1315,7 @@ function ReviewSurface({
   const deleteComment = useCallback(
     (commentId: string) => {
       const comment = reviewCommentsRef.current.find((candidate) => candidate.id === commentId);
+      updateActiveReviewCommentDraft(null);
       if (comment?.isReadOnly && comment.canDelete && commenting?.onDeleteComment) {
         void commenting.onDeleteComment(commentId).catch((error: unknown) => {
           window.alert(error instanceof Error ? error.message : String(error));
@@ -1305,7 +1330,7 @@ function ReviewSurface({
         bumpItemVersion(comment.filePath);
       }
     },
-    [bumpItemVersion, commenting],
+    [bumpItemVersion, commenting, updateActiveReviewCommentDraft],
   );
   const submitComment = useCallback(
     (commentId: string) => {
@@ -1320,6 +1345,7 @@ function ReviewSurface({
         return;
       }
 
+      updateActiveReviewCommentDraft(null);
       setLocalReviewComments((current) =>
         current.map((candidate) =>
           candidate.id === commentId
@@ -1352,7 +1378,7 @@ function ReviewSurface({
           bumpItemVersion(comment.filePath);
         });
     },
-    [bumpItemVersion, submitReviewComment],
+    [bumpItemVersion, submitReviewComment, updateActiveReviewCommentDraft],
   );
   const submitReview = useCallback(
     (event: PullRequestReviewEvent, body?: string) => {
@@ -1366,8 +1392,9 @@ function ReviewSurface({
         return;
       }
 
-      const pendingComments = reviewCommentsRef.current.filter(
-        (comment) => !comment.isReadOnly && !comment.threadId && comment.body.trim(),
+      const pendingComments = getPendingPullRequestReviewComments(
+        reviewCommentsRef.current,
+        activeReviewCommentDraftRef.current,
       );
       if (event === 'COMMENT' && pendingComments.length === 0 && !body?.trim()) {
         return;
@@ -1380,6 +1407,7 @@ function ReviewSurface({
         : interactive.onSubmitReview(event, formattedComments);
       return submission
         .then(() => {
+          updateActiveReviewCommentDraft(null);
           setLocalReviewComments((current) =>
             current.filter((comment) => !pendingIds.has(comment.id)),
           );
@@ -1390,7 +1418,12 @@ function ReviewSurface({
         })
         .finally(() => setPullRequestReviewSubmitting(null));
     },
-    [interactive, pullRequestReviewSubmitting, snapshot.repository.source],
+    [
+      interactive,
+      pullRequestReviewSubmitting,
+      snapshot.repository.source,
+      updateActiveReviewCommentDraft,
+    ],
   );
   const closePullRequest = useCallback(() => {
     const source = snapshot.repository.source;
@@ -1713,6 +1746,7 @@ function ReviewSurface({
     itemVersionByKey,
     keymap,
     loadingSectionIds: new Set<string>(),
+    onCommentDraftChange: updateActiveReviewCommentDraft,
     onCreateComment: createComment,
     onDeleteComment: deleteComment,
     onLoadSection: noop,
@@ -1746,9 +1780,10 @@ function ReviewSurface({
     interactive && source.type === 'pull-request' ? (
       <PullRequestReviewButtons
         disabled={pullRequestReviewSubmitting != null || pullRequestCloseSubmitting}
-        hasPendingComments={localReviewComments.some(
-          (comment) => !comment.isReadOnly && !comment.threadId && Boolean(comment.body.trim()),
-        )}
+        hasPendingComments={
+          getPendingPullRequestReviewComments(localReviewComments, activeReviewCommentDraftState)
+            .length > 0
+        }
         onClosePullRequest={closePullRequest}
         onSubmitReview={submitReview}
         reviewStatus={source.reviewStatus}

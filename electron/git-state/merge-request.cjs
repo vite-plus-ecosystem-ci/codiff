@@ -608,9 +608,16 @@ const createGitLabPosition = (comment, metadata, diff) => {
   return position;
 };
 
-/** @param {'APPROVE' | 'REQUEST_CHANGES'} event */
-const getGitLabReviewQuickAction = (event) =>
-  `/submit_review ${event === 'APPROVE' ? 'approve' : 'request_changes'}`;
+/** @param {unknown} event */
+const getGitLabReviewQuickAction = (event) => {
+  if (event === 'APPROVE') {
+    return '/submit_review approve';
+  }
+  if (event === 'REQUEST_CHANGES') {
+    return '/submit_review request_changes';
+  }
+  throw new Error(`GitLab merge request reviews do not support ${String(event)}.`);
+};
 
 /** @param {string} launchPath @param {any} request */
 const submitMergeRequestComment = async (launchPath, request) => {
@@ -665,6 +672,7 @@ const submitMergeRequestComment = async (launchPath, request) => {
 
 /** @param {string} launchPath @param {any} request */
 const submitMergeRequestReview = async (launchPath, request) => {
+  const quickAction = getGitLabReviewQuickAction(request.event);
   const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
   const mergeRequest = parseGitLabMergeRequestUrl(request.source.url);
   selectMergeRequestRemote(repoRoot, mergeRequest);
@@ -687,9 +695,7 @@ const submitMergeRequestReview = async (launchPath, request) => {
     mergeRequest,
     ['--method', 'POST', '--input', '-', mergeRequestEndpoint(mergeRequest, '/notes')],
     {
-      body: `${request.body ? `${request.body}\n\n` : ''}${getGitLabReviewQuickAction(
-        request.event,
-      )}`,
+      body: `${request.body ? `${request.body}\n\n` : ''}${quickAction}`,
     },
   );
 };

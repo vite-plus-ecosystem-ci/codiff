@@ -1257,6 +1257,7 @@ function ReviewCommentEditor({
   keymap,
   onAskCodex,
   onCommentBlur,
+  onCommentDraftChange,
   onCommentFocus,
   onDeleteComment,
   onHeightChange,
@@ -1275,6 +1276,7 @@ function ReviewCommentEditor({
   keymap: CodiffKeymap;
   onAskCodex?: (commentId: string) => void;
   onCommentBlur: (comment: ReviewComment, body: string) => void;
+  onCommentDraftChange?: (comment: Pick<ReviewComment, 'body' | 'id'> | null) => void;
   onCommentFocus: (comment: ReviewComment) => void;
   onDeleteComment: (commentId: string) => void;
   onHeightChange: () => void;
@@ -1402,8 +1404,9 @@ function ReviewCommentEditor({
         dirty: true,
         draft,
       }));
+      onCommentDraftChange?.({ body: draft, id: comment.id });
     },
-    [comment.body, comment.id],
+    [comment.body, comment.id, onCommentDraftChange],
   );
 
   const handleAskCodex = useCallback(() => {
@@ -1852,6 +1855,7 @@ function ReviewCommentThreadGroup({
   keymap,
   onAskCodex,
   onCommentBlur,
+  onCommentDraftChange,
   onCommentFocus,
   onDeleteComment,
   onHeightChange,
@@ -1871,6 +1875,7 @@ function ReviewCommentThreadGroup({
   keymap: CodiffKeymap;
   onAskCodex?: (commentId: string) => void;
   onCommentBlur: (comment: ReviewComment, body: string) => void;
+  onCommentDraftChange?: (comment: Pick<ReviewComment, 'body' | 'id'> | null) => void;
   onCommentFocus: (comment: ReviewComment) => void;
   onDeleteComment: (commentId: string) => void;
   onHeightChange: () => void;
@@ -1950,6 +1955,7 @@ function ReviewCommentThreadGroup({
             keymap={keymap}
             onAskCodex={onAskCodex}
             onCommentBlur={onCommentBlur}
+            onCommentDraftChange={onCommentDraftChange}
             onCommentFocus={onCommentFocus}
             onDeleteComment={onDeleteComment}
             onHeightChange={onHeightChange}
@@ -1999,6 +2005,7 @@ function ReviewAnnotation({
   keymap,
   onAskCodex,
   onCommentBlur,
+  onCommentDraftChange,
   onCommentFocus,
   onDeleteComment,
   onHeightChange,
@@ -2019,6 +2026,7 @@ function ReviewAnnotation({
   keymap: CodiffKeymap;
   onAskCodex?: (commentId: string) => void;
   onCommentBlur: (comment: ReviewComment, body: string) => void;
+  onCommentDraftChange?: (comment: Pick<ReviewComment, 'body' | 'id'> | null) => void;
   onCommentFocus: (comment: ReviewComment) => void;
   onDeleteComment: (commentId: string) => void;
   onHeightChange: () => void;
@@ -2064,6 +2072,7 @@ function ReviewAnnotation({
           keymap={keymap}
           onAskCodex={onAskCodex}
           onCommentBlur={onCommentBlur}
+          onCommentDraftChange={onCommentDraftChange}
           onCommentFocus={onCommentFocus}
           onDeleteComment={onDeleteComment}
           onHeightChange={onHeightChange}
@@ -2440,6 +2449,7 @@ export function ReviewCodeView({
   loadingSectionIds,
   onActiveBlockChange,
   onAskCodex,
+  onCommentDraftChange,
   onCreateComment,
   onDeleteComment,
   onLoadImageContent,
@@ -2499,6 +2509,7 @@ export function ReviewCodeView({
   loadingSectionIds: ReadonlySet<string>;
   onActiveBlockChange?: (blockId: string) => void;
   onAskCodex?: (commentId: string) => void;
+  onCommentDraftChange?: (comment: Pick<ReviewComment, 'body' | 'id'> | null) => void;
   onCreateComment: (comment: Omit<ReviewComment, 'body' | 'id'>) => void;
   onDeleteComment: (commentId: string) => void;
   onLoadImageContent?: (request: DiffImageContentRequest) => Promise<DiffImageContentResult>;
@@ -2956,6 +2967,26 @@ export function ReviewCodeView({
     walkthroughNotes,
   ]);
 
+  const codeViewItems = useMemo<ReadonlyArray<CodeViewItem<ReviewAnnotationMetadata>>>(() => {
+    if (items.length > 0 || !sourceDescriptionItemId) {
+      return items;
+    }
+
+    return [
+      {
+        collapsed: true,
+        file: {
+          cacheKey: sourceDescriptionItemId,
+          contents: '',
+          lang: 'text',
+          name: shouldShowCommitMessage ? 'commit-message.md' : 'source-description.md',
+        },
+        id: sourceDescriptionItemId,
+        type: 'file',
+      },
+    ];
+  }, [items, shouldShowCommitMessage, sourceDescriptionItemId]);
+
   const clearCommentLineHighlight = useCallback(() => {
     codeViewRef.current?.clearSelectedLines();
     navigatedSelectionRef.current = null;
@@ -3237,19 +3268,24 @@ export function ReviewCodeView({
     ],
   );
 
-  const focusComment = useCallback((comment: ReviewComment) => {
-    const timer = emptyCommentDeleteTimersRef.current.get(comment.id);
-    if (timer == null) {
-      return;
-    }
+  const focusComment = useCallback(
+    (comment: ReviewComment) => {
+      onCommentDraftChange?.({ body: comment.body, id: comment.id });
+      const timer = emptyCommentDeleteTimersRef.current.get(comment.id);
+      if (timer == null) {
+        return;
+      }
 
-    window.clearTimeout(timer);
-    deferredTimersRef.current.delete(timer);
-    emptyCommentDeleteTimersRef.current.delete(comment.id);
-  }, []);
+      window.clearTimeout(timer);
+      deferredTimersRef.current.delete(timer);
+      emptyCommentDeleteTimersRef.current.delete(comment.id);
+    },
+    [onCommentDraftChange],
+  );
 
   const blurComment = useCallback(
     (comment: ReviewComment, body: string) => {
+      onCommentDraftChange?.(null);
       clearCommentLineHighlight();
       if (!comment.isReadOnly && body.trim().length === 0) {
         const existingTimer = emptyCommentDeleteTimersRef.current.get(comment.id);
@@ -3267,7 +3303,7 @@ export function ReviewCodeView({
         emptyCommentDeleteTimersRef.current.set(comment.id, timer);
       }
     },
-    [clearCommentLineHighlight, onDeleteComment],
+    [clearCommentLineHighlight, onCommentDraftChange, onDeleteComment],
   );
 
   const replyToThread = useCallback(
@@ -3795,29 +3831,41 @@ export function ReviewCodeView({
     ],
   );
 
+  const firstCodeViewItemId = codeViewItems[0]?.id ?? null;
   const renderCustomHeader = useCallback(
     (item: CodeViewItem<ReviewAnnotationMetadata>) => {
       const meta = itemMetadata.get(item.id);
+      const sourceHeader =
+        sourceDescriptionItemId && item.id === firstCodeViewItemId ? (
+          <div data-diffs-code-view-header="">{renderCodeViewHeader()}</div>
+        ) : null;
+
       return meta ? (
-        <CodeViewHeader
-          allowViewedToggle={allowViewedToggle}
-          canCreateFileComment={canCreateFileComments}
-          isSectionLoading={loadingSectionIds.has(meta.section.id)}
-          meta={meta}
-          onCreateFileComment={() => createFileComment(meta, item.id)}
-          onLoadSection={onLoadSection}
-          onOpenFile={onOpenFile}
-          onToggleCollapsed={onToggleCollapsed}
-          onToggleMarkdownPreview={toggleMarkdownPreview}
-          onToggleViewed={onToggleViewed}
-          readOnly={isReadOnly}
-        />
-      ) : null;
+        <Fragment>
+          {sourceHeader}
+          <CodeViewHeader
+            allowViewedToggle={allowViewedToggle}
+            canCreateFileComment={canCreateFileComments}
+            isSectionLoading={loadingSectionIds.has(meta.section.id)}
+            meta={meta}
+            onCreateFileComment={() => createFileComment(meta, item.id)}
+            onLoadSection={onLoadSection}
+            onOpenFile={onOpenFile}
+            onToggleCollapsed={onToggleCollapsed}
+            onToggleMarkdownPreview={toggleMarkdownPreview}
+            onToggleViewed={onToggleViewed}
+            readOnly={isReadOnly}
+          />
+        </Fragment>
+      ) : (
+        sourceHeader
+      );
     },
     [
       allowViewedToggle,
       canCreateFileComments,
       createFileComment,
+      firstCodeViewItemId,
       itemMetadata,
       isReadOnly,
       loadingSectionIds,
@@ -3825,6 +3873,8 @@ export function ReviewCodeView({
       onOpenFile,
       onToggleCollapsed,
       onToggleViewed,
+      renderCodeViewHeader,
+      sourceDescriptionItemId,
       toggleMarkdownPreview,
     ],
   );
@@ -3888,6 +3938,7 @@ export function ReviewCodeView({
           keymap={keymap}
           onAskCodex={onAskCodex}
           onCommentBlur={blurComment}
+          onCommentDraftChange={onCommentDraftChange}
           onCommentFocus={focusComment}
           onDeleteComment={deleteComment}
           onHeightChange={() => markCommentLayoutChanged(item.id)}
@@ -3915,6 +3966,7 @@ export function ReviewCodeView({
       markImagePreviewLayoutReady,
       markCommentLayoutChanged,
       onAskCodex,
+      onCommentDraftChange,
       onLoadImageContent,
       onResolveThread,
       onSaveCommentEdit,
@@ -3964,13 +4016,12 @@ export function ReviewCodeView({
     <CodeView
       className="code-view"
       disableWorkerPool={disableWorkerPool}
-      items={items}
+      items={codeViewItems}
       onScroll={handleScroll}
       onSelectedLinesChange={setCodeViewSelectedLines}
       options={codeViewOptions}
       ref={codeViewRef}
       renderAnnotation={renderAnnotation}
-      renderCodeViewHeader={sourceDescriptionItemId ? renderCodeViewHeader : undefined}
       renderCustomHeader={renderCustomHeader}
       selectedLines={isReadOnly ? null : selectedLines}
     />
@@ -3986,13 +4037,12 @@ export function ReviewCodeView({
       <CodeView
         className="code-view"
         disableWorkerPool={false}
-        items={items}
+        items={codeViewItems}
         onScroll={handleScroll}
         onSelectedLinesChange={setCodeViewSelectedLines}
         options={codeViewOptions}
         ref={codeViewRef}
         renderAnnotation={renderAnnotation}
-        renderCodeViewHeader={sourceDescriptionItemId ? renderCodeViewHeader : undefined}
         renderCustomHeader={renderCustomHeader}
         selectedLines={isReadOnly ? null : selectedLines}
       />

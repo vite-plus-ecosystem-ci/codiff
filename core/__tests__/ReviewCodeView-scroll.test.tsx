@@ -960,8 +960,8 @@ test('read-only markdown previews trigger CodeView layout remeasurement after he
     const markdownPreview = app.container.querySelector<HTMLElement>(
       '[aria-label="Preview plan.md"]',
     );
-    // The source description renders in CodeView's header region, where height
-    // changes are observed by the viewer directly instead of item versions.
+    // The source description lives in the first custom header, whose height is
+    // observed by CodeView directly instead of tracked through item versions.
     const sourceDescription = app.container.querySelector<HTMLElement>(
       '[data-diffs-code-view-header] [aria-label="Preview source description"]',
     );
@@ -976,6 +976,28 @@ test('read-only markdown previews trigger CodeView layout remeasurement after he
     await waitFor(() => {
       expect(getCodeViewItemVersion(markdownItemId)).not.toBe(initialMarkdownVersion);
     });
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('source description remains visible when a review has no diff items', async () => {
+  const source = {
+    description: 'No file changes are needed.',
+    number: 13,
+    provider: 'github',
+    title: 'Empty pull request',
+    type: 'pull-request',
+    url: 'https://github.com/nkzw-tech/codiff/pull/13',
+  } satisfies ReviewSource;
+  const app = await renderReact(<ReviewCodeViewHarness files={[]} isReadOnly source={source} />);
+
+  try {
+    expect(
+      app.container.querySelector(
+        '[data-diffs-code-view-header] [aria-label="Preview source description"]',
+      ),
+    ).not.toBeNull();
   } finally {
     await app.cleanup();
   }
@@ -1058,6 +1080,7 @@ test('review comment typing stays local until a comment action commits it', asyn
     side: 'additions',
   } satisfies ReviewComment;
   const onAskCodex = vi.fn();
+  const onCommentDraftChange = vi.fn();
   const onUpdateComment = vi.fn();
   const container = document.createElement('div');
   document.body.append(container);
@@ -1072,6 +1095,7 @@ test('review comment typing stays local until a comment action commits it', asyn
           diffStyle="unified"
           files={[file]}
           onAskCodex={onAskCodex}
+          onCommentDraftChange={onCommentDraftChange}
           onUpdateComment={onUpdateComment}
         />,
       );
@@ -1085,6 +1109,9 @@ test('review comment typing stays local until a comment action commits it', asyn
     await setInputValue(textarea, 'Please check this.');
 
     expect(onUpdateComment).not.toHaveBeenCalled();
+    expect(onCommentDraftChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ body: 'Please check this.', id: 'comment-1' }),
+    );
 
     const askButton = [...container.querySelectorAll<HTMLButtonElement>('button')].find(
       (button) => button.textContent === 'Ask',

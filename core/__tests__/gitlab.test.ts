@@ -50,7 +50,7 @@ const {
     mergeRequest: { number: number; projectPath: string },
     threadId: string,
   ) => string;
-  getGitLabReviewQuickAction: (event: 'APPROVE' | 'REQUEST_CHANGES') => string;
+  getGitLabReviewQuickAction: (event: 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES') => string;
   getGlabCommand: () => string;
   GLAB_NOT_FOUND_CODE: string;
   GLAB_NOT_FOUND_MESSAGE: string;
@@ -244,6 +244,9 @@ describe('GitLab merge requests', () => {
   test('maps review outcomes to GitLab review quick actions', () => {
     expect(getGitLabReviewQuickAction('APPROVE')).toBe('/submit_review approve');
     expect(getGitLabReviewQuickAction('REQUEST_CHANGES')).toBe('/submit_review request_changes');
+    expect(() => getGitLabReviewQuickAction('COMMENT')).toThrow(
+      'GitLab merge request reviews do not support COMMENT.',
+    );
   });
 
   test('builds single-line and ranged GitLab diff positions', () => {

@@ -1,6 +1,7 @@
 import { expect, test } from 'vite-plus/test';
 import type { ReviewComment } from '../lib/app-types.ts';
 import {
+  getPendingPullRequestReviewComments,
   getReviewCommentsFromState,
   getVisibleReviewComments,
   toPullRequestReviewComment,
@@ -68,6 +69,62 @@ test('getReviewCommentsFromState carries the outdated flag through to review com
   expect(comments).toHaveLength(2);
   expect(comments.find((comment) => comment.id === 'github:1')?.isOutdated).toBe(true);
   expect(comments.find((comment) => comment.id === 'github:2')?.isOutdated).toBeUndefined();
+});
+
+test('getPendingPullRequestReviewComments includes an unflushed active draft', () => {
+  const comments = [
+    createReviewComment({ body: '', id: 'draft' }),
+    createReviewComment({ body: 'Already flushed.', id: 'ready', lineNumber: 6 }),
+  ];
+
+  expect(
+    getPendingPullRequestReviewComments(comments, {
+      ...comments[0],
+      body: 'Still focused.',
+    }).map((comment) => [comment.id, comment.body]),
+  ).toEqual([
+    ['draft', 'Still focused.'],
+    ['ready', 'Already flushed.'],
+  ]);
+});
+
+test('getPendingPullRequestReviewComments replaces a stale flushed draft', () => {
+  const comments = [createReviewComment({ body: 'Old text.', id: 'draft' })];
+
+  expect(
+    getPendingPullRequestReviewComments(comments, {
+      ...comments[0],
+      body: 'New text.',
+    }).map((comment) => comment.body),
+  ).toEqual(['New text.']);
+});
+
+test('getPendingPullRequestReviewComments respects an emptied active draft', () => {
+  const comments = [createReviewComment({ body: 'Old text.', id: 'draft' })];
+
+  expect(
+    getPendingPullRequestReviewComments(comments, {
+      body: '   ',
+      id: comments[0].id,
+    }),
+  ).toEqual([]);
+});
+
+test('getPendingPullRequestReviewComments ignores drafts outside the current review', () => {
+  expect(
+    getPendingPullRequestReviewComments([], {
+      body: 'Stale text.',
+      id: 'stale-draft',
+    }),
+  ).toEqual([]);
+});
+
+test('getPendingPullRequestReviewComments excludes comments being submitted individually', () => {
+  const comment = createReviewComment({ body: 'Already submitting.', id: 'draft' });
+
+  expect(
+    getPendingPullRequestReviewComments([{ ...comment, remoteSubmit: { status: 'submitting' } }]),
+  ).toEqual([]);
 });
 
 test('getReviewCommentsFromState carries GitLab discussion metadata through to review comments', () => {
