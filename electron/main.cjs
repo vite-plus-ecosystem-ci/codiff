@@ -81,6 +81,7 @@ const {
   getNarrativeWalkthroughCacheKey,
   normalizeNarrativeWalkthrough,
   readNarrativeWalkthrough,
+  resolveNarrativeWalkthroughModel,
 } = require('./narrative-walkthrough.cjs');
 const { readStoredWalkthrough, writeStoredWalkthrough } = require('./walkthrough-store.cjs');
 const { uploadSharedSnapshot } = require('./shared-walkthrough-upload.cjs');
@@ -1583,11 +1584,12 @@ ipcMain.handle('codiff:getNarrativeWalkthrough', async (event, source, options) 
       await agent.readSessionContext(launchOptions?.[agent.sessionLaunchOptionKey]),
     );
     const agentOptions = getAgentOptions(agent);
+    const walkthroughModel = resolveNarrativeWalkthroughModel(state, agent, agentOptions.model);
     const walkthroughPrompt = config.settings.walkthroughPrompt;
     const cacheKey = getNarrativeWalkthroughCacheKey(
       state,
       agent,
-      agentOptions.model,
+      walkthroughModel,
       walkthroughContext,
       walkthroughPrompt,
     );
@@ -1610,13 +1612,14 @@ ipcMain.handle('codiff:getNarrativeWalkthrough', async (event, source, options) 
       }
     }
 
-    let generatedModel = agentOptions.model;
+    let generatedModel = walkthroughModel;
     const onModelFallback = agentOptions.onModelFallback;
     const result = await readNarrativeWalkthrough(
       state,
       agent,
       {
         ...agentOptions,
+        model: walkthroughModel,
         onModelFallback: async (fallbackModel, originalModel) => {
           generatedModel = fallbackModel;
           await onModelFallback(fallbackModel, originalModel);

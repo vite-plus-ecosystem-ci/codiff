@@ -7,10 +7,12 @@ const {
   buildNarrativeWalkthroughPrompt,
   getNarrativeWalkthroughCacheKey,
   getNarrativeWalkthroughTimeoutMs,
+  LARGE_WALKTHROUGH_HUNK_THRESHOLD,
   narrativeWalkthroughResponseSchema,
   narrativeWalkthroughSchema,
   normalizeNarrativeWalkthrough,
   readNarrativeWalkthrough,
+  resolveNarrativeWalkthroughModel,
 } = require('../narrative-walkthrough.cjs') as {
   buildNarrativeWalkthroughPrompt: (
     state: any,
@@ -27,6 +29,7 @@ const {
     customPrompt?: string,
   ) => string;
   getNarrativeWalkthroughTimeoutMs: (state: any, minimumMs?: number) => number;
+  LARGE_WALKTHROUGH_HUNK_THRESHOLD: number;
   narrativeWalkthroughResponseSchema: {
     properties: Record<string, any>;
     required: ReadonlyArray<string>;
@@ -55,6 +58,7 @@ const {
     customPrompt?: string,
     previousWalkthrough?: unknown,
   ) => Promise<any>;
+  resolveNarrativeWalkthroughModel: (state: any, agent: any, model: unknown) => string;
 };
 
 const addedPatch = (count: number) =>
@@ -178,7 +182,7 @@ test('reports only the long-running walkthrough generation phases', async () => 
   });
 
   expect(phases).toEqual(['agent-generation', 'response-received']);
-  expect(runOptions.reasoningEffort).toBe('low');
+  expect(runOptions.reasoningEffort).toBeUndefined();
 });
 
 const baseInput = () => ({
@@ -361,6 +365,55 @@ test('scales walkthrough timeouts with reviewable files and hunks', () => {
   expect(mediumTimeout).toBeLessThan(300_000);
   expect(largeTimeout).toBe(300_000);
   expect(getNarrativeWalkthroughTimeoutMs(createState(4), 180_000)).toBe(180_000);
+});
+
+test('uses GPT-5.5 for large walkthroughs only when Codex is on the default model', () => {
+  const createState = (hunkCount: number) => ({
+    branch: 'main',
+    files: [
+      {
+        path: 'large.ts',
+        sections: [
+          {
+            id: 'large.ts:staged',
+            kind: 'staged',
+            patch: Array.from(
+              { length: hunkCount },
+              (_, index) => `@@ -${index + 1} +${index + 1} @@\n-old ${index}\n+new ${index}\n`,
+            ).join(''),
+          },
+        ],
+        status: 'modified',
+      },
+    ],
+    generatedAt: 1,
+    root: '/repo',
+    source: { type: 'working-tree' },
+  });
+  const codexAgent = {
+    defaultModel: 'gpt-5.6-terra',
+    fallbackModel: 'gpt-5.5',
+    id: 'codex',
+    normalizeModel: (model: unknown) => String(model),
+  };
+
+  expect(LARGE_WALKTHROUGH_HUNK_THRESHOLD).toBe(100);
+  expect(resolveNarrativeWalkthroughModel(createState(99), codexAgent, 'gpt-5.6-terra')).toBe(
+    'gpt-5.6-terra',
+  );
+  expect(resolveNarrativeWalkthroughModel(createState(100), codexAgent, 'gpt-5.6-terra')).toBe(
+    'gpt-5.5',
+  );
+  expect(resolveNarrativeWalkthroughModel(createState(100), codexAgent, 'gpt-5.6-sol')).toBe(
+    'gpt-5.6-sol',
+  );
+  expect(
+    resolveNarrativeWalkthroughModel(
+      createState(100),
+      { ...codexAgent, id: 'claude' },
+      'claude-sonnet',
+    ),
+  ).toBe('claude-sonnet');
 });
 
 test('prompts generated walkthroughs with custom user guidance without replacing core constraints', () => {

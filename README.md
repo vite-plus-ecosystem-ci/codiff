@@ -126,7 +126,7 @@ counts; when it is `false`, Codiff hides those changes from the working-tree rev
     "diffStyle": "split",
     "editorCommand": "",
     "lastRepositoryPath": "",
-    "openAIModel": "gpt-5.3-codex-spark",
+    "openAIModel": "gpt-5.6-terra",
     "opencodeModel": "opencode-default",
     "showWhitespace": false,
     "theme": "system",
@@ -178,6 +178,12 @@ application menu:
 - `opencode` — the [OpenCode](https://opencode.ai/) CLI, configured with
   `settings.opencodeModel`.
 - `pi` — the Pi CLI, using its configured default model.
+
+Codex walkthroughs default to GPT-5.6 Terra with low reasoning. The Model menu also offers Sol
+with medium reasoning for deeper analysis and Luna with medium reasoning for faster work. If a
+selected GPT-5.6 model is unavailable, Codiff retries with Terra when applicable and then GPT-5.5,
+persisting the first model that succeeds. Walkthroughs with at least 100 reviewable hunks use
+GPT-5.5 with low reasoning when Terra is the configured default.
 
 Install the backend you want and verify it is available before using `codiff -w`:
 

@@ -15,9 +15,10 @@ const {
 } = require('./agent-shared.cjs');
 
 const CODEX_TIMEOUT_MS = 90_000;
-const DEFAULT_OPENAI_MODEL = 'gpt-5.3-codex-spark';
+const DEFAULT_OPENAI_MODEL = 'gpt-5.6-terra';
 const FALLBACK_OPENAI_MODEL = 'gpt-5.5';
-const CODEX_REASONING_EFFORT = 'high';
+const LEGACY_OPENAI_MODEL = 'gpt-5.3-codex-spark';
+const CODEX_REASONING_EFFORT = 'low';
 const CODEX_MACOS_BLOCKED_MESSAGE =
   'macOS blocked the local Codex CLI. Update Codex CLI from the official OpenAI release, then run `codex --version` and try again.';
 const CODEX_NOT_FOUND_CODE = 'CODEX_NOT_FOUND';
@@ -54,15 +55,31 @@ const CODEX_NOT_FOUND_MESSAGE =
 const OPENAI_MODELS = Object.freeze([
   {
     id: DEFAULT_OPENAI_MODEL,
-    label: 'Default: GPT-5.3 Codex Spark',
+    label: 'Default: GPT-5.6 Terra',
+  },
+  {
+    id: 'gpt-5.6-sol',
+    label: 'Strong: GPT-5.6 Sol',
+  },
+  {
+    id: 'gpt-5.6-luna',
+    label: 'Fast: GPT-5.6 Luna',
   },
   {
     id: FALLBACK_OPENAI_MODEL,
-    label: 'Strong: GPT-5.5',
+    label: 'Compatibility: GPT-5.5',
+  },
+  {
+    id: LEGACY_OPENAI_MODEL,
+    label: 'Preview: GPT-5.3 Codex Spark',
   },
 ]);
 const OPENAI_MODEL_IDS = new Set(OPENAI_MODELS.map((model) => model.id));
 const CODEX_REASONING_EFFORTS = new Set(['low', 'medium', 'high']);
+const OPENAI_MODEL_REASONING_EFFORTS = new Map([
+  ['gpt-5.6-sol', 'medium'],
+  ['gpt-5.6-luna', 'medium'],
+]);
 
 /** @param {string} [detail] */
 const createCodexNotFoundError = (detail) =>
@@ -205,6 +222,26 @@ const getCodexStructuredErrorMessage = (value) => {
 const normalizeOpenAIModel = (value) =>
   normalizeEnum(value, OPENAI_MODEL_IDS, DEFAULT_OPENAI_MODEL);
 
+/** @param {unknown} model @param {unknown} [reasoningEffort] */
+const getOpenAIModelReasoningEffort = (model, reasoningEffort) =>
+  normalizeEnum(
+    reasoningEffort,
+    CODEX_REASONING_EFFORTS,
+    OPENAI_MODEL_REASONING_EFFORTS.get(normalizeOpenAIModel(model)) || CODEX_REASONING_EFFORT,
+  );
+
+/** @param {unknown} model @param {unknown} [fallbackModel] */
+const getOpenAIModelFallbacks = (model, fallbackModel = FALLBACK_OPENAI_MODEL) => {
+  const normalizedModel = normalizeOpenAIModel(model);
+  const candidates = [
+    ...(normalizedModel === 'gpt-5.6-sol' || normalizedModel === 'gpt-5.6-luna'
+      ? [DEFAULT_OPENAI_MODEL]
+      : []),
+    normalizeOpenAIModel(fallbackModel),
+  ];
+  return [...new Set(candidates)].filter((candidate) => candidate !== normalizedModel);
+};
+
 /** @param {string} value */
 const isOpenAIModelAvailabilityError = (value) =>
   /\b(?:model_not_found|unknown model|invalid model|model is not available|not available for|not supported|does not have access|do not have access|don't have access|access to model|403|404)\b/i.test(
@@ -338,16 +375,12 @@ const runCodex = async (
   options = {},
 ) => {
   const model = normalizeOpenAIModel(options.model);
-  const fallbackModel = normalizeOpenAIModel(options.fallbackModel || FALLBACK_OPENAI_MODEL);
+  const fallbackModels = getOpenAIModelFallbacks(model, options.fallbackModel);
   const timeoutMs = options.timeoutMs ?? CODEX_TIMEOUT_MS;
-  const reasoningEffort = normalizeEnum(
-    options.reasoningEffort,
-    CODEX_REASONING_EFFORTS,
-    CODEX_REASONING_EFFORT,
-  );
 
   /** @param {string} codexModel @returns {Promise<string>} */
   const invokeCodexExec = async (codexModel) => {
+    const reasoningEffort = getOpenAIModelReasoningEffort(codexModel, options.reasoningEffort);
     const directory = await fs.mkdtemp(join(tmpdir(), 'codiff-codex-'));
     const outputPath = join(directory, outputName);
     const schemaPath = join(directory, 'schema.json');
@@ -461,8 +494,9 @@ const runCodex = async (
    * @param {string} codexModel
    * @returns {Promise<string>}
    */
-  const invokeCodexAppServer = (codexModel) =>
-    new Promise((resolve, reject) => {
+  const invokeCodexAppServer = (codexModel) => {
+    const reasoningEffort = getOpenAIModelReasoningEffort(codexModel, options.reasoningEffort);
+    return new Promise((resolve, reject) => {
       const codexCommand = getCodexCommand();
       const child = spawn(
         codexCommand,
@@ -734,6 +768,7 @@ const runCodex = async (
         fail(getCodexLaunchError(error));
       });
     });
+  };
 
   /** @param {string} codexModel */
   const invokeCodex = async (codexModel) => {
@@ -750,18 +785,23 @@ const runCodex = async (
     }
   };
 
-  try {
-    return await invokeCodex(model);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (model === fallbackModel || !isOpenAIModelAvailabilityError(message)) {
-      throw error;
+  const candidates = [model, ...fallbackModels];
+  for (const [index, candidate] of candidates.entries()) {
+    try {
+      const response = await invokeCodex(candidate);
+      if (candidate !== model) {
+        await options.onModelFallback?.(candidate, model);
+      }
+      return response;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (index === candidates.length - 1 || !isOpenAIModelAvailabilityError(message)) {
+        throw error;
+      }
     }
-
-    const response = await invokeCodex(fallbackModel);
-    await options.onModelFallback?.(fallbackModel, model);
-    return response;
   }
+
+  throw new Error('Codex did not attempt a model.');
 };
 
 module.exports = {
@@ -774,6 +814,8 @@ module.exports = {
   getCodexCommand,
   getCodexInstallPaths,
   getCodexLaunchErrorMessage,
+  getOpenAIModelFallbacks,
+  getOpenAIModelReasoningEffort,
   isCodexNotFoundError,
   isOpenAIModelAvailabilityError,
   normalizeOpenAIModel,

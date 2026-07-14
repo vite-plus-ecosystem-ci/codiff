@@ -12,6 +12,8 @@ const {
   getCodexCommand,
   getCodexInstallPaths,
   getCodexLaunchErrorMessage,
+  getOpenAIModelFallbacks,
+  getOpenAIModelReasoningEffort,
   isOpenAIModelAvailabilityError,
   normalizeOpenAIModel,
   runCodex,
@@ -22,6 +24,11 @@ const {
   getCodexCommand: () => string;
   getCodexInstallPaths: (platform?: NodeJS.Platform, home?: string) => Array<string>;
   getCodexLaunchErrorMessage: (error: unknown, platform?: NodeJS.Platform) => string;
+  getOpenAIModelFallbacks: (model: unknown, fallbackModel?: unknown) => Array<string>;
+  getOpenAIModelReasoningEffort: (
+    model: unknown,
+    reasoningEffort?: unknown,
+  ) => 'high' | 'low' | 'medium';
   isOpenAIModelAvailabilityError: (value: string) => boolean;
   normalizeOpenAIModel: (value: unknown) => string;
   runCodex: (
@@ -31,6 +38,7 @@ const {
     outputName?: string,
     timeoutMessage?: string,
     options?: {
+      fallbackModel?: string;
       model?: string;
       onMetrics?: (metrics: {
         transport: string;
@@ -42,6 +50,7 @@ const {
           totalTokens: number;
         };
       }) => void;
+      onModelFallback?: (fallbackModel: string, originalModel: string) => void;
       onProgress?: (phase: string) => void;
       reasoningEffort?: 'low' | 'medium' | 'high';
       timeoutMs?: number;
@@ -50,10 +59,28 @@ const {
 };
 
 test('normalizes OpenAI model preferences to known models', () => {
+  expect(normalizeOpenAIModel('gpt-5.6-sol')).toBe('gpt-5.6-sol');
+  expect(normalizeOpenAIModel('gpt-5.6-terra')).toBe('gpt-5.6-terra');
+  expect(normalizeOpenAIModel('gpt-5.6-luna')).toBe('gpt-5.6-luna');
   expect(normalizeOpenAIModel('gpt-5.5')).toBe('gpt-5.5');
   expect(normalizeOpenAIModel('gpt-5.4-mini')).toBe(DEFAULT_OPENAI_MODEL);
   expect(normalizeOpenAIModel('gpt-5.3-codex')).toBe(DEFAULT_OPENAI_MODEL);
   expect(normalizeOpenAIModel('gpt-4o')).toBe(DEFAULT_OPENAI_MODEL);
+});
+
+test('uses eval-selected reasoning effort for each OpenAI model', () => {
+  expect(getOpenAIModelReasoningEffort('gpt-5.6-sol')).toBe('medium');
+  expect(getOpenAIModelReasoningEffort('gpt-5.6-terra')).toBe('low');
+  expect(getOpenAIModelReasoningEffort('gpt-5.6-luna')).toBe('medium');
+  expect(getOpenAIModelReasoningEffort('gpt-5.5')).toBe('low');
+  expect(getOpenAIModelReasoningEffort('gpt-5.6-sol', 'high')).toBe('high');
+});
+
+test('falls back from gated GPT-5.6 models to Terra and GPT-5.5', () => {
+  expect(getOpenAIModelFallbacks('gpt-5.6-sol')).toEqual(['gpt-5.6-terra', 'gpt-5.5']);
+  expect(getOpenAIModelFallbacks('gpt-5.6-luna')).toEqual(['gpt-5.6-terra', 'gpt-5.5']);
+  expect(getOpenAIModelFallbacks('gpt-5.6-terra')).toEqual(['gpt-5.5']);
+  expect(getOpenAIModelFallbacks('gpt-5.5')).toEqual([]);
 });
 
 test('detects selected model availability failures', () => {
@@ -171,8 +198,75 @@ exit 1
     expect(args).toContain('--json');
     expect(args).toContain('--cd');
     expect(args).toContain('/repo');
-    expect(args).toContain('model_reasoning_effort="high"');
+    expect(args).toContain('model_reasoning_effort="low"');
     expect(args).not.toContain('resume');
+  } finally {
+    if (previousCodexPath == null) {
+      delete process.env.CODIFF_CODEX_PATH;
+    } else {
+      process.env.CODIFF_CODEX_PATH = previousCodexPath;
+    }
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test('retries unavailable GPT-5.6 models with model-specific reasoning', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codiff-codex-model-fallback-'));
+  const fakeCodexPath = join(directory, 'codex');
+  const attemptsPath = join(directory, 'attempts.txt');
+  const previousCodexPath = process.env.CODIFF_CODEX_PATH;
+
+  try {
+    await writeFile(
+      fakeCodexPath,
+      `#!/bin/sh
+model=""
+effort=""
+output=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -m)
+      shift
+      model="$1"
+      ;;
+    -c)
+      shift
+      effort="$1"
+      ;;
+    --output-last-message)
+      shift
+      output="$1"
+      ;;
+  esac
+  shift
+done
+printf '%s|%s\\n' "$model" "$effort" >> "${attemptsPath}"
+if [ "$model" != "gpt-5.5" ]; then
+  printf 'You do not have access to model %s.\\n' "$model" >&2
+  exit 1
+fi
+printf '{"version":1}' > "$output"
+`,
+    );
+    await chmod(fakeCodexPath, 0o755);
+    process.env.CODIFF_CODEX_PATH = fakeCodexPath;
+    const fallbacks: Array<[string, string]> = [];
+
+    await expect(
+      runCodex('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.', {
+        model: 'gpt-5.6-sol',
+        onModelFallback: (fallbackModel, originalModel) => {
+          fallbacks.push([fallbackModel, originalModel]);
+        },
+      }),
+    ).resolves.toBe('{"version":1}');
+
+    expect((await readFile(attemptsPath, 'utf8')).trim().split('\n')).toEqual([
+      'gpt-5.6-sol|model_reasoning_effort="medium"',
+      'gpt-5.6-terra|model_reasoning_effort="low"',
+      'gpt-5.5|model_reasoning_effort="low"',
+    ]);
+    expect(fallbacks).toEqual([['gpt-5.5', 'gpt-5.6-sol']]);
   } finally {
     if (previousCodexPath == null) {
       delete process.env.CODIFF_CODEX_PATH;
@@ -305,7 +399,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     expect(turnStart.params).toMatchObject({
       approvalPolicy: 'never',
       cwd: directory,
-      effort: 'high',
+      effort: 'low',
       outputSchema: {},
       sandboxPolicy: {
         networkAccess: false,
