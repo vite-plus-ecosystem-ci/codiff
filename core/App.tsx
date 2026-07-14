@@ -214,6 +214,18 @@ const updateWalkthroughOutdatedPathsForRefresh = (
   return next;
 };
 
+const isLaunchHistoryBranchSource = (
+  source: ReviewSource | undefined,
+): source is Extract<ReviewSource, { type: 'branch' }> => source?.type === 'branch';
+
+const getLaunchReviewSource = (launchOptions: CodiffLaunchOptions): ReviewSource | undefined =>
+  isLaunchHistoryBranchSource(launchOptions.source) ? undefined : launchOptions.source;
+
+const getLaunchHistoryBranchSource = (
+  launchOptions: CodiffLaunchOptions,
+): Extract<ReviewSource, { type: 'branch' }> | undefined =>
+  isLaunchHistoryBranchSource(launchOptions.source) ? launchOptions.source : undefined;
+
 const getReloadSourceForLaunch = (
   reloadSelection: ReturnType<typeof consumeReloadSelection>,
   launchOptions: CodiffLaunchOptions,
@@ -222,11 +234,12 @@ const getReloadSourceForLaunch = (
     return undefined;
   }
 
-  if (!launchOptions.source) {
+  const launchReviewSource = getLaunchReviewSource(launchOptions);
+  if (!launchReviewSource) {
     return reloadSelection.source;
   }
 
-  return getSourceKey(reloadSelection.source) === getSourceKey(launchOptions.source)
+  return getSourceKey(reloadSelection.source) === getSourceKey(launchReviewSource)
     ? reloadSelection.source
     : undefined;
 };
@@ -486,7 +499,11 @@ export default function App() {
     (file: ChangedFile, _section: DiffSection) => {
       const refresh = async () => {
         const currentState = stateRef.current;
-        if (!currentState || currentState.source.type !== 'working-tree') {
+        if (
+          !currentState ||
+          (currentState.source.type !== 'working-tree' &&
+            currentState.source.type !== 'branch-working-tree')
+        ) {
           return true;
         }
         const sourceRequest = sourceRequestRef.current;
@@ -576,7 +593,7 @@ export default function App() {
         if (!nextViewed) {
           const next = { ...current };
           delete next[file.path];
-          if (repositoryState.source.type === 'working-tree') {
+          if (usesViewedFileState(repositoryState.source)) {
             writeViewed(repositoryState.root, next);
           }
           return next;
@@ -586,7 +603,7 @@ export default function App() {
           ...current,
           [file.path]: file.fingerprint,
         };
-        if (repositoryState.source.type === 'working-tree') {
+        if (usesViewedFileState(repositoryState.source)) {
           writeViewed(repositoryState.root, next);
         }
         return next;
@@ -684,12 +701,21 @@ export default function App() {
         ...nextState,
         files: sortFiles(nextState.files),
       };
-      const nextHistorySource =
+      let nextHistorySource: ReviewSource | null =
         getReloadHistorySource(reloadSelection, orderedState) ??
-        getHistorySource(orderedState.source);
+        getHistorySource(orderedState.source) ??
+        null;
+      const launchHistoryBranch = getLaunchHistoryBranchSource(nextLaunchOptions);
+      if (!nextHistorySource && launchHistoryBranch) {
+        const branchState = await window.codiff.getRepositoryState(launchHistoryBranch);
+        if (canceled) {
+          return;
+        }
+        nextHistorySource = branchState.source.type === 'branch-diff' ? branchState.source : null;
+      }
       const history = await window.codiff.getRepositoryHistory(
         HISTORY_PAGE_SIZE,
-        nextHistorySource,
+        nextHistorySource ?? undefined,
       );
 
       if (canceled) {
@@ -1879,7 +1905,7 @@ export default function App() {
 
       setViewed((current) => {
         const next = updateReviewIdentityViewed(current, reviewIdentity, isViewed);
-        if (currentState.source.type === 'working-tree') {
+        if (usesViewedFileState(currentState.source)) {
           writeViewed(currentState.root, next);
         }
         return next;
@@ -2776,7 +2802,11 @@ export default function App() {
       ) : null}
       <RepositoryChangeBanner
         onRefresh={refreshRepository}
-        visible={localChangesDetected && (pendingSource ?? state.source).type === 'working-tree'}
+        visible={
+          localChangesDetected &&
+          ((pendingSource ?? state.source).type === 'working-tree' ||
+            (pendingSource ?? state.source).type === 'branch-working-tree')
+        }
       />
       <WalkthroughOutdatedBanner
         onDismiss={() => setWalkthroughFileError(null)}
@@ -2842,7 +2872,20 @@ export default function App() {
           </div>
         </div>
         <Sidebar
-          branchSource={historySource?.type === 'branch-diff' ? historySource : null}
+          branchSource={
+            historySource?.type === 'branch-diff'
+              ? historySource
+              : historySource?.type === 'branch-working-tree' &&
+                  historySource.baseRef &&
+                  historySource.headRef
+                ? {
+                    baseRef: historySource.baseRef,
+                    headRef: historySource.headRef,
+                    ref: historySource.ref,
+                    type: 'branch-diff',
+                  }
+                : null
+          }
           commitFiles={state.files}
           commitViewOpen={showPlainCommitView}
           currentSource={pendingSource ?? state.source}
