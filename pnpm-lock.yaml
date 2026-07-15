@@ -31,7 +31,7 @@ importers:
     devDependencies:
       '@electron-forge/cli':
         specifier: ^7.11.2
-        version: 7.11.2(@swc/core@1.15.43)(encoding@0.1.13)
+        version: 7.11.2(encoding@0.1.13)
       '@electron-forge/maker-deb':
         specifier: ^7.11.2
         version: 7.11.2
@@ -53,9 +53,6 @@ importers:
       '@rolldown/plugin-babel':
         specifier: ^0.2.3
         version: 0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@voidzero-dev/vite-plus-core@0.2.4(@types/node@26.1.1)(jiti@2.7.0)(terser@5.49.0)(typescript@7.0.2))(rolldown@1.0.0-rc.9(@emnapi/core@1.9.0)(@emnapi/runtime@1.9.0))
-      '@swc/core':
-        specifier: ^1.15.43
-        version: 1.15.43
       '@tailwindcss/vite':
         specifier: ^4.3.2
         version: 4.3.2(@voidzero-dev/vite-plus-core@0.2.4(@types/node@26.1.1)(jiti@2.7.0)(terser@5.49.0)(typescript@7.0.2))
@@ -1847,99 +1844,6 @@ packages:
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
-
-  '@swc/core-darwin-arm64@1.15.43':
-    resolution: {integrity: sha512-v1aVuvXdo/BHxJzco9V2xpHrvwWmhfS8t6gziY5wJxd+Z2h8AeJRnAwPD8itCDaGXVBwJ/CaKfxEzTkG0Va0OA==}
-    engines: {node: '>=10'}
-    cpu: [arm64]
-    os: [darwin]
-
-  '@swc/core-darwin-x64@1.15.43':
-    resolution: {integrity: sha512-lp3d4Lamc8dt5huYdGLSR+9hLxmfr1jb0l+4XXG2zPqZwYWRN9R0U2qYoTrggiU2RWW0oV9VbWM3kBnqIc2kdQ==}
-    engines: {node: '>=10'}
-    cpu: [x64]
-    os: [darwin]
-
-  '@swc/core-linux-arm-gnueabihf@1.15.43':
-    resolution: {integrity: sha512-JWTQQELtsG5GgphDrr/XqqmM2pDN3cZqbMS0Mrg+iTiXL3F74sn/S2IyYE/5u4h2KLkTf9qQ7dXyxsbx7YzkeA==}
-    engines: {node: '>=10'}
-    cpu: [arm]
-    os: [linux]
-
-  '@swc/core-linux-arm64-gnu@1.15.43':
-    resolution: {integrity: sha512-B4otJRdPWIsmiSBf0uG7Z/+vMWmkufjz5MmYxubwKuZazDW14Zd3symga1N62QR4RT+kEFeHEgsXfZGyn/w0hw==}
-    engines: {node: '>=10'}
-    cpu: [arm64]
-    os: [linux]
-    libc: [glibc]
-
-  '@swc/core-linux-arm64-musl@1.15.43':
-    resolution: {integrity: sha512-6zB6OnpViBxYy4tgY3v2i6AZY9fwkcHZ032UOwtwUuW1d19sdT07qF0kZe6/3UR1tUaK6jjg2rmVcUIBCEYVjQ==}
-    engines: {node: '>=10'}
-    cpu: [arm64]
-    os: [linux]
-    libc: [musl]
-
-  '@swc/core-linux-ppc64-gnu@1.15.43':
-    resolution: {integrity: sha512-coxE1ZWdB3uSDVNoEtYNrRi/1epvckZx9cTJ8ICUxTMTxGk+yvQ/Twacp3ruZSaMPGCriUjP86C37VhaT6nyRg==}
-    engines: {node: '>=10'}
-    cpu: [ppc64]
-    os: [linux]
-    libc: [glibc]
-
-  '@swc/core-linux-s390x-gnu@1.15.43':
-    resolution: {integrity: sha512-lXfLhs+LpBsD5inuYx+YDH5WsPPBQ95KPUiy8P5wq9ob9xKDZFqwNfU2QW6bGO8NqRO/H9JQomTSt5Yyh+FGfA==}
-    engines: {node: '>=10'}
-    cpu: [s390x]
-    os: [linux]
-    libc: [glibc]
-
-  '@swc/core-linux-x64-gnu@1.15.43':
-    resolution: {integrity: sha512-07XnKwTmKy8TGOZG3D9fRnLWGynxPjwQnZLVmBFbo6F+7vHYzBIOuwXEhemrChBWb6yDNZsVCcMWCPX6FDD2xg==}
-    engines: {node: '>=10'}
-    cpu: [x64]
-    os: [linux]
-    libc: [glibc]
-
-  '@swc/core-linux-x64-musl@1.15.43':
-    resolution: {integrity: sha512-TJc+bsSIaBh+hZvZ5GRtW/K1bw66TJ9vsUwvVIsZdiWxU5ObLwZvfcnZ3UpgVfMnFibRes9uriJrQNBHEEogRQ==}
-    engines: {node: '>=10'}
-    cpu: [x64]
-    os: [linux]
-    libc: [musl]
-
-  '@swc/core-win32-arm64-msvc@1.15.43':
-    resolution: {integrity: sha512-jfd7s2/bUQYkOHLs+LWQNKZdmDa8+sufKLllhpWAhVQ2GDCwsHe3vR/j+OSiItZNtkzFuaawa3+SAKz9y5gYfw==}
-    engines: {node: '>=10'}
-    cpu: [arm64]
-    os: [win32]
-
-  '@swc/core-win32-ia32-msvc@1.15.43':
-    resolution: {integrity: sha512-rLAE8JvucqEW1ZGohxPQrQWPBQeJG4+ypKbWfdlU/qmKScvCkxf9/Jxnzki1dkUQCQ7P5Enp13RlvqOlvx/32g==}
-    engines: {node: '>=10'}
-    cpu: [ia32]
-    os: [win32]
-
-  '@swc/core-win32-x64-msvc@1.15.43':
-    resolution: {integrity: sha512-h8MLDHZcfIukwQWj03rIJZx1I0E81AYj2X7J/nGErG4nz+QAv6G1Z+peotvinL3lqpbo32tLYSMFo32/ySzxKg==}
-    engines: {node: '>=10'}
-    cpu: [x64]
-    os: [win32]
-
-  '@swc/core@1.15.43':
-    resolution: {integrity: sha512-1CuKjFkPxIgGdeHVuNbkxmBxkcbdc08u0aiI43pFq6yY1tTVKmXT9hFEooyyKs/sJ3xf1GPHyEwTtk9Xl8dvQw==}
-    engines: {node: '>=10'}
-    peerDependencies:
-      '@swc/helpers': '>=0.5.17'
-    peerDependenciesMeta:
-      '@swc/helpers':
-        optional: true
-
-  '@swc/counter@0.1.3':
-    resolution: {integrity: sha512-e2BR4lsJkkRlKZ/qCHPw9ZaSxc0MVUd7gtbtaB7aMvHeJVYe8sOB8DBZkP2DtISHGSku9sCK6T6cnY0CtXrOCQ==}
-
-  '@swc/types@0.1.27':
-    resolution: {integrity: sha512-K6h3iUlqeM946U4sXFYeahefR1YBbXJvko+hv8WS8/0BNJ4OHiHRywMnQUJCqkR7Y9+hqQ1TvEpiKqUhz7NEFg==}
 
   '@szmarczak/http-timer@4.0.6':
     resolution: {integrity: sha512-4BAffykYOgO+5nzBWYwE3W90sBgLJoUPRWWcL8wlyiM8IB8ipJz3UMJ9KXQd1RKQXpKp8Tutn80HZtWsu2u76w==}
@@ -5565,9 +5469,9 @@ snapshots:
 
   '@csstools/css-tokenizer@4.0.0': {}
 
-  '@electron-forge/cli@7.11.2(@swc/core@1.15.43)(encoding@0.1.13)':
+  '@electron-forge/cli@7.11.2(encoding@0.1.13)':
     dependencies:
-      '@electron-forge/core': 7.11.2(@swc/core@1.15.43)(encoding@0.1.13)
+      '@electron-forge/core': 7.11.2(encoding@0.1.13)
       '@electron-forge/core-utils': 7.11.2
       '@electron-forge/shared-types': 7.11.2
       '@electron/get': 3.1.0
@@ -5614,7 +5518,7 @@ snapshots:
       - bluebird
       - supports-color
 
-  '@electron-forge/core@7.11.2(@swc/core@1.15.43)(encoding@0.1.13)':
+  '@electron-forge/core@7.11.2(encoding@0.1.13)':
     dependencies:
       '@electron-forge/core-utils': 7.11.2
       '@electron-forge/maker-base': 7.11.2
@@ -5625,7 +5529,7 @@ snapshots:
       '@electron-forge/template-vite': 7.11.2
       '@electron-forge/template-vite-typescript': 7.11.2
       '@electron-forge/template-webpack': 7.11.2
-      '@electron-forge/template-webpack-typescript': 7.11.2(@swc/core@1.15.43)
+      '@electron-forge/template-webpack-typescript': 7.11.2
       '@electron-forge/tracer': 7.11.2
       '@electron/get': 3.1.0
       '@electron/packager': 18.4.4
@@ -5774,13 +5678,13 @@ snapshots:
       - bluebird
       - supports-color
 
-  '@electron-forge/template-webpack-typescript@7.11.2(@swc/core@1.15.43)':
+  '@electron-forge/template-webpack-typescript@7.11.2':
     dependencies:
       '@electron-forge/shared-types': 7.11.2
       '@electron-forge/template-base': 7.11.2
       fs-extra: 10.1.0
       typescript: 5.4.5
-      webpack: 5.108.4(@swc/core@1.15.43)
+      webpack: 5.108.4
     transitivePeerDependencies:
       - '@minify-html/node'
       - '@swc/core'
@@ -7298,66 +7202,6 @@ snapshots:
   '@sindresorhus/is@4.6.0': {}
 
   '@standard-schema/spec@1.1.0': {}
-
-  '@swc/core-darwin-arm64@1.15.43':
-    optional: true
-
-  '@swc/core-darwin-x64@1.15.43':
-    optional: true
-
-  '@swc/core-linux-arm-gnueabihf@1.15.43':
-    optional: true
-
-  '@swc/core-linux-arm64-gnu@1.15.43':
-    optional: true
-
-  '@swc/core-linux-arm64-musl@1.15.43':
-    optional: true
-
-  '@swc/core-linux-ppc64-gnu@1.15.43':
-    optional: true
-
-  '@swc/core-linux-s390x-gnu@1.15.43':
-    optional: true
-
-  '@swc/core-linux-x64-gnu@1.15.43':
-    optional: true
-
-  '@swc/core-linux-x64-musl@1.15.43':
-    optional: true
-
-  '@swc/core-win32-arm64-msvc@1.15.43':
-    optional: true
-
-  '@swc/core-win32-ia32-msvc@1.15.43':
-    optional: true
-
-  '@swc/core-win32-x64-msvc@1.15.43':
-    optional: true
-
-  '@swc/core@1.15.43':
-    dependencies:
-      '@swc/counter': 0.1.3
-      '@swc/types': 0.1.27
-    optionalDependencies:
-      '@swc/core-darwin-arm64': 1.15.43
-      '@swc/core-darwin-x64': 1.15.43
-      '@swc/core-linux-arm-gnueabihf': 1.15.43
-      '@swc/core-linux-arm64-gnu': 1.15.43
-      '@swc/core-linux-arm64-musl': 1.15.43
-      '@swc/core-linux-ppc64-gnu': 1.15.43
-      '@swc/core-linux-s390x-gnu': 1.15.43
-      '@swc/core-linux-x64-gnu': 1.15.43
-      '@swc/core-linux-x64-musl': 1.15.43
-      '@swc/core-win32-arm64-msvc': 1.15.43
-      '@swc/core-win32-ia32-msvc': 1.15.43
-      '@swc/core-win32-x64-msvc': 1.15.43
-
-  '@swc/counter@0.1.3': {}
-
-  '@swc/types@0.1.27':
-    dependencies:
-      '@swc/counter': 0.1.3
 
   '@szmarczak/http-timer@4.0.6':
     dependencies:
@@ -9608,15 +9452,13 @@ snapshots:
 
   minimist@1.2.8: {}
 
-  minimizer-webpack-plugin@5.6.1(@swc/core@1.15.43)(webpack@5.108.4(@swc/core@1.15.43)):
+  minimizer-webpack-plugin@5.6.1(webpack@5.108.4):
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       jest-worker: 27.5.1
       schema-utils: 4.3.3
       terser: 5.49.0
-      webpack: 5.108.4(@swc/core@1.15.43)
-    optionalDependencies:
-      '@swc/core': 1.15.43
+      webpack: 5.108.4
 
   minipass-collect@1.0.2:
     dependencies:
@@ -10671,7 +10513,7 @@ snapshots:
 
   webpack-sources@3.5.1: {}
 
-  webpack@5.108.4(@swc/core@1.15.43):
+  webpack@5.108.4:
     dependencies:
       '@types/estree': 1.0.9
       '@types/json-schema': 7.0.15
@@ -10689,7 +10531,7 @@ snapshots:
       graceful-fs: 4.2.11
       loader-runner: 4.3.2
       mime-db: 1.54.0
-      minimizer-webpack-plugin: 5.6.1(@swc/core@1.15.43)(webpack@5.108.4(@swc/core@1.15.43))
+      minimizer-webpack-plugin: 5.6.1(webpack@5.108.4)
       neo-async: 2.6.2
       schema-utils: 4.3.3
       tapable: 2.3.3
