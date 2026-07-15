@@ -85,6 +85,7 @@ export default defineConfig({
   },
   test: {
     include: ['core/**/*.test.{ts,tsx}', 'electron/**/*.test.ts'],
+    maxWorkers: 6,
     setupFiles: ['./core/__tests__/setup.ts'],
   },
   worker: {

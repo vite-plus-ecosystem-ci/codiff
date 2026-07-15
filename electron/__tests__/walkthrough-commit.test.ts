@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { expect, test } from 'vite-plus/test';
+import { getGitTestEnvironment, withGitTestEnvironment } from '../../core/__tests__/helpers/git.ts';
 
 const require = createRequire(import.meta.url);
 const { createWalkthroughCommit } = require('../walkthrough-commit.cjs') as {
@@ -20,21 +21,21 @@ const execFileAsync = promisify(execFile);
 const git = async (repoPath: string, args: ReadonlyArray<string>) => {
   const { stdout } = await execFileAsync('git', ['-C', repoPath, ...args], {
     encoding: 'utf8',
+    env: getGitTestEnvironment(),
   });
   return stdout;
 };
 
 const withRepo = async (testBody: (repoPath: string) => Promise<void>) => {
-  const repoPath = await mkdtemp(join(tmpdir(), 'codiff-walkthrough-commit-'));
-  try {
-    await git(repoPath, ['init']);
-    await git(repoPath, ['config', 'commit.gpgSign', 'false']);
-    await git(repoPath, ['config', 'user.email', 'codiff@example.com']);
-    await git(repoPath, ['config', 'user.name', 'Codiff Test']);
-    await testBody(repoPath);
-  } finally {
-    await rm(repoPath, { force: true, recursive: true });
-  }
+  await withGitTestEnvironment(async () => {
+    const repoPath = await mkdtemp(join(tmpdir(), 'codiff-walkthrough-commit-'));
+    try {
+      await git(repoPath, ['init']);
+      await testBody(repoPath);
+    } finally {
+      await rm(repoPath, { force: true, recursive: true });
+    }
+  });
 };
 
 test('rejects a commit with no subject before touching git', async () => {

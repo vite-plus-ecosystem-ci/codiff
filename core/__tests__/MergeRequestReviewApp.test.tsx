@@ -295,16 +295,16 @@ test('merge request source descriptions use comment editing controls when editab
     const title = view.container.querySelector<HTMLTextAreaElement>('[aria-label="Edit title"]');
     expect(title).not.toBeNull();
     title!.focus();
-    await setInputValue(title!, 'Updated review title');
-    await act(async () => {
-      title!.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 850));
-    });
-    await act(async () => {
-      await Promise.resolve();
-    });
+    vi.useFakeTimers();
+    try {
+      await setInputValue(title!, 'Updated review title');
+      await act(async () => {
+        title!.dispatchEvent(new Event('change', { bubbles: true }));
+        await vi.advanceTimersByTimeAsync(800);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
     expect(onUpdateTitle).toHaveBeenCalledWith('Updated review title');
     await view.rerender(renderEditableReview('Updated review title'));
     expect(view.container.querySelector('[aria-label="Edit title"]')).toBe(title);

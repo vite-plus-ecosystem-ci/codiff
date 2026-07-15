@@ -2,7 +2,10 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, test } from 'vite-plus/test';
+import { expect, test, vi } from 'vite-plus/test';
+import { createCommandTransport } from './helpers/command-transport.ts';
+
+type CommandTransport = ReturnType<typeof createCommandTransport>['transport'];
 
 const require = createRequire(import.meta.url);
 const {
@@ -22,7 +25,12 @@ const {
     schema: unknown,
     outputName?: string,
     timeoutMessage?: string,
-    options?: { model?: string; onProgress?: (phase: string) => void; timeoutMs?: number },
+    options?: {
+      commandTransport?: CommandTransport;
+      model?: string;
+      onProgress?: (phase: string) => void;
+      timeoutMs?: number;
+    },
   ) => Promise<string>;
 };
 
@@ -101,10 +109,6 @@ process.stdin.on('end', () => {
 });
 
 test('maps Claude thinking and text deltas to semantic walkthrough progress', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-claude-progress-'));
-  const fakeClaudePath = join(directory, 'claude');
-  const argsPath = join(directory, 'args.txt');
-  const previousClaudePath = process.env.CODIFF_CLAUDE_PATH;
   const events = [
     {
       event: {
@@ -127,50 +131,28 @@ test('maps Claude thinking and text deltas to semantic walkthrough progress', as
       type: 'result',
     },
   ];
+  const { calls, transport } = createCommandTransport(({ close, stdin, stdout }) => {
+    stdin.on('finish', () => {
+      stdout(events.map((event) => JSON.stringify(event)).join('\n'));
+      close();
+    });
+  });
+  const phases: Array<string> = [];
 
-  try {
-    await writeFile(
-      fakeClaudePath,
-      `#!/usr/bin/env node
-require('node:fs').writeFileSync(
-  ${JSON.stringify(argsPath)},
-  process.argv.slice(2).join('\\n'),
-);
-process.stdin.resume();
-process.stdin.on('end', () => {
-  process.stdout.write(${JSON.stringify(events.map((event) => JSON.stringify(event)).join('\n'))});
-});
-`,
-    );
-    await chmod(fakeClaudePath, 0o755);
-    process.env.CODIFF_CLAUDE_PATH = fakeClaudePath;
-    const phases: Array<string> = [];
+  await expect(
+    runClaude('/repo', 'prompt', { type: 'object' }, 'walkthrough.json', 'Timed out.', {
+      commandTransport: transport,
+      onProgress: (phase) => phases.push(phase),
+    }),
+  ).resolves.toBe('{"version":1}');
 
-    await expect(
-      runClaude(directory, 'prompt', { type: 'object' }, 'walkthrough.json', 'Timed out.', {
-        onProgress: (phase) => phases.push(phase),
-      }),
-    ).resolves.toBe('{"version":1}');
-
-    expect(phases).toEqual(['agent-generation', 'response-received']);
-    const args = (await readFile(argsPath, 'utf8')).split('\n');
-    expect(args).toContain('stream-json');
-    expect(args).toContain('--verbose');
-    expect(args).toContain('--include-partial-messages');
-  } finally {
-    if (previousClaudePath == null) {
-      delete process.env.CODIFF_CLAUDE_PATH;
-    } else {
-      process.env.CODIFF_CLAUDE_PATH = previousClaudePath;
-    }
-    await rm(directory, { force: true, recursive: true });
-  }
+  expect(phases).toEqual(['agent-generation', 'response-received']);
+  expect(calls[0].args).toContain('stream-json');
+  expect(calls[0].args).toContain('--verbose');
+  expect(calls[0].args).toContain('--include-partial-messages');
 });
 
 test('maps Claude structured output deltas to response progress', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-claude-structured-progress-'));
-  const fakeClaudePath = join(directory, 'claude');
-  const previousClaudePath = process.env.CODIFF_CLAUDE_PATH;
   const events = [
     {
       event: {
@@ -212,101 +194,61 @@ test('maps Claude structured output deltas to response progress', async () => {
       type: 'result',
     },
   ];
+  const { transport } = createCommandTransport(({ close, stdin, stdout }) => {
+    stdin.on('finish', () => {
+      stdout(events.map((event) => JSON.stringify(event)).join('\n'));
+      close();
+    });
+  });
+  const phases: Array<string> = [];
 
-  try {
-    await writeFile(
-      fakeClaudePath,
-      `#!/usr/bin/env node
-process.stdin.resume();
-process.stdin.on('end', () => {
-  process.stdout.write(${JSON.stringify(events.map((event) => JSON.stringify(event)).join('\n'))});
-});
-`,
-    );
-    await chmod(fakeClaudePath, 0o755);
-    process.env.CODIFF_CLAUDE_PATH = fakeClaudePath;
-    const phases: Array<string> = [];
+  await expect(
+    runClaude('/repo', 'prompt', { type: 'object' }, 'walkthrough.json', 'Timed out.', {
+      commandTransport: transport,
+      onProgress: (phase) => phases.push(phase),
+    }),
+  ).resolves.toBe('{"version":1}');
 
-    await expect(
-      runClaude(directory, 'prompt', { type: 'object' }, 'walkthrough.json', 'Timed out.', {
-        onProgress: (phase) => phases.push(phase),
-      }),
-    ).resolves.toBe('{"version":1}');
-
-    expect(phases).toEqual([
-      'agent-generation',
-      'agent-generation',
-      'response-received',
-      'response-received',
-    ]);
-  } finally {
-    if (previousClaudePath == null) {
-      delete process.env.CODIFF_CLAUDE_PATH;
-    } else {
-      process.env.CODIFF_CLAUDE_PATH = previousClaudePath;
-    }
-    await rm(directory, { force: true, recursive: true });
-  }
+  expect(phases).toEqual([
+    'agent-generation',
+    'agent-generation',
+    'response-received',
+    'response-received',
+  ]);
 });
 
 test('supports per-call Claude Code timeouts', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-claude-timeout-'));
-  const fakeClaudePath = join(directory, 'claude');
-  const previousClaudePath = process.env.CODIFF_CLAUDE_PATH;
-
+  const { transport } = createCommandTransport(() => {});
+  vi.useFakeTimers();
   try {
-    await writeFile(
-      fakeClaudePath,
-      `#!/usr/bin/env node
-process.stdin.resume();
-setInterval(() => {}, 1_000);
-`,
-    );
-    await chmod(fakeClaudePath, 0o755);
-    process.env.CODIFF_CLAUDE_PATH = fakeClaudePath;
-
-    await expect(
-      runClaude(directory, 'prompt', {}, 'walkthrough.json', 'Timed out.', { timeoutMs: 10 }),
-    ).rejects.toThrow('Timed out.');
+    const result = runClaude('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.', {
+      commandTransport: transport,
+      timeoutMs: 10,
+    });
+    const rejection = expect(result).rejects.toThrow('Timed out.');
+    await vi.advanceTimersByTimeAsync(10);
+    await rejection;
   } finally {
-    if (previousClaudePath == null) {
-      delete process.env.CODIFF_CLAUDE_PATH;
-    } else {
-      process.env.CODIFF_CLAUDE_PATH = previousClaudePath;
-    }
-    await rm(directory, { force: true, recursive: true });
+    vi.useRealTimers();
   }
 });
 
 test('surfaces a helpful message when Claude Code is not logged in', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-claude-'));
-  const fakeClaudePath = join(directory, 'claude');
-  const previousClaudePath = process.env.CODIFF_CLAUDE_PATH;
+  const { transport } = createCommandTransport(({ close, stdin, stdout }) => {
+    stdin.on('finish', () => {
+      stdout(
+        JSON.stringify({
+          is_error: true,
+          result: 'Not logged in · Please run /login',
+        }),
+      );
+      close();
+    });
+  });
 
-  try {
-    await writeFile(
-      fakeClaudePath,
-      `#!/usr/bin/env node
-process.stdin.resume();
-process.stdin.on('end', () => {
-  process.stdout.write(${JSON.stringify(
-    '{"is_error":true,"result":"Not logged in · Please run /login"}',
-  )});
-});
-`,
-    );
-    await chmod(fakeClaudePath, 0o755);
-    process.env.CODIFF_CLAUDE_PATH = fakeClaudePath;
-
-    await expect(
-      runClaude(directory, 'prompt', { type: 'object' }, 'walkthrough.json', 'Timed out.'),
-    ).rejects.toThrow(/not logged in/i);
-  } finally {
-    if (previousClaudePath == null) {
-      delete process.env.CODIFF_CLAUDE_PATH;
-    } else {
-      process.env.CODIFF_CLAUDE_PATH = previousClaudePath;
-    }
-    await rm(directory, { force: true, recursive: true });
-  }
+  await expect(
+    runClaude('/repo', 'prompt', { type: 'object' }, 'walkthrough.json', 'Timed out.', {
+      commandTransport: transport,
+    }),
+  ).rejects.toThrow(/not logged in/i);
 });

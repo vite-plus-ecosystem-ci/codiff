@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { expect, test } from 'vite-plus/test';
+import { getGitTestEnvironment } from '../../core/__tests__/helpers/git.ts';
 
 const require = createRequire(import.meta.url);
 const { getCommandLineLaunchOptions, getCommandLineRepositoryPath, getInitialRepositoryPath } =
@@ -55,7 +56,10 @@ const readCommandLine = (commandLine: ReadonlyArray<string>) => ({
 const execFileAsync = promisify(execFile);
 
 const git = async (repo: string, args: ReadonlyArray<string>) => {
-  await execFileAsync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+  await execFileAsync('git', ['-C', repo, ...args], {
+    encoding: 'utf8',
+    env: getGitTestEnvironment(),
+  });
 };
 
 const defaultLaunchOptions = {
@@ -180,8 +184,6 @@ test('parses plain refs as branch sources', async () => {
 
   try {
     await git(repositoryPath, ['init']);
-    await git(repositoryPath, ['config', 'user.email', 'codiff@example.com']);
-    await git(repositoryPath, ['config', 'user.name', 'Codiff Test']);
     await git(repositoryPath, ['commit', '--allow-empty', '-m', 'initial commit']);
     await git(repositoryPath, ['checkout', '-b', 'feature']);
     process.chdir(repositoryPath);
@@ -223,8 +225,6 @@ test('parses missing plain refs in Git repositories as branch sources', async ()
 
   try {
     await git(repositoryPath, ['init']);
-    await git(repositoryPath, ['config', 'user.email', 'codiff@example.com']);
-    await git(repositoryPath, ['config', 'user.name', 'Codiff Test']);
     await git(repositoryPath, ['commit', '--allow-empty', '-m', 'initial commit']);
     process.chdir(repositoryPath);
 
@@ -265,8 +265,6 @@ test('parses hex-like refs as commits before branches', async () => {
 
   try {
     await git(repositoryPath, ['init']);
-    await git(repositoryPath, ['config', 'user.email', 'codiff@example.com']);
-    await git(repositoryPath, ['config', 'user.name', 'Codiff Test']);
     await git(repositoryPath, ['commit', '--allow-empty', '-m', 'initial commit']);
     const { stdout } = await execFileAsync('git', ['-C', repositoryPath, 'rev-parse', 'HEAD'], {
       encoding: 'utf8',
@@ -524,8 +522,6 @@ test('reads base...head and base..head positionals as a range source', async () 
 
   try {
     await git(repositoryPath, ['init']);
-    await git(repositoryPath, ['config', 'user.email', 'codiff@example.com']);
-    await git(repositoryPath, ['config', 'user.name', 'Codiff Test']);
     await git(repositoryPath, ['commit', '--allow-empty', '-m', 'first']);
     await git(repositoryPath, ['branch', 'base']);
     await git(repositoryPath, ['commit', '--allow-empty', '-m', 'second']);

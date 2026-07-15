@@ -3,6 +3,9 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vite-plus/test';
+import { createCommandTransport, type FakeCommandProcess } from './helpers/command-transport.ts';
+
+type CommandTransport = ReturnType<typeof createCommandTransport>['transport'];
 
 const require = createRequire(import.meta.url);
 const {
@@ -24,6 +27,7 @@ const {
     timeoutMessage?: string,
     options?: {
       fallbackModel?: string;
+      commandTransport?: CommandTransport;
       model?: string;
       onMetrics?: (metrics: {
         transport: string;
@@ -41,6 +45,27 @@ const {
       timeoutMs?: number;
     },
   ) => Promise<string>;
+};
+
+const getArgumentValue = (args: ReadonlyArray<string>, name: string) => {
+  const index = args.indexOf(name);
+  return index === -1 ? undefined : args[index + 1];
+};
+
+const completeCodexExec = async (
+  commandProcess: FakeCommandProcess,
+  output = '{"version":1}',
+  stdout = '',
+) => {
+  const outputPath = getArgumentValue(commandProcess.args, '--output-last-message');
+  if (!outputPath) {
+    throw new Error('Expected a Codex output path.');
+  }
+  await writeFile(outputPath, output);
+  if (stdout) {
+    commandProcess.stdout(stdout);
+  }
+  commandProcess.close();
 };
 
 test('normalizes OpenAI model preferences to known models', () => {
@@ -76,148 +101,73 @@ test('rejects invalid explicit Codex CLI overrides', () => {
 test.skipIf(process.platform !== 'darwin')(
   'explains macOS Codex CLI security blocks through runCodex',
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'codiff-codex-blocked-'));
-    const fakeCodexPath = join(directory, 'codex');
-    const previousCodexPath = process.env.CODIFF_CODEX_PATH;
+    const { transport } = createCommandTransport(({ close, stderr, stdin }) => {
+      stdin.on('finish', () => {
+        stderr('"codex" was not opened because it contains malware.');
+        close(1);
+      });
+    });
 
-    try {
-      await writeFile(
-        fakeCodexPath,
-        `#!/bin/sh
-printf '%s\\n' '"codex" was not opened because it contains malware.' >&2
-exit 1
-`,
-      );
-      await chmod(fakeCodexPath, 0o755);
-      process.env.CODIFF_CODEX_PATH = fakeCodexPath;
-
-      await expect(
-        runCodex('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.'),
-      ).rejects.toThrow('Update Codex CLI');
-    } finally {
-      if (previousCodexPath == null) {
-        delete process.env.CODIFF_CODEX_PATH;
-      } else {
-        process.env.CODIFF_CODEX_PATH = previousCodexPath;
-      }
-      await rm(directory, { force: true, recursive: true });
-    }
+    await expect(
+      runCodex('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.', {
+        commandTransport: transport,
+      }),
+    ).rejects.toThrow('Update Codex CLI');
   },
 );
 
 test('runs Codex walkthroughs as fresh ephemeral repository-scoped calls', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-codex-'));
-  const fakeCodexPath = join(directory, 'codex');
-  const argsPath = join(directory, 'args.txt');
-  const previousCodexPath = process.env.CODIFF_CODEX_PATH;
+  const { calls, transport } = createCommandTransport((commandProcess) => {
+    commandProcess.stdin.on('finish', () => void completeCodexExec(commandProcess));
+  });
 
-  try {
-    await writeFile(
-      fakeCodexPath,
-      `#!/bin/sh
-for arg in "$@"; do
-  printf '%s\\n' "$arg" >> "${argsPath}"
-done
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--output-last-message" ]; then
-    shift
-    printf '{"version":1}' > "$1"
-    exit 0
-  fi
-  shift
-done
-exit 1
-`,
-    );
-    await chmod(fakeCodexPath, 0o755);
-    process.env.CODIFF_CODEX_PATH = fakeCodexPath;
+  await expect(
+    runCodex('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.', {
+      commandTransport: transport,
+    }),
+  ).resolves.toBe('{"version":1}');
 
-    await expect(runCodex('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.')).resolves.toBe(
-      '{"version":1}',
-    );
-
-    const args = (await readFile(argsPath, 'utf8')).trim().split('\n');
-    expect(args).toContain('--ephemeral');
-    expect(args).toContain('--json');
-    expect(args).toContain('--cd');
-    expect(args).toContain('/repo');
-    expect(args).toContain('model_reasoning_effort="low"');
-    expect(args).not.toContain('resume');
-  } finally {
-    if (previousCodexPath == null) {
-      delete process.env.CODIFF_CODEX_PATH;
-    } else {
-      process.env.CODIFF_CODEX_PATH = previousCodexPath;
-    }
-    await rm(directory, { force: true, recursive: true });
-  }
+  expect(calls[0].args).toContain('--ephemeral');
+  expect(calls[0].args).toContain('--json');
+  expect(calls[0].args).toContain('--cd');
+  expect(calls[0].args).toContain('/repo');
+  expect(calls[0].args).toContain('model_reasoning_effort="low"');
+  expect(calls[0].args).not.toContain('resume');
 });
 
 test('retries unavailable GPT-5.6 models with model-specific reasoning', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-codex-model-fallback-'));
-  const fakeCodexPath = join(directory, 'codex');
-  const attemptsPath = join(directory, 'attempts.txt');
-  const previousCodexPath = process.env.CODIFF_CODEX_PATH;
+  const attempts: Array<string> = [];
+  const { transport } = createCommandTransport((commandProcess) => {
+    commandProcess.stdin.on('finish', () => {
+      const model = getArgumentValue(commandProcess.args, '-m') || '';
+      const effort = getArgumentValue(commandProcess.args, '-c') || '';
+      attempts.push(`${model}|${effort}`);
+      if (model !== 'gpt-5.5') {
+        commandProcess.stderr(`You do not have access to model ${model}.`);
+        commandProcess.close(1);
+      } else {
+        void completeCodexExec(commandProcess);
+      }
+    });
+  });
+  const fallbacks: Array<[string, string]> = [];
 
-  try {
-    await writeFile(
-      fakeCodexPath,
-      `#!/bin/sh
-model=""
-effort=""
-output=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    -m)
-      shift
-      model="$1"
-      ;;
-    -c)
-      shift
-      effort="$1"
-      ;;
-    --output-last-message)
-      shift
-      output="$1"
-      ;;
-  esac
-  shift
-done
-printf '%s|%s\\n' "$model" "$effort" >> "${attemptsPath}"
-if [ "$model" != "gpt-5.5" ]; then
-  printf 'You do not have access to model %s.\\n' "$model" >&2
-  exit 1
-fi
-printf '{"version":1}' > "$output"
-`,
-    );
-    await chmod(fakeCodexPath, 0o755);
-    process.env.CODIFF_CODEX_PATH = fakeCodexPath;
-    const fallbacks: Array<[string, string]> = [];
+  await expect(
+    runCodex('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.', {
+      commandTransport: transport,
+      model: 'gpt-5.6-sol',
+      onModelFallback: (fallbackModel, originalModel) => {
+        fallbacks.push([fallbackModel, originalModel]);
+      },
+    }),
+  ).resolves.toBe('{"version":1}');
 
-    await expect(
-      runCodex('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.', {
-        model: 'gpt-5.6-sol',
-        onModelFallback: (fallbackModel, originalModel) => {
-          fallbacks.push([fallbackModel, originalModel]);
-        },
-      }),
-    ).resolves.toBe('{"version":1}');
-
-    expect((await readFile(attemptsPath, 'utf8')).trim().split('\n')).toEqual([
-      'gpt-5.6-sol|model_reasoning_effort="medium"',
-      'gpt-5.6-terra|model_reasoning_effort="low"',
-      'gpt-5.5|model_reasoning_effort="low"',
-    ]);
-    expect(fallbacks).toEqual([['gpt-5.5', 'gpt-5.6-sol']]);
-  } finally {
-    if (previousCodexPath == null) {
-      delete process.env.CODIFF_CODEX_PATH;
-    } else {
-      process.env.CODIFF_CODEX_PATH = previousCodexPath;
-    }
-    await rm(directory, { force: true, recursive: true });
-  }
+  expect(attempts).toEqual([
+    'gpt-5.6-sol|model_reasoning_effort="medium"',
+    'gpt-5.6-terra|model_reasoning_effort="low"',
+    'gpt-5.5|model_reasoning_effort="low"',
+  ]);
+  expect(fallbacks).toEqual([['gpt-5.5', 'gpt-5.6-sol']]);
 });
 
 test('streams Codex app-server reasoning and message deltas as semantic progress', async () => {
@@ -361,208 +311,111 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
 });
 
 test('reports Codex exec token usage for eval instrumentation', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-codex-metrics-'));
-  const fakeCodexPath = join(directory, 'codex');
-  const previousCodexPath = process.env.CODIFF_CODEX_PATH;
-
-  try {
-    await writeFile(
-      fakeCodexPath,
-      `#!/usr/bin/env node
-const args = process.argv.slice(2);
-const outputIndex = args.indexOf('--output-last-message');
-require('node:fs').writeFileSync(args[outputIndex + 1], '{"version":1}');
-process.stdout.write(JSON.stringify({
-  type: 'turn.completed',
-  usage: {
-    cached_input_tokens: 80,
-    input_tokens: 100,
-    output_tokens: 25,
-    reasoning_output_tokens: 10,
-  },
-}) + '\\n');
-`,
+  const { transport } = createCommandTransport((commandProcess) => {
+    commandProcess.stdin.on(
+      'finish',
+      () =>
+        void completeCodexExec(
+          commandProcess,
+          '{"version":1}',
+          `${JSON.stringify({
+            type: 'turn.completed',
+            usage: {
+              cached_input_tokens: 80,
+              input_tokens: 100,
+              output_tokens: 25,
+              reasoning_output_tokens: 10,
+            },
+          })}\n`,
+        ),
     );
-    await chmod(fakeCodexPath, 0o755);
-    process.env.CODIFF_CODEX_PATH = fakeCodexPath;
-    const metrics: Array<any> = [];
+  });
+  const metrics: Array<any> = [];
 
-    await expect(
-      runCodex(directory, 'prompt', {}, 'walkthrough.json', 'Timed out.', {
-        onMetrics: (value) => metrics.push(value),
-      }),
-    ).resolves.toBe('{"version":1}');
+  await expect(
+    runCodex('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.', {
+      commandTransport: transport,
+      onMetrics: (value) => metrics.push(value),
+    }),
+  ).resolves.toBe('{"version":1}');
 
-    expect(metrics).toEqual([
-      {
-        transport: 'exec',
-        usage: {
-          cachedInputTokens: 80,
-          inputTokens: 100,
-          outputTokens: 25,
-          reasoningOutputTokens: 10,
-          totalTokens: 125,
-        },
+  expect(metrics).toEqual([
+    {
+      transport: 'exec',
+      usage: {
+        cachedInputTokens: 80,
+        inputTokens: 100,
+        outputTokens: 25,
+        reasoningOutputTokens: 10,
+        totalTokens: 125,
       },
-    ]);
-  } finally {
-    if (previousCodexPath == null) {
-      delete process.env.CODIFF_CODEX_PATH;
-    } else {
-      process.env.CODIFF_CODEX_PATH = previousCodexPath;
-    }
-    await rm(directory, { force: true, recursive: true });
-  }
+    },
+  ]);
 });
 
 test('falls back to codex exec when app-server is unavailable', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-codex-app-server-fallback-'));
-  const fakeCodexPath = join(directory, 'codex');
-  const previousCodexPath = process.env.CODIFF_CODEX_PATH;
-
-  try {
-    await writeFile(
-      fakeCodexPath,
-      `#!/bin/sh
-if [ "$1" = "app-server" ]; then
-  printf '%s\\n' "error: unrecognized subcommand 'app-server'" >&2
-  exit 2
-fi
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--output-last-message" ]; then
-    shift
-    printf '{"version":1}' > "$1"
-    exit 0
-  fi
-  shift
-done
-exit 1
-`,
-    );
-    await chmod(fakeCodexPath, 0o755);
-    process.env.CODIFF_CODEX_PATH = fakeCodexPath;
-
-    await expect(
-      runCodex(directory, 'prompt', {}, 'walkthrough.json', 'Timed out.', {
-        onProgress: () => {},
-      }),
-    ).resolves.toBe('{"version":1}');
-  } finally {
-    if (previousCodexPath == null) {
-      delete process.env.CODIFF_CODEX_PATH;
-    } else {
-      process.env.CODIFF_CODEX_PATH = previousCodexPath;
+  const { transport } = createCommandTransport((commandProcess) => {
+    if (commandProcess.args[0] === 'app-server') {
+      queueMicrotask(() => {
+        commandProcess.stderr("error: unrecognized subcommand 'app-server'");
+        commandProcess.close(2);
+      });
+      return;
     }
-    await rm(directory, { force: true, recursive: true });
-  }
+    commandProcess.stdin.on('finish', () => void completeCodexExec(commandProcess));
+  });
+
+  await expect(
+    runCodex('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.', {
+      commandTransport: transport,
+      onProgress: () => {},
+    }),
+  ).resolves.toBe('{"version":1}');
 });
 
 test('forwards per-call Codex reasoning effort overrides', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-codex-'));
-  const fakeCodexPath = join(directory, 'codex');
-  const argsPath = join(directory, 'args.txt');
-  const previousCodexPath = process.env.CODIFF_CODEX_PATH;
+  const { calls, transport } = createCommandTransport((commandProcess) => {
+    commandProcess.stdin.on('finish', () => void completeCodexExec(commandProcess));
+  });
 
-  try {
-    await writeFile(
-      fakeCodexPath,
-      `#!/bin/sh
-for arg in "$@"; do
-  printf '%s\\n' "$arg" >> "${argsPath}"
-done
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--output-last-message" ]; then
-    shift
-    printf '{"version":1}' > "$1"
-    exit 0
-  fi
-  shift
-done
-exit 1
-`,
-    );
-    await chmod(fakeCodexPath, 0o755);
-    process.env.CODIFF_CODEX_PATH = fakeCodexPath;
+  await expect(
+    runCodex('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.', {
+      commandTransport: transport,
+      reasoningEffort: 'low',
+    }),
+  ).resolves.toBe('{"version":1}');
 
-    await expect(
-      runCodex('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.', {
-        reasoningEffort: 'low',
-      }),
-    ).resolves.toBe('{"version":1}');
-
-    const args = (await readFile(argsPath, 'utf8')).trim().split('\n');
-    expect(args).toContain('model_reasoning_effort="low"');
-  } finally {
-    if (previousCodexPath == null) {
-      delete process.env.CODIFF_CODEX_PATH;
-    } else {
-      process.env.CODIFF_CODEX_PATH = previousCodexPath;
-    }
-    await rm(directory, { force: true, recursive: true });
-  }
+  expect(calls[0].args).toContain('model_reasoning_effort="low"');
 });
 
 test('supports per-call Codex timeouts', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-codex-timeout-'));
-  const fakeCodexPath = join(directory, 'codex');
-  const previousCodexPath = process.env.CODIFF_CODEX_PATH;
-
-  try {
-    await writeFile(
-      fakeCodexPath,
-      `#!/usr/bin/env node
-process.stdin.resume();
-setInterval(() => {}, 1_000);
-`,
-    );
-    await chmod(fakeCodexPath, 0o755);
-    process.env.CODIFF_CODEX_PATH = fakeCodexPath;
-
-    await expect(
-      runCodex('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.', { timeoutMs: 10 }),
-    ).rejects.toThrow('Timed out.');
-  } finally {
-    if (previousCodexPath == null) {
-      delete process.env.CODIFF_CODEX_PATH;
-    } else {
-      process.env.CODIFF_CODEX_PATH = previousCodexPath;
-    }
-    await rm(directory, { force: true, recursive: true });
-  }
+  const { transport } = createCommandTransport(() => {});
+  await expect(
+    runCodex('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.', {
+      commandTransport: transport,
+      timeoutMs: 10,
+    }),
+  ).rejects.toThrow('Timed out.');
 });
 
 test('surfaces structured Codex CLI errors without the full prompt stream', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-codex-'));
-  const fakeCodexPath = join(directory, 'codex');
-  const previousCodexPath = process.env.CODIFF_CODEX_PATH;
+  const { transport } = createCommandTransport(({ close, stderr, stdin, stdout }) => {
+    stdin.on('finish', () => {
+      stdout('user very long prompt that should not be shown\n');
+      stderr('ERROR: {"type":"error","error":{"message":"Invalid schema for response_format."}}\n');
+      close(1);
+    });
+  });
 
+  let message = '';
   try {
-    await writeFile(
-      fakeCodexPath,
-      `#!/bin/sh
-printf '%s\\n' 'user very long prompt that should not be shown'
-printf '%s\\n' 'ERROR: {"type":"error","error":{"message":"Invalid schema for response_format."}}' >&2
-exit 1
-`,
-    );
-    await chmod(fakeCodexPath, 0o755);
-    process.env.CODIFF_CODEX_PATH = fakeCodexPath;
-
-    let message = '';
-    try {
-      await runCodex('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.');
-    } catch (error) {
-      message = error instanceof Error ? error.message : String(error);
-    }
-
-    expect(message).toContain('Invalid schema for response_format.');
-    expect(message).not.toContain('very long prompt');
-  } finally {
-    if (previousCodexPath == null) {
-      delete process.env.CODIFF_CODEX_PATH;
-    } else {
-      process.env.CODIFF_CODEX_PATH = previousCodexPath;
-    }
-    await rm(directory, { force: true, recursive: true });
+    await runCodex('/repo', 'prompt', {}, 'walkthrough.json', 'Timed out.', {
+      commandTransport: transport,
+    });
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
   }
+
+  expect(message).toContain('Invalid schema for response_format.');
+  expect(message).not.toContain('very long prompt');
 });

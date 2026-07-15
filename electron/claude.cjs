@@ -1,8 +1,8 @@
 // @ts-check
 
-const { spawn } = require('node:child_process');
 const { homedir } = require('node:os');
 const { join } = require('node:path');
+const { resolveAgentCommandTransport } = require('./agent-command.cjs');
 const {
   findExecutableOnPath,
   isExecutableFile,
@@ -23,6 +23,7 @@ const CLAUDE_NOT_LOGGED_IN_MESSAGE =
 /**
  * @typedef {{
  *   fallbackModel?: string;
+ *   commandTransport?: import('./agent-command.cjs').AgentCommandTransport;
  *   model?: string;
  *   onModelFallback?: (fallbackModel: string, originalModel: string) => Promise<void> | void;
  *   onProgress?: (phase: import('../core/types.ts').WalkthroughProgressPhase) => void;
@@ -242,7 +243,10 @@ const runClaude = async (
         let stdout = '';
         let finished = false;
 
-        const claudeCommand = getClaudeCommand();
+        const commandTransport = resolveAgentCommandTransport(
+          options.commandTransport,
+          getClaudeCommand,
+        );
         const streamProgress = Boolean(options.onProgress);
         const claudeArgs = [
           '-p',
@@ -261,7 +265,7 @@ const runClaude = async (
           '--tools',
           '',
         ];
-        const child = spawn(claudeCommand, claudeArgs, {
+        const child = commandTransport.spawn(commandTransport.command, claudeArgs, {
           cwd: repoRoot,
           env: process.env,
           stdio: ['pipe', 'pipe', 'pipe'],

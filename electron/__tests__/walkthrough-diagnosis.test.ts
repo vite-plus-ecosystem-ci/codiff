@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { expect, test } from 'vite-plus/test';
+import { getGitTestEnvironment } from '../../core/__tests__/helpers/git.ts';
 
 const require = createRequire(import.meta.url);
 const { diagnoseWalkthroughMismatch } = require('../walkthrough-diagnosis.cjs') as {
@@ -18,14 +19,15 @@ const { diagnoseWalkthroughMismatch } = require('../walkthrough-diagnosis.cjs') 
 const execFileAsync = promisify(execFile);
 
 const git = async (repo: string, args: ReadonlyArray<string>) => {
-  await execFileAsync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+  await execFileAsync('git', ['-C', repo, ...args], {
+    encoding: 'utf8',
+    env: getGitTestEnvironment(),
+  });
 };
 
 const makeRepo = async () => {
   const repo = await mkdtemp(join(tmpdir(), 'codiff-diagnosis-'));
   await git(repo, ['init']);
-  await git(repo, ['config', 'user.email', 'codiff@example.com']);
-  await git(repo, ['config', 'user.name', 'Codiff Test']);
   return repo;
 };
 

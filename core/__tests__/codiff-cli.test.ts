@@ -22,15 +22,15 @@ import {
 } from '../../bin/arguments.js';
 import type { PlanReview } from '../types.ts';
 import { createFakeCommandLogger, createFakeOpenLogger } from './helpers/cli.ts';
+import { getGitTestEnvironment } from './helpers/git.ts';
 
 const execFileAsync = promisify(execFile);
 
 const git = async (repo: string, args: ReadonlyArray<string>) => {
-  await execFileAsync(
-    'git',
-    ['-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', '-C', repo, ...args],
-    { encoding: 'utf8' },
-  );
+  await execFileAsync('git', ['-C', repo, ...args], {
+    encoding: 'utf8',
+    env: getGitTestEnvironment(),
+  });
 };
 
 let refRepositoryPath = '';
@@ -39,8 +39,6 @@ let refRepositoryShortHash = '';
 beforeAll(async () => {
   refRepositoryPath = await realpath(await mkdtemp(join(tmpdir(), 'codiff-cli-refs-')));
   await git(refRepositoryPath, ['init']);
-  await git(refRepositoryPath, ['config', 'user.email', 'codiff@example.com']);
-  await git(refRepositoryPath, ['config', 'user.name', 'Codiff Test']);
   await git(refRepositoryPath, ['commit', '--allow-empty', '-m', 'first']);
   await git(refRepositoryPath, ['branch', 'base']);
   await git(refRepositoryPath, ['commit', '--allow-empty', '-m', 'second']);

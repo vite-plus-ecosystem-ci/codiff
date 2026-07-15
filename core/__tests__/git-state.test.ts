@@ -13,6 +13,7 @@ import type {
   RepositoryState,
   ReviewSource,
 } from '../types.ts';
+import { getGitTestEnvironment } from './helpers/git.ts';
 
 type StatusEntry = {
   oldPath?: string;
@@ -168,6 +169,7 @@ const {
 const git = async (repo: string, args: ReadonlyArray<string>) => {
   const { stdout } = await execFileAsync('git', ['-C', repo, ...args], {
     encoding: 'utf8',
+    env: getGitTestEnvironment(),
     maxBuffer: 1024 * 1024 * 16,
   });
   return stdout;
@@ -176,11 +178,6 @@ const git = async (repo: string, args: ReadonlyArray<string>) => {
 const createRepo = async () => {
   const repo = await mkdtemp(join(tmpdir(), 'codiff-git-state-'));
   await git(repo, ['init']);
-  await git(repo, ['config', 'core.excludesfile', '/dev/null']);
-  await git(repo, ['config', 'commit.gpgSign', 'false']);
-  await git(repo, ['config', 'tag.gpgSign', 'false']);
-  await git(repo, ['config', 'user.email', 'codiff@example.com']);
-  await git(repo, ['config', 'user.name', 'Codiff Test']);
   return realpath(repo);
 };
 
@@ -1072,6 +1069,53 @@ test('readWalkthroughRepositoryState keeps a fresh repository on the working tre
     expect(state.files).toEqual([]);
   }));
 
+test('readWalkthroughRepositoryState preserves nested launch paths', () =>
+  withRepo(async (repo) => {
+    await writeRepoFile(repo, 'nested/example.txt', 'before\n');
+    await commitAll(repo, 'initial commit');
+    const launchPath = join(repo, 'nested');
+
+    const cleanState = await readWalkthroughRepositoryState(launchPath);
+    expect(cleanState.launchPath).toBe(launchPath);
+    expect(cleanState.root).toBe(repo);
+
+    await writeRepoFile(repo, 'nested/example.txt', 'after\n');
+    const dirtyState = await readWalkthroughRepositoryState(launchPath);
+    expect(dirtyState.launchPath).toBe(launchPath);
+    expect(dirtyState.root).toBe(repo);
+  }));
+
+test.sequential('benchmarks clean implicit walkthrough repository reads', () =>
+  withRepo(async (repo) => {
+    await writeRepoFile(repo, 'example.txt', 'before\n');
+    await commitAll(repo, 'initial commit');
+
+    const startedAt = performance.now();
+    await readWalkthroughRepositoryState(repo);
+    const duration = performance.now() - startedAt;
+
+    const tracePath = join(repo, '.git', 'walkthrough-trace.jsonl');
+    const previousTrace = process.env.GIT_TRACE2_EVENT;
+    process.env.GIT_TRACE2_EVENT = tracePath;
+    try {
+      await readWalkthroughRepositoryState(repo);
+    } finally {
+      if (previousTrace == null) {
+        delete process.env.GIT_TRACE2_EVENT;
+      } else {
+        process.env.GIT_TRACE2_EVENT = previousTrace;
+      }
+    }
+    const processCount = readFileSync(tracePath, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { event?: string })
+      .filter(({ event }) => event === 'version').length;
+    expect(duration).toBeLessThan(750);
+    expect(processCount).toBeLessThanOrEqual(14);
+  }));
+
 test('readRepositoryState reports commit metadata for root commits', async () => {
   await withRepo(async (repo) => {
     await writeRepoFile(repo, 'notes/todo.txt', 'write tests\nship polish\n');
@@ -1592,6 +1636,19 @@ test('readRepositoryChangeSignature changes when a commit is made', async () => 
 
     const before = await readRepositoryChangeSignature(repo);
     await commitAll(repo, 'second commit');
+    const after = await readRepositoryChangeSignature(repo);
+
+    expect(after.signature).not.toBe(before.signature);
+  });
+});
+
+test('readRepositoryChangeSignature changes when switching branches at the same commit', async () => {
+  await withRepo(async (repo) => {
+    await writeRepoFile(repo, 'file.txt', 'one\n');
+    await commitAll(repo, 'initial commit');
+
+    const before = await readRepositoryChangeSignature(repo);
+    await git(repo, ['checkout', '-b', 'same-commit']);
     const after = await readRepositoryChangeSignature(repo);
 
     expect(after.signature).not.toBe(before.signature);

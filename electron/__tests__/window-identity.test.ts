@@ -5,48 +5,58 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { expect, test } from 'vite-plus/test';
+import { getGitTestEnvironment } from '../../core/__tests__/helpers/git.ts';
 
 const require = createRequire(import.meta.url);
-const { findMatchingWindowIdentity, getWindowIdentity } = require('../window-identity.cjs') as {
-  findMatchingWindowIdentity: (
-    identity: { key: string } | null,
-    existingIdentities: ReadonlyMap<number, { key: string } | null>,
-  ) => number | null;
-  getWindowIdentity: (
-    repositoryPath: string,
-    launchOptions?: {
-      source?:
+const { findMatchingWindowIdentity, getWindowIdentity, getWindowIdentityForRepositoryState } =
+  require('../window-identity.cjs') as {
+    findMatchingWindowIdentity: (
+      identity: { key: string } | null,
+      existingIdentities: ReadonlyMap<number, { key: string } | null>,
+    ) => number | null;
+    getWindowIdentity: (
+      repositoryPath: string,
+      launchOptions?: {
+        source?:
+          | { type: 'working-tree' }
+          | { ref: string; type: 'branch' }
+          | { baseRef: string; headRef: string; ref: string; type: 'branch-diff' }
+          | { ref: string; type: 'commit' }
+          | {
+              number?: number;
+              owner?: string;
+              repo?: string;
+              type: 'pull-request';
+              url: string;
+            };
+        walkthrough?: boolean;
+        walkthroughFile?: string;
+        planFile?: string;
+        planResultFile?: string;
+      },
+    ) => { key: string; repositoryRoot: string; sourceKey: string } | null;
+    getWindowIdentityForRepositoryState: (state: {
+      root: string;
+      source:
         | { type: 'working-tree' }
-        | { ref: string; type: 'branch' }
-        | { baseRef: string; headRef: string; ref: string; type: 'branch-diff' }
         | { ref: string; type: 'commit' }
-        | {
-            number?: number;
-            owner?: string;
-            repo?: string;
-            type: 'pull-request';
-            url: string;
-          };
-      walkthrough?: boolean;
-      walkthroughFile?: string;
-      planFile?: string;
-      planResultFile?: string;
-    },
-  ) => { key: string; repositoryRoot: string; sourceKey: string } | null;
-};
+        | { baseRef: string; headRef: string; ref: string; type: 'branch-diff' };
+    }) => { key: string; repositoryRoot: string; sourceKey: string } | null;
+  };
 
 const execFileAsync = promisify(execFile);
 
 const git = async (repo: string, args: ReadonlyArray<string>) => {
-  const result = await execFileAsync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+  const result = await execFileAsync('git', ['-C', repo, ...args], {
+    encoding: 'utf8',
+    env: getGitTestEnvironment(),
+  });
   return result.stdout.trim();
 };
 
 const createRepository = async () => {
   const repositoryPath = await mkdtemp(join(tmpdir(), 'codiff-window-identity-'));
   await git(repositoryPath, ['init']);
-  await git(repositoryPath, ['config', 'user.email', 'codiff@example.com']);
-  await git(repositoryPath, ['config', 'user.name', 'Codiff Test']);
   await git(repositoryPath, ['commit', '--allow-empty', '-m', 'initial']);
   return repositoryPath;
 };
@@ -117,6 +127,35 @@ test('window identities resolve commit refs to the same commit sha', async () =>
       })?.key,
     );
   } finally {
+    await rm(repositoryPath, { force: true, recursive: true });
+  }
+});
+
+test.sequential('resolved repository states build identities without invoking Git', async () => {
+  const repositoryPath = await createRepository();
+  const fakeBin = await mkdtemp(join(tmpdir(), 'codiff-resolved-window-identity-'));
+  const gitMarker = join(fakeBin, 'git-invoked');
+  const previousPath = process.env.PATH;
+
+  try {
+    const head = await git(repositoryPath, ['rev-parse', 'HEAD']);
+    await writeFile(join(fakeBin, 'git'), `#!/bin/sh\nprintf invoked > "${gitMarker}"\nexit 99\n`);
+    await chmod(join(fakeBin, 'git'), 0o755);
+    process.env.PATH = `${fakeBin}:${previousPath ?? ''}`;
+
+    expect(
+      getWindowIdentityForRepositoryState({
+        root: repositoryPath,
+        source: { ref: head, type: 'commit' },
+      }),
+    ).toMatchObject({
+      repositoryRoot: await realpath(repositoryPath),
+      sourceKey: `commit:${head}`,
+    });
+    expect(await readFile(gitMarker, 'utf8').catch(() => null)).toBeNull();
+  } finally {
+    process.env.PATH = previousPath;
+    await rm(fakeBin, { force: true, recursive: true });
     await rm(repositoryPath, { force: true, recursive: true });
   }
 });

@@ -10,10 +10,10 @@ const {
   getImageMimeType,
   git,
   gitOrEmpty,
-  readGitFile,
   summarizeContent,
   validateRepositoryPath,
 } = require('./common.cjs');
+const { readGitFiles } = require('./git-files.cjs');
 
 /**
  * @typedef {import('../../core/types.ts').ChangedFile} ChangedFile
@@ -731,34 +731,6 @@ const createPullRequestSection = (pullRequest, file, patch, oldFile, newFile) =>
   };
 };
 
-const PULL_REQUEST_CONTENT_CONCURRENCY = 16;
-
-/**
- * Run an async mapper over `items` with a bounded number of concurrent calls so
- * loading every file's contents does not spawn one git process per file at once.
- *
- * @template T, R
- * @param {ReadonlyArray<T>} items
- * @param {number} limit
- * @param {(item: T) => Promise<R>} mapper
- * @returns {Promise<Array<R>>}
- */
-const mapWithConcurrency = async (items, limit, mapper) => {
-  /** @type {Array<R>} */
-  const results = new Array(items.length);
-  let cursor = 0;
-  const run = async () => {
-    while (cursor < items.length) {
-      const index = cursor;
-      cursor += 1;
-      results[index] = await mapper(items[index]);
-    }
-  };
-
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, run));
-  return results;
-};
-
 /** @param {string} launchPath @param {Extract<ReviewSource, {type: 'pull-request'}>} source @returns {Promise<RepositoryState>} */
 const readPullRequestState = async (launchPath, source) => {
   const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
@@ -779,19 +751,38 @@ const readPullRequestState = async (launchPath, source) => {
   const contentRefs = await resolvePullRequestContentRefs(repoRoot, pullRequest, metadata).catch(
     () => null,
   );
+  const reviewFiles = [...apiFiles].map((file) => {
+    const patch = diffByPath.get(file.filename) || createPatchFromPullRequestFile(file);
+    return {
+      file,
+      oldPath: file.previous_filename || file.filename,
+      patch,
+    };
+  });
+  const contentFiles = reviewFiles.filter(({ patch }) => !BINARY_DIFF_MARKER.test(patch));
+  const [oldFiles, newFiles] = contentRefs
+    ? await Promise.all([
+        readGitFiles(
+          repoRoot,
+          contentRefs.base,
+          contentFiles.map(({ oldPath }) => oldPath),
+          { refScopedEmptyCacheKey: true },
+        ),
+        readGitFiles(
+          repoRoot,
+          contentRefs.head,
+          contentFiles.map(({ file }) => file.filename),
+          { refScopedEmptyCacheKey: true },
+        ),
+      ])
+    : [new Map(), new Map()];
 
   /** @type {Array<ChangedFile>} */
-  const files = (
-    await mapWithConcurrency([...apiFiles], PULL_REQUEST_CONTENT_CONCURRENCY, async (file) => {
-      const patch = diffByPath.get(file.filename) || createPatchFromPullRequestFile(file);
-      const oldPath = file.previous_filename || file.filename;
-      const [oldFile, newFile] =
-        contentRefs && !BINARY_DIFF_MARKER.test(patch)
-          ? await Promise.all([
-              readGitFile(repoRoot, contentRefs.base, oldPath),
-              readGitFile(repoRoot, contentRefs.head, file.filename),
-            ])
-          : [undefined, undefined];
+  const files = reviewFiles
+    .map(({ file, oldPath, patch }) => {
+      const oldFile = contentRefs && !BINARY_DIFF_MARKER.test(patch) ? oldFiles.get(oldPath) : null;
+      const newFile =
+        contentRefs && !BINARY_DIFF_MARKER.test(patch) ? newFiles.get(file.filename) : null;
       const section = createPullRequestSection(pullRequest, file, patch, oldFile, newFile);
 
       return {
@@ -813,7 +804,7 @@ const readPullRequestState = async (launchPath, source) => {
         status: normalizePullRequestFileStatus(file.status),
       };
     })
-  ).sort((left, right) => left.path.localeCompare(right.path));
+    .sort((left, right) => left.path.localeCompare(right.path));
 
   return {
     files,

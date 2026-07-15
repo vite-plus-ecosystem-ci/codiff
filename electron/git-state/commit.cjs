@@ -308,6 +308,25 @@ const readResolvedComparison = async (launchPath, source) => {
   };
 };
 
+/** @param {string} repoRoot @param {string} commit @returns {Promise<ResolvedComparison>} */
+const readResolvedCommitComparison = async (repoRoot, commit) => {
+  const [firstParent] = await readCommitParents(repoRoot, commit);
+  const status = await readCommitNameStatus(repoRoot, commit, firstParent, {
+    sort: false,
+  });
+  return {
+    newRef: commit,
+    oldRef: firstParent,
+    repoRoot,
+    source: {
+      ref: commit,
+      type: 'commit',
+    },
+    sourceLabel: 'commit',
+    status,
+  };
+};
+
 /** @param {string} launchPath @param {ResolvedComparison} comparison */
 const readResolvedComparisonState = (launchPath, comparison) =>
   readComparisonState({
@@ -386,9 +405,8 @@ const readComparisonSourceImageContent = async (launchPath, source, requestedPat
   }
 };
 
-/** @param {string} launchPath @param {string} ref @returns {Promise<RepositoryState>} */
-const readCommitState = async (launchPath, ref) => {
-  const comparison = await readResolvedComparison(launchPath, { ref, type: 'commit' });
+/** @param {string} launchPath @param {ResolvedComparison} comparison */
+const readCommitStateFromComparison = async (launchPath, comparison) => {
   const [commitMetadata, state, generatedAttributeStates] = await Promise.all([
     readCommitMetadataForCommit(
       comparison.repoRoot,
@@ -405,6 +423,22 @@ const readCommitState = async (launchPath, ref) => {
     commitMetadata,
   };
 };
+
+/** @param {string} launchPath @param {string} ref @returns {Promise<RepositoryState>} */
+const readCommitState = async (launchPath, ref) =>
+  readCommitStateFromComparison(
+    launchPath,
+    await readResolvedComparison(launchPath, { ref, type: 'commit' }),
+  );
+
+/**
+ * @param {string} launchPath
+ * @param {string} repoRoot
+ * @param {string} commit
+ * @returns {Promise<RepositoryState>}
+ */
+const readResolvedCommitState = async (launchPath, repoRoot, commit) =>
+  readCommitStateFromComparison(launchPath, await readResolvedCommitComparison(repoRoot, commit));
 
 /**
  * @param {string} launchPath
@@ -708,6 +742,7 @@ module.exports = {
   readCommitImageContent,
   readCommitSectionContent,
   readCommitState,
+  readResolvedCommitState,
   readRangeImageContent,
   readRangeSectionContent,
   readRangeState,

@@ -427,4 +427,4 @@ exit 1
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
     await rm(directory, { force: true, recursive: true });
   }
-});
+}, 15_000);

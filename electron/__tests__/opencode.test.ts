@@ -3,6 +3,9 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vite-plus/test';
+import { createCommandTransport } from './helpers/command-transport.ts';
+
+type CommandTransport = ReturnType<typeof createCommandTransport>['transport'];
 
 const require = createRequire(import.meta.url);
 const {
@@ -33,6 +36,7 @@ const {
     outputName?: string,
     timeoutMessage?: string,
     options?: {
+      commandTransport?: CommandTransport;
       fallbackModel?: string;
       model?: string;
       onModelFallback?: (fallbackModel: string, originalModel: string) => void;
@@ -102,63 +106,49 @@ test('detects OpenCode-not-found errors and invalid overrides', () => {
 });
 
 test('runs OpenCode as an external read-only call', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-opencode-'));
-  const fakeOpenCodePath = join(directory, 'opencode');
-  const argsPath = join(directory, 'args.txt');
-  const envPath = join(directory, 'env.txt');
-  const stdinPath = join(directory, 'stdin.txt');
-  const previousOpenCodePath = process.env.CODIFF_OPENCODE_PATH;
+  let stdin = '';
+  const { calls, transport } = createCommandTransport(({ close, stdin: input, stdout }) => {
+    input.on('data', (chunk) => {
+      stdin += chunk.toString();
+    });
+    input.on('finish', () => {
+      stdout(
+        `${JSON.stringify({
+          part: { id: 'answer', text: '{"version":1}' },
+          type: 'text',
+        })}\n`,
+      );
+      close();
+    });
+  });
 
-  try {
-    await writeFile(
-      fakeOpenCodePath,
-      `#!/usr/bin/env node
-const { writeFileSync } = require('node:fs');
-writeFileSync(${JSON.stringify(argsPath)}, process.argv.slice(2).join('\\n'));
-writeFileSync(${JSON.stringify(envPath)}, process.env.OPENCODE_PERMISSION || '');
-let stdin = '';
-process.stdin.on('data', (chunk) => {
-  stdin += chunk;
-});
-process.stdin.on('end', () => {
-  writeFileSync(${JSON.stringify(stdinPath)}, stdin);
-  process.stdout.write(JSON.stringify({
-    type: 'text',
-    part: { id: 'answer', text: '{"version":1}' },
-  }) + '\\n');
-});
-`,
-    );
-    await chmod(fakeOpenCodePath, 0o755);
-    process.env.CODIFF_OPENCODE_PATH = fakeOpenCodePath;
+  await expect(
+    runOpenCode(
+      '/repo',
+      'prompt',
+      { required: ['version'], type: 'object' },
+      undefined,
+      undefined,
+      {
+        commandTransport: transport,
+      },
+    ),
+  ).resolves.toBe('{"version":1}');
 
-    await expect(
-      runOpenCode(directory, 'prompt', { required: ['version'], type: 'object' }),
-    ).resolves.toBe('{"version":1}');
-
-    expect((await readFile(argsPath, 'utf8')).split('\n')).toEqual([
-      'run',
-      '--format',
-      'json',
-      '--pure',
-      '--agent',
-      'build',
-      '--dir',
-      directory,
-    ]);
-    expect(JSON.parse(await readFile(envPath, 'utf8'))).toEqual({ '*': 'deny' });
-    const stdin = await readFile(stdinPath, 'utf8');
-    expect(stdin).toContain('prompt');
-    expect(stdin).toContain('Follow this JSON Schema exactly');
-    expect(stdin).toContain('"required":["version"]');
-  } finally {
-    if (previousOpenCodePath == null) {
-      delete process.env.CODIFF_OPENCODE_PATH;
-    } else {
-      process.env.CODIFF_OPENCODE_PATH = previousOpenCodePath;
-    }
-    await rm(directory, { force: true, recursive: true });
-  }
+  expect(calls[0].args).toEqual([
+    'run',
+    '--format',
+    'json',
+    '--pure',
+    '--agent',
+    'build',
+    '--dir',
+    '/repo',
+  ]);
+  expect(JSON.parse(String(calls[0].options.env?.OPENCODE_PERMISSION))).toEqual({ '*': 'deny' });
+  expect(stdin).toContain('prompt');
+  expect(stdin).toContain('Follow this JSON Schema exactly');
+  expect(stdin).toContain('"required":["version"]');
 });
 
 test('streams semantic progress from the OpenCode event server', async () => {
@@ -301,124 +291,82 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
 });
 
 test('falls back to OpenCode CLI JSON mode when event streaming is unavailable', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-opencode-progress-fallback-'));
-  const fakeOpenCodePath = join(directory, 'opencode');
-  const argsPath = join(directory, 'args.txt');
-  const previousOpenCodePath = process.env.CODIFF_OPENCODE_PATH;
-
-  try {
-    await writeFile(
-      fakeOpenCodePath,
-      `#!/usr/bin/env node
-const { appendFileSync } = require('node:fs');
-const args = process.argv.slice(2);
-appendFileSync(${JSON.stringify(argsPath)}, JSON.stringify(args) + '\\n');
-if (args[0] === 'serve') {
-  process.stderr.write('unknown command: serve');
-  process.exit(1);
-}
-process.stdin.resume();
-process.stdin.on('end', () => {
-  process.stdout.write(JSON.stringify({
-    type: 'text',
-    part: { id: 'answer', text: '{"version":1}' },
-  }) + '\\n');
-});
-`,
-    );
-    await chmod(fakeOpenCodePath, 0o755);
-    process.env.CODIFF_OPENCODE_PATH = fakeOpenCodePath;
-
-    await expect(
-      runOpenCode(
-        directory,
-        'prompt',
-        { required: ['version'], type: 'object' },
-        undefined,
-        undefined,
-        {
-          onProgress: () => {},
-        },
-      ),
-    ).resolves.toBe('{"version":1}');
-
-    const calls = (await readFile(argsPath, 'utf8'))
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line));
-    expect(calls[0][0]).toBe('serve');
-    expect(calls[1].slice(0, 3)).toEqual(['run', '--format', 'json']);
-  } finally {
-    if (previousOpenCodePath == null) {
-      delete process.env.CODIFF_OPENCODE_PATH;
-    } else {
-      process.env.CODIFF_OPENCODE_PATH = previousOpenCodePath;
+  const { calls, transport } = createCommandTransport((commandProcess) => {
+    if (commandProcess.args[0] === 'serve') {
+      queueMicrotask(() => {
+        commandProcess.stderr('unknown command: serve');
+        commandProcess.close(1);
+      });
+      return;
     }
-    await rm(directory, { force: true, recursive: true });
-  }
+    commandProcess.stdin.on('finish', () => {
+      commandProcess.stdout(
+        `${JSON.stringify({
+          part: { id: 'answer', text: '{"version":1}' },
+          type: 'text',
+        })}\n`,
+      );
+      commandProcess.close();
+    });
+  });
+
+  await expect(
+    runOpenCode(
+      '/repo',
+      'prompt',
+      { required: ['version'], type: 'object' },
+      undefined,
+      undefined,
+      {
+        commandTransport: transport,
+        onProgress: () => {},
+      },
+    ),
+  ).resolves.toBe('{"version":1}');
+
+  expect(calls[0].args[0]).toBe('serve');
+  expect(calls[1].args.slice(0, 3)).toEqual(['run', '--format', 'json']);
 });
 
 test('passes explicit models to OpenCode and falls back when they are unavailable', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-opencode-model-'));
-  const fakeOpenCodePath = join(directory, 'opencode');
-  const argsPath = join(directory, 'args.txt');
-  const previousOpenCodePath = process.env.CODIFF_OPENCODE_PATH;
+  const { calls, transport } = createCommandTransport((commandProcess) => {
+    commandProcess.stdin.on('finish', () => {
+      if (commandProcess.args.includes('--model')) {
+        commandProcess.stderr('Model not found: anthropic/claude-sonnet-4-6');
+        commandProcess.close(1);
+        return;
+      }
+      commandProcess.stdout(
+        `${JSON.stringify({
+          part: { id: 'answer', text: '{"version":1}' },
+          type: 'text',
+        })}\n`,
+      );
+      commandProcess.close();
+    });
+  });
+  const fallbacks: Array<[string, string]> = [];
 
-  try {
-    await writeFile(
-      fakeOpenCodePath,
-      `#!/usr/bin/env node
-const { appendFileSync } = require('node:fs');
-const args = process.argv.slice(2);
-appendFileSync(${JSON.stringify(argsPath)}, JSON.stringify(args) + '\\n');
-if (args.includes('--model')) {
-  process.stderr.write('Model not found: anthropic/claude-sonnet-4-6');
-  process.exit(1);
-}
-process.stdin.resume();
-process.stdin.on('end', () => {
-  process.stdout.write(JSON.stringify({
-    type: 'text',
-    part: { id: 'answer', text: '{"version":1}' },
-  }) + '\\n');
-});
-`,
-    );
-    await chmod(fakeOpenCodePath, 0o755);
-    process.env.CODIFF_OPENCODE_PATH = fakeOpenCodePath;
-    const fallbacks: Array<[string, string]> = [];
-
-    await expect(
-      runOpenCode(
-        directory,
-        'prompt',
-        { required: ['version'], type: 'object' },
-        undefined,
-        undefined,
-        {
-          fallbackModel: DEFAULT_OPENCODE_MODEL,
-          model: 'anthropic/claude-sonnet-4-6',
-          onModelFallback: (fallbackModel, originalModel) => {
-            fallbacks.push([fallbackModel, originalModel]);
-          },
+  await expect(
+    runOpenCode(
+      '/repo',
+      'prompt',
+      { required: ['version'], type: 'object' },
+      undefined,
+      undefined,
+      {
+        commandTransport: transport,
+        fallbackModel: DEFAULT_OPENCODE_MODEL,
+        model: 'anthropic/claude-sonnet-4-6',
+        onModelFallback: (fallbackModel, originalModel) => {
+          fallbacks.push([fallbackModel, originalModel]);
         },
-      ),
-    ).resolves.toBe('{"version":1}');
+      },
+    ),
+  ).resolves.toBe('{"version":1}');
 
-    const calls = (await readFile(argsPath, 'utf8'))
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line));
-    expect(calls).toHaveLength(2);
-    expect(calls[0]).toContain('anthropic/claude-sonnet-4-6');
-    expect(calls[1]).not.toContain('--model');
-    expect(fallbacks).toEqual([[DEFAULT_OPENCODE_MODEL, 'anthropic/claude-sonnet-4-6']]);
-  } finally {
-    if (previousOpenCodePath == null) {
-      delete process.env.CODIFF_OPENCODE_PATH;
-    } else {
-      process.env.CODIFF_OPENCODE_PATH = previousOpenCodePath;
-    }
-    await rm(directory, { force: true, recursive: true });
-  }
+  expect(calls).toHaveLength(2);
+  expect(calls[0].args).toContain('anthropic/claude-sonnet-4-6');
+  expect(calls[1].args).not.toContain('--model');
+  expect(fallbacks).toEqual([[DEFAULT_OPENCODE_MODEL, 'anthropic/claude-sonnet-4-6']]);
 });

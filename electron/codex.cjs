@@ -1,9 +1,9 @@
 // @ts-check
 
-const { spawn } = require('node:child_process');
 const { promises: fs } = require('node:fs');
 const { homedir, tmpdir } = require('node:os');
 const { join } = require('node:path');
+const { resolveAgentCommandTransport } = require('./agent-command.cjs');
 const {
   cleanText,
   findExecutableOnPath,
@@ -28,6 +28,7 @@ const CODEX_NOT_FOUND_MESSAGE =
 /**
  * @typedef {{
  *   fallbackModel?: string;
+ *   commandTransport?: import('./agent-command.cjs').AgentCommandTransport;
  *   model?: string;
  *   onMetrics?: (metrics: {
  *     transport: 'app-server' | 'exec';
@@ -394,7 +395,10 @@ const runCodex = async (
         let stdout = '';
         let finished = false;
 
-        const codexCommand = getCodexCommand();
+        const commandTransport = resolveAgentCommandTransport(
+          options.commandTransport,
+          getCodexCommand,
+        );
         const codexArgs = [
           'exec',
           '-m',
@@ -416,7 +420,7 @@ const runCodex = async (
           outputPath,
           '-',
         ];
-        const child = spawn(codexCommand, codexArgs, {
+        const child = commandTransport.spawn(commandTransport.command, codexArgs, {
           env: process.env,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
@@ -497,9 +501,12 @@ const runCodex = async (
   const invokeCodexAppServer = (codexModel) => {
     const reasoningEffort = getOpenAIModelReasoningEffort(codexModel, options.reasoningEffort);
     return new Promise((resolve, reject) => {
-      const codexCommand = getCodexCommand();
-      const child = spawn(
-        codexCommand,
+      const commandTransport = resolveAgentCommandTransport(
+        options.commandTransport,
+        getCodexCommand,
+      );
+      const child = commandTransport.spawn(
+        commandTransport.command,
         ['app-server', '--stdio', '-c', `model_reasoning_effort="${reasoningEffort}"`],
         {
           cwd: repoRoot,

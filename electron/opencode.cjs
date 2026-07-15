@@ -1,9 +1,9 @@
 // @ts-check
 
-const { spawn } = require('node:child_process');
 const { createServer } = require('node:net');
 const { homedir } = require('node:os');
 const { join } = require('node:path');
+const { resolveAgentCommandTransport } = require('./agent-command.cjs');
 const {
   buildSchemaReminder,
   findExecutableOnPath,
@@ -320,6 +320,7 @@ const getOpenCodeServerModel = (model) => {
  * @param {string} [_outputName]
  * @param {string} [timeoutMessage]
  * @param {{
+ *   commandTransport?: import('./agent-command.cjs').AgentCommandTransport;
  *   fallbackModel?: string;
  *   model?: string;
  *   onModelFallback?: (fallbackModel: string, originalModel: string) => Promise<void> | void;
@@ -351,7 +352,10 @@ const runOpenCode = async (
         let stdout = '';
         let finished = false;
 
-        const opencodeCommand = getOpenCodeCommand();
+        const commandTransport = resolveAgentCommandTransport(
+          options.commandTransport,
+          getOpenCodeCommand,
+        );
         const opencodeArgs = [
           'run',
           '--format',
@@ -363,7 +367,7 @@ const runOpenCode = async (
           repoRoot,
           ...(openCodeModel === DEFAULT_OPENCODE_MODEL ? [] : ['--model', openCodeModel]),
         ];
-        const child = spawn(opencodeCommand, opencodeArgs, {
+        const child = commandTransport.spawn(commandTransport.command, opencodeArgs, {
           cwd: repoRoot,
           env: {
             ...process.env,
@@ -429,10 +433,13 @@ const runOpenCode = async (
 
   /** @param {string} openCodeModel */
   const invokeOpenCodeServer = async (openCodeModel) => {
-    const opencodeCommand = getOpenCodeCommand();
+    const commandTransport = resolveAgentCommandTransport(
+      options.commandTransport,
+      getOpenCodeCommand,
+    );
     const port = await reserveOpenCodePort();
-    const child = spawn(
-      opencodeCommand,
+    const child = commandTransport.spawn(
+      commandTransport.command,
       ['serve', '--pure', '--hostname=127.0.0.1', `--port=${port}`],
       {
         cwd: repoRoot,

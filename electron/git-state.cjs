@@ -1,6 +1,6 @@
 // @ts-check
 
-const { gitOrEmpty, parseStatus, validateRepositoryPath } = require('./git-state/common.cjs');
+const { git, gitOrEmpty, parseStatus, validateRepositoryPath } = require('./git-state/common.cjs');
 const {
   listRepositoryHistory,
   readBranchImageContent,
@@ -12,10 +12,12 @@ const {
   readCommitImageContent,
   readCommitSectionContent,
   readCommitState,
+  readResolvedCommitState,
   readRangeImageContent,
   readRangeSectionContent,
   readRangeState,
 } = require('./git-state/commit.cjs');
+const { parseRepositoryWatcherStatus } = require('./repository-watcher.cjs');
 const {
   PENDING_REVIEW_COMMENT_ERROR,
   collectResolvedReviewCommentIds,
@@ -109,13 +111,42 @@ const readRepositoryState = async (launchPath, source = { type: 'working-tree' }
  * @returns {Promise<RepositoryState>}
  */
 const readWalkthroughRepositoryState = async (launchPath, source, options = {}) => {
-  const state = await readRepositoryState(launchPath, source, options);
-  if (source || state.source.type !== 'working-tree' || state.files.length > 0) {
-    return state;
+  if (source) {
+    return readRepositoryState(launchPath, source, options);
   }
 
-  const head = (await gitOrEmpty(state.root, ['rev-parse', '--verify', 'HEAD'])).trim();
-  return head ? readRepositoryState(launchPath, { ref: 'HEAD', type: 'commit' }, options) : state;
+  const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
+  const status = parseRepositoryWatcherStatus(
+    await git(repoRoot, [
+      'status',
+      '--porcelain=v2',
+      '--branch',
+      '--no-ahead-behind',
+      '-z',
+      '-uall',
+    ]),
+  );
+  if (status.paths.length > 0) {
+    return readRepositoryState(launchPath, undefined, options);
+  }
+
+  const [head, branchHead] = status.head.split('\0');
+  const branch = branchHead && branchHead !== '(detached)' ? branchHead : null;
+  if (/^[0-9a-f]+$/i.test(head)) {
+    const state = await readResolvedCommitState(launchPath, repoRoot, head);
+    return { ...state, branch };
+  }
+
+  return {
+    branch,
+    files: [],
+    generatedAt: Date.now(),
+    launchPath,
+    root: repoRoot,
+    source: {
+      type: 'working-tree',
+    },
+  };
 };
 
 /** @param {Extract<ReviewSource, {type: 'pull-request'}>} source */

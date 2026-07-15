@@ -9,10 +9,10 @@ const {
   getFingerprint,
   git,
   gitOrEmpty,
-  readGitFile,
   readGitImageFile,
   validateRepositoryPath,
 } = require('./common.cjs');
+const { readGitFiles } = require('./git-files.cjs');
 const {
   createPatchFromPullRequestFile,
   createPullRequestSection,
@@ -409,42 +409,54 @@ const readMergeRequestState = async (launchPath, source) => {
   const refs = await resolveMergeRequestContentRefs(repoRoot, mergeRequest, metadata).catch(
     () => null,
   );
-  /** @type {Array<ChangedFile>} */
-  const files = await Promise.all(
-    diffs.map(async (rawDiff) => {
-      const file = normalizeGitLabDiffFile(rawDiff);
-      const patch = createPatchFromPullRequestFile(file);
-      const [oldFile, newFile] = refs
-        ? await Promise.all([
-            readGitFile(repoRoot, refs.base, file.previous_filename || file.filename),
-            readGitFile(repoRoot, refs.head, file.filename),
-          ])
-        : [undefined, undefined];
-      const section = createPullRequestSection(mergeRequest, file, patch, oldFile, newFile);
-      return {
-        fingerprint: getFingerprint(
-          [
-            metadata.sha || '',
-            file.status,
-            file.previous_filename || '',
-            file.filename,
-            patch,
-          ].join('\n'),
+  const reviewFiles = diffs.map((rawDiff) => {
+    const file = normalizeGitLabDiffFile(rawDiff);
+    return {
+      file,
+      oldPath: file.previous_filename || file.filename,
+      patch: createPatchFromPullRequestFile(file),
+    };
+  });
+  const [oldFiles, newFiles] = refs
+    ? await Promise.all([
+        readGitFiles(
+          repoRoot,
+          refs.base,
+          reviewFiles.map(({ oldPath }) => oldPath),
+          { refScopedEmptyCacheKey: true },
         ),
-        oldPath: file.previous_filename,
-        path: file.filename,
-        sections: [section],
-        status:
-          file.status === 'added'
-            ? 'added'
-            : file.status === 'removed'
-              ? 'deleted'
-              : file.status === 'renamed'
-                ? 'renamed'
-                : 'modified',
-      };
-    }),
-  );
+        readGitFiles(
+          repoRoot,
+          refs.head,
+          reviewFiles.map(({ file }) => file.filename),
+          { refScopedEmptyCacheKey: true },
+        ),
+      ])
+    : [new Map(), new Map()];
+  /** @type {Array<ChangedFile>} */
+  const files = reviewFiles.map(({ file, oldPath, patch }) => {
+    const oldFile = refs ? oldFiles.get(oldPath) : null;
+    const newFile = refs ? newFiles.get(file.filename) : null;
+    const section = createPullRequestSection(mergeRequest, file, patch, oldFile, newFile);
+    return {
+      fingerprint: getFingerprint(
+        [metadata.sha || '', file.status, file.previous_filename || '', file.filename, patch].join(
+          '\n',
+        ),
+      ),
+      oldPath: file.previous_filename,
+      path: file.filename,
+      sections: [section],
+      status:
+        file.status === 'added'
+          ? 'added'
+          : file.status === 'removed'
+            ? 'deleted'
+            : file.status === 'renamed'
+              ? 'renamed'
+              : 'modified',
+    };
+  });
   return {
     files: files.sort((left, right) => left.path.localeCompare(right.path)),
     generatedAt: Date.now(),
