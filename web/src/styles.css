@@ -348,6 +348,66 @@ body {
   margin: 0;
 }
 
+.codiff-web-footer {
+  border-top: 1px solid var(--sidebar-border);
+  color: var(--sidebar-text);
+  padding: 28px 20px;
+}
+
+.codiff-web-footer-inner {
+  align-items: center;
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  margin: 0 auto;
+  max-width: 1120px;
+}
+
+.codiff-web-footer-brand {
+  color: var(--text);
+  display: block;
+  flex: 0 0 auto;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.codiff-web-footer-brand:hover {
+  opacity: 0.78;
+}
+
+.codiff-web-footer-brand:active {
+  transform: scale(0.96);
+}
+
+.codiff-web-footer-brand:focus-visible,
+.codiff-web-footer a:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--text) 45%, transparent);
+  outline-offset: 3px;
+}
+
+.codiff-web-footer-logo {
+  display: block;
+  height: 42px;
+  width: 42px;
+}
+
+.codiff-web-footer p {
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+  text-align: right;
+}
+
+.codiff-web-footer p a {
+  color: var(--text);
+  transition: opacity 120ms ease;
+}
+
+.codiff-web-footer p a:hover {
+  opacity: 0.7;
+}
+
 @media (max-width: 760px) {
   .codiff-web-brand span {
     display: none;
@@ -382,5 +442,15 @@ body {
 
   .codiff-web-header-inner {
     padding: 0 12px;
+  }
+
+  .codiff-web-footer-inner {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .codiff-web-footer p {
+    text-align: left;
   }
 }
