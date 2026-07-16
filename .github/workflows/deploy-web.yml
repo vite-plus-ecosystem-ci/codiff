@@ -80,12 +80,12 @@ jobs:
           );
           NODE
 
-          if ! vp exec wrangler d1 info DB --json >/dev/null 2>&1 \
-            || ! vp exec wrangler r2 bucket info codiff-public-shares --json >/dev/null 2>&1
-          then
-            vp exec wrangler versions upload \
-              --message "Bootstrap production storage" \
-              --secrets-file "$secrets_file"
+          if ! vp exec wrangler d1 info DB --json >/dev/null 2>&1; then
+            vp exec wrangler d1 create codiff-public
+          fi
+
+          if ! vp exec wrangler r2 bucket info codiff-public-shares --json >/dev/null 2>&1; then
+            vp exec wrangler r2 bucket create codiff-public-shares
           fi
 
           vp exec wrangler d1 migrations apply DB --remote
