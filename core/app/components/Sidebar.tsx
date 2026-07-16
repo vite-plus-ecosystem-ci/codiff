@@ -17,6 +17,7 @@ import { isNativeInputTarget } from '../../lib/keyboard.ts';
 import { getShortRef, getSourceKey } from '../../lib/source.ts';
 import type { ChangedFile, HistoryEntry, NarrativeWalkthrough, ReviewSource } from '../../types.ts';
 import { Avatar } from './Avatar.tsx';
+import { Button } from './Button.tsx';
 import { ReviewFileTree } from './FileTree.tsx';
 import { NarrativeSidebar } from './walkthrough/NarrativeSidebar.tsx';
 import type { NarrativeNavigation } from './walkthrough/useNarrativeNavigation.ts';
@@ -226,14 +227,14 @@ export function Sidebar({
             ) : null}
           </span>
           {showCommitButton ? (
-            <button
+            <Button
               aria-label={commitViewOpen ? 'Show file tree' : 'Open commit view'}
-              className="codiff-open-button sidebar-commit-button"
+              className="sidebar-commit-button"
               onClick={onToggleCommitView}
               type="button"
             >
               {commitViewOpen ? 'Tree' : 'Commit'}
-            </button>
+            </Button>
           ) : null}
         </div>
       ) : null}

@@ -16,6 +16,7 @@ import type {
   WalkthroughCommitRequest,
   WalkthroughCommitResult,
 } from '../../../types.ts';
+import { Button } from '../Button.tsx';
 import { ChapterIcon, WalkthroughLineCount } from './parts.tsx';
 
 export type CommitHandler = (request: WalkthroughCommitRequest) => Promise<WalkthroughCommitResult>;
@@ -544,10 +545,16 @@ export function CommitView({
             </span>
           ) : null}
           <span className="wt-commit-foot-actions">
-            <button
-              className="codiff-open-button wt-commit-btn"
+            <Button
+              action={submit}
+              className="wt-commit-btn"
               disabled={!canCommit}
-              onClick={submit}
+              pendingPlaceholder={
+                <>
+                  <GitBranch size={16} />
+                  <span>Committing…</span>
+                </>
+              }
               type="button"
             >
               <GitBranch size={16} />
@@ -559,7 +566,7 @@ export function CommitView({
                   {selectedFiles.length} file{selectedFiles.length === 1 ? '' : 's'}
                 </span>
               ) : null}
-            </button>
+            </Button>
           </span>
         </div>
       </div>

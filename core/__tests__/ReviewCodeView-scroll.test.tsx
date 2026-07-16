@@ -244,6 +244,7 @@ test('switching edited Markdown back to a diff flushes and refreshes it first', 
       ({ textContent }) => textContent === 'View as Diff',
     );
     expect(diffButton).not.toBeUndefined();
+    expect(diffButton?.classList.contains('codiff-button')).toBe(true);
 
     await act(async () => {
       diffButton?.click();
@@ -903,7 +904,7 @@ test('read-only walkthroughs can opt into the viewed control', async () => {
 
     const viewedButton = container.querySelector<HTMLButtonElement>('.codiff-viewed-button');
     expect(viewedButton).not.toBeNull();
-    expect(container.querySelector('.codiff-open-button')).toBeNull();
+    expect(container.querySelector('.codiff-button')).toBeNull();
 
     await act(async () => {
       viewedButton?.click();
@@ -1420,6 +1421,7 @@ test('file comments can be created for GitLab merge requests but not GitHub pull
       '.codiff-file-comment-button',
     );
     expect(fileCommentButton).not.toBeNull();
+    expect(fileCommentButton?.classList.contains('codiff-button')).toBe(true);
 
     await act(async () => fileCommentButton?.click());
     expect(onCreateComment).toHaveBeenCalledWith({
@@ -1580,7 +1582,7 @@ test('Enter on a focused review control is not converted into a hunk comment', a
       render(1);
     });
 
-    const openButton = container.querySelector<HTMLButtonElement>('.codiff-open-button');
+    const openButton = container.querySelector<HTMLButtonElement>('.codiff-button');
     if (!openButton) {
       throw new Error('Expected the open file button.');
     }

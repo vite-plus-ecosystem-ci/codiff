@@ -1,20 +1,10 @@
+export { defaultReviewPreferences } from './defaults.ts';
 export {
-  getPlanCommentAffordancePosition,
-  getPlanCommentColorIndex,
-  getPlanCommentIdentityColorIndex,
-  getSharedPlanDownloadContent,
-  SharedPlanApp,
-  type SharedPlanCommenting,
-} from './SharedPlanApp.tsx';
-export {
-  MergeRequestReviewApp,
-  ReadOnlyGeneralCommentCard,
-  SharedWalkthroughApp,
-  type MergeRequestReviewAppProps,
-  type MergeRequestReviewMode,
-  type MergeRequestWalkthroughStatus,
-  type SharedWalkthroughCommenting,
-} from './SharedWalkthroughApp.tsx';
+  parsePlanShareManifest,
+  parsePlanShareUpload,
+  type PlanShareManifestV1,
+  type ShareUploader,
+} from './share.ts';
 export type {
   ChangedFile,
   CodiffFeatureFlags,
@@ -31,11 +21,15 @@ export type {
   PullRequestMergeState,
   PullRequestReviewComment,
   PullRequestReviewEvent,
+  PullRequestReviewStatus,
   PullRequestReviewer,
+  ReviewPreferences,
   RepositoryState,
   ReviewSource,
-  SharedPlanSnapshot,
-  SharedWalkthroughSnapshot,
   SharePlanResult,
   ShareWalkthroughResult,
+  SharedPlanSnapshot,
+  SharedWalkthroughSnapshot,
+  WalkthroughShareManifestV1,
+  WalkthroughHunk,
 } from './types.ts';

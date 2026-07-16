@@ -54,6 +54,16 @@ export default defineConfig({
     // stalls the dep optimizer; it ships as plain ESM, so skip prebundling.
     exclude: ['ghostty-web'],
   },
+  pack: {
+    copy: [
+      { from: 'fonts', to: 'dist' },
+      { from: 'App.css.d.ts', rename: 'styles.css.d.ts', to: 'dist' },
+    ],
+    dts: false,
+    loader: {
+      '.svg': 'dataurl',
+    },
+  },
   plugins: [
     babel({
       presets: [reactCompilerPreset()],

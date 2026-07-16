@@ -22,9 +22,10 @@ import type {
   ReviewAuthor,
 } from '../../../types.ts';
 import { Avatar } from '../Avatar.tsx';
+import { Button } from '../Button.tsx';
 import { ReadOnlyMarkdownView } from '../ReadOnlyMarkdownView.tsx';
 
-export type SharedWalkthroughCommenting = {
+export type ReviewCommenting = {
   canComment: boolean;
   onDeleteComment: (commentId: string) => Promise<void>;
   onDeleteGeneralComment: (commentId: string) => Promise<void>;
@@ -565,12 +566,13 @@ export function MergeRequestCommentsView({
   onSaveEdit,
   onStartEdit,
   onSubmit,
+  signInLabel,
   sourceDescription,
   submitting,
   threads,
 }: {
   canComment: boolean;
-  commenting?: SharedWalkthroughCommenting;
+  commenting?: ReviewCommenting;
   draft: string;
   editDraft: string;
   editError: string | null;
@@ -587,6 +589,7 @@ export function MergeRequestCommentsView({
   onSaveEdit: () => void;
   onStartEdit: (comment: PullRequestGeneralComment) => void;
   onSubmit: () => void;
+  signInLabel: string;
   sourceDescription?: ReactNode;
   submitting: boolean;
   threads: ReadonlyArray<PullRequestGeneralCommentThread>;
@@ -665,9 +668,9 @@ export function MergeRequestCommentsView({
         />
       ) : commenting ? (
         <div className="general-comment-sign-in">
-          <button className="codiff-open-button" onClick={commenting.onSignIn} type="button">
-            Sign in with GitLab to comment
-          </button>
+          <Button action={commenting.onSignIn} pendingPlaceholder="Signing in…">
+            {signInLabel}
+          </Button>
         </div>
       ) : null}
     </div>

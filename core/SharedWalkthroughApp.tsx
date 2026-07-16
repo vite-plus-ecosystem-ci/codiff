@@ -4,7 +4,7 @@ import { ReviewFileTree } from './app/components/FileTree.tsx';
 import {
   MergeRequestCommentsView,
   SidebarGeneralCommentList,
-  type SharedWalkthroughCommenting,
+  type ReviewCommenting,
 } from './app/components/merge-request/GeneralComments.tsx';
 import {
   isTerminalPullRequestMergeState,
@@ -28,7 +28,6 @@ import { useNarrativeNavigation } from './app/components/walkthrough/useNarrativ
 import { WalkthroughDiffSurface } from './app/components/walkthrough/WalkthroughDiffSurface.tsx';
 import { WalkthroughProgress } from './app/components/walkthrough/WalkthroughProgress.tsx';
 import {
-  CODE_FONT_SIZE_DEFAULT,
   getCodeFontLineHeight,
   normalizeCodeFontSizePreference,
   useDocumentAppearance,
@@ -57,9 +56,7 @@ import { getSelectedPathFromScroll } from './lib/review-scroll.ts';
 import { SIDEBAR_DEFAULT_WIDTH, readSidebarWidth, writeSidebarWidth } from './lib/sidebar-width.ts';
 import { getSourceLabel, getSourceKey } from './lib/source.ts';
 import type {
-  CodiffPreferences,
   GitIdentity,
-  NarrativeWalkthrough,
   PullRequestMergeOptions,
   PullRequestGeneralComment,
   PullRequestGeneralCommentThread,
@@ -74,22 +71,13 @@ import type {
 
 export {
   ReadOnlyGeneralCommentCard,
-  type SharedWalkthroughCommenting,
+  type ReviewCommenting,
 } from './app/components/merge-request/GeneralComments.tsx';
 
 const emptyReviewComments: ReadonlyArray<ReviewComment> = [];
 const emptyGeneralCommentThreads: ReadonlyArray<PullRequestGeneralCommentThread> = [];
 const emptyPaths = new Set<string>();
 const emptyWalkthroughNotes = new Map();
-const defaultSharedPreferences: SharedWalkthroughSnapshot['preferences'] = {
-  codeFontFamily: 'Fira Code',
-  codeFontSize: CODE_FONT_SIZE_DEFAULT,
-  diffStyle: 'split',
-  showWhitespace: false,
-  theme: 'system',
-  wordWrap: false,
-};
-
 const readSharedSidebarWidth = () =>
   typeof localStorage === 'undefined' ? SIDEBAR_DEFAULT_WIDTH : readSidebarWidth();
 
@@ -99,48 +87,8 @@ const writeSharedSidebarWidth = (width: number) => {
   }
 };
 
-export type MergeRequestWalkthroughStatus = 'failed' | 'generating' | 'idle' | 'ready';
-export type MergeRequestReviewMode = 'comments' | 'tree' | 'walkthrough';
-
-export type MergeRequestReviewAppProps = {
-  externalUrl: string;
-  gitIdentity?: GitIdentity | null;
-  initialMode?: MergeRequestReviewMode;
-  onCancelAutoMerge?: () => Promise<void> | void;
-  onClosePullRequest?: () => Promise<void> | void;
-  onGenerateWalkthrough: () => Promise<void> | void;
-  onHome: () => void;
-  onMergePullRequest?: (
-    options: PullRequestMergeOptions & { autoMerge: boolean },
-  ) => Promise<void> | void;
-  onModeChange?: (mode: MergeRequestReviewMode) => void;
-  onResolveDiscussion?: (discussionId: string, resolved: boolean) => Promise<void>;
-  onSubmitComment: (comment: PullRequestReviewComment) => Promise<PullRequestExistingReviewComment>;
-  onSubmitGeneralComment: (body: string) => Promise<void>;
-  onSubmitReview: (
-    event: PullRequestReviewEvent,
-    comments: ReadonlyArray<PullRequestReviewComment>,
-    body?: string,
-  ) => Promise<void>;
-  onUpdateComment: (commentId: string, body: string) => Promise<void>;
-  onUpdateDescription?: (body: string) => Promise<void> | void;
-  onUpdateGeneralComment: (commentId: string, body: string) => Promise<void>;
-  onUpdateTitle?: (title: string) => Promise<void> | void;
-  onUploadDescriptionAsset?: (file: File) => Promise<string> | string;
-  preferences?: Partial<
-    Pick<
-      CodiffPreferences,
-      'codeFontFamily' | 'codeFontSize' | 'diffStyle' | 'showWhitespace' | 'theme' | 'wordWrap'
-    >
-  >;
-  settingsBar?: ReactNode;
-  sourceDescriptionFooterAside?: ReactNode;
-  state: RepositoryState;
-  title: string;
-  walkthrough: NarrativeWalkthrough | null;
-  walkthroughError?: string | null;
-  walkthroughStatus: MergeRequestWalkthroughStatus;
-};
+export type ReviewWalkthroughStatus = 'failed' | 'generating' | 'idle' | 'ready';
+export type ReviewMode = 'comments' | 'tree' | 'walkthrough';
 
 const getSnapshotReviewComments = (
   snapshot: SharedWalkthroughSnapshot,
@@ -172,11 +120,11 @@ const disabledCommitMessage = async (): Promise<WalkthroughCommitMessageResult> 
   status: 'unavailable',
 });
 
-type ReviewSurfaceProps = {
-  commenting?: SharedWalkthroughCommenting;
+export type ReviewSurfaceProps = {
+  commenting?: ReviewCommenting;
   externalUrl?: string;
   gitIdentity?: GitIdentity | null;
-  initialMode?: MergeRequestReviewMode;
+  initialMode?: ReviewMode;
   interactive?: {
     onCancelAutoMerge?: () => Promise<void> | void;
     onClosePullRequest?: () => Promise<void> | void;
@@ -201,23 +149,27 @@ type ReviewSurfaceProps = {
     onUpdateTitle?: (title: string) => Promise<void> | void;
     onUploadDescriptionAsset?: (file: File) => Promise<string> | string;
     walkthroughError?: string | null;
-    walkthroughStatus: MergeRequestWalkthroughStatus;
+    walkthroughStatus: ReviewWalkthroughStatus;
   };
-  onModeChange?: (mode: MergeRequestReviewMode) => void;
+  onModeChange?: (mode: ReviewMode) => void;
+  providerLabel?: string;
   settingsBar?: ReactNode;
+  signInLabel?: string;
   snapshot: SharedWalkthroughSnapshot;
   sourceDescriptionFooterAside?: ReactNode;
   title?: string;
 };
 
-function ReviewSurface({
+export function ReviewSurface({
   commenting,
   externalUrl,
   gitIdentity = null,
   initialMode,
   interactive,
   onModeChange,
+  providerLabel = 'provider',
   settingsBar,
+  signInLabel = 'Sign in to comment',
   snapshot,
   sourceDescriptionFooterAside,
   title,
@@ -244,7 +196,7 @@ function ReviewSurface({
   );
   const keymap = useMemo(() => createDefaultConfig().keymap, []);
   const [fileSearchQuery, setFileSearchQuery] = useState('');
-  const [uncontrolledSidebarMode, setUncontrolledSidebarMode] = useState<MergeRequestReviewMode>(
+  const [uncontrolledSidebarMode, setUncontrolledSidebarMode] = useState<ReviewMode>(
     () => initialMode ?? (interactive ? 'tree' : 'walkthrough'),
   );
   const isSidebarModeControlled = Boolean(initialMode && onModeChange);
@@ -375,7 +327,7 @@ function ReviewSurface({
   });
 
   const changeSidebarMode = useCallback(
-    (mode: MergeRequestReviewMode) => {
+    (mode: ReviewMode) => {
       setUncontrolledSidebarMode(mode);
       onModeChange?.(mode);
     },
@@ -934,12 +886,12 @@ function ReviewSurface({
             </div>
             {externalUrl ? (
               <a
-                aria-label="Open merge request in GitLab"
+                aria-label={`Open merge request in ${providerLabel}`}
                 className="merge-request-nav-button"
                 href={externalUrl}
                 rel="noreferrer"
                 target="_blank"
-                title="Open merge request in GitLab"
+                title={`Open merge request in ${providerLabel}`}
               >
                 <ExternalLink aria-hidden size={16} />
               </a>
@@ -1073,6 +1025,7 @@ function ReviewSurface({
             onSaveEdit={saveGeneralCommentEdit}
             onStartEdit={startEditGeneralComment}
             onSubmit={submitGeneralComment}
+            signInLabel={signInLabel}
             sourceDescription={sourceDescription}
             submitting={generalCommentSubmitting}
             threads={generalCommentThreads}
@@ -1134,133 +1087,5 @@ function ReviewSurface({
         )}
       </main>
     </div>
-  );
-}
-
-export function SharedWalkthroughApp({
-  commenting,
-  gitIdentity,
-  settingsBar,
-  snapshot,
-}: {
-  commenting?: SharedWalkthroughCommenting;
-  gitIdentity?: GitIdentity | null;
-  settingsBar?: ReactNode;
-  snapshot: SharedWalkthroughSnapshot;
-}) {
-  return (
-    <ReviewSurface
-      commenting={commenting}
-      gitIdentity={gitIdentity}
-      settingsBar={settingsBar}
-      snapshot={snapshot}
-    />
-  );
-}
-
-export function MergeRequestReviewApp({
-  externalUrl,
-  gitIdentity,
-  initialMode,
-  onCancelAutoMerge,
-  onClosePullRequest,
-  onGenerateWalkthrough,
-  onHome,
-  onMergePullRequest,
-  onModeChange,
-  onResolveDiscussion,
-  onSubmitComment,
-  onSubmitGeneralComment,
-  onSubmitReview,
-  onUpdateComment,
-  onUpdateDescription,
-  onUpdateGeneralComment,
-  onUpdateTitle,
-  onUploadDescriptionAsset,
-  preferences,
-  settingsBar,
-  sourceDescriptionFooterAside,
-  state,
-  title,
-  walkthrough,
-  walkthroughError,
-  walkthroughStatus,
-}: MergeRequestReviewAppProps) {
-  const placeholderWalkthrough = useMemo<NarrativeWalkthrough>(
-    () => ({
-      agent: 'codex',
-      chapters: [],
-      focus: 'Generate a walkthrough to review this merge request in narrative order.',
-      generatedAt: new Date(state.generatedAt).toISOString(),
-      kind: 'narrative',
-      repo: {
-        branch: state.branch,
-        root: state.root,
-      },
-      source: state.source,
-      support: [],
-      title,
-      version: 4,
-    }),
-    [state.branch, state.generatedAt, state.root, state.source, title],
-  );
-  const resolvedPreferences = useMemo(
-    () => ({
-      ...defaultSharedPreferences,
-      ...preferences,
-    }),
-    [preferences],
-  );
-  const snapshot = useMemo<SharedWalkthroughSnapshot>(
-    () => ({
-      branch: state.branch,
-      codeQualityFindings: state.codeQualityFindings,
-      codiffVersion: 'web',
-      exportedAt: new Date(state.generatedAt).toISOString(),
-      files: state.files,
-      kind: 'codiff-walkthrough-share',
-      preferences: resolvedPreferences,
-      repository: {
-        generalComments: state.generalComments,
-        root: state.root,
-        source: state.source,
-        title,
-      },
-      reviewComments: state.reviewComments,
-      version: 1,
-      walkthrough: walkthrough ?? placeholderWalkthrough,
-    }),
-    [placeholderWalkthrough, resolvedPreferences, state, title, walkthrough],
-  );
-
-  return (
-    <ReviewSurface
-      externalUrl={externalUrl}
-      gitIdentity={gitIdentity}
-      initialMode={initialMode}
-      interactive={{
-        onCancelAutoMerge,
-        onClosePullRequest,
-        onGenerateWalkthrough,
-        onHome,
-        onMergePullRequest,
-        onResolveDiscussion,
-        onSubmitComment,
-        onSubmitGeneralComment,
-        onSubmitReview,
-        onUpdateComment,
-        onUpdateDescription,
-        onUpdateGeneralComment,
-        onUpdateTitle,
-        onUploadDescriptionAsset,
-        walkthroughError,
-        walkthroughStatus,
-      }}
-      onModeChange={onModeChange}
-      settingsBar={settingsBar}
-      snapshot={snapshot}
-      sourceDescriptionFooterAside={sourceDescriptionFooterAside}
-      title={title}
-    />
   );
 }

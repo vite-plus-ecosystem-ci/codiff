@@ -19,6 +19,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import { Avatar } from './app/components/Avatar.tsx';
+import { Button } from './app/components/Button.tsx';
 import { ReadOnlyMarkdownView } from './app/components/ReadOnlyMarkdownView.tsx';
 import type {
   GitIdentity,
@@ -104,7 +105,7 @@ export const getPlanCommentAffordancePosition = ({
   width: contentPaddingRight + 24,
 });
 
-export type SharedPlanCommenting = {
+export type PlanReviewCommenting = {
   canComment: boolean;
   identity: GitIdentity | null;
   onCreateThread: (anchor: MarkdownCommentTarget['anchor'], body: string) => Promise<void>;
@@ -297,7 +298,7 @@ function SharedPlanMessage({
   onEditingChange,
   target,
 }: {
-  commenting?: SharedPlanCommenting;
+  commenting?: PlanReviewCommenting;
   message: PlanCommentMessage;
   onEditingChange: (messageId: string, editing: boolean) => void;
   target?: {
@@ -471,7 +472,7 @@ function SharedPlanThread({
   thread,
 }: {
   active: boolean;
-  commenting?: SharedPlanCommenting;
+  commenting?: PlanReviewCommenting;
   detached: boolean;
   onActivate: () => void;
   onCancelReply: () => void;
@@ -605,11 +606,12 @@ function SharedPlanCommentRail({
   onReveal,
   onRevealPending,
   pendingTarget,
+  signInLabel,
   threads,
   workspace,
 }: {
   activeThreadId: string | null;
-  commenting?: SharedPlanCommenting;
+  commenting?: PlanReviewCommenting;
   layoutPass: number;
   layouts: ReadonlyArray<MarkdownAnnotationLayout>;
   onActivate: (thread: PlanCommentThread) => void;
@@ -619,6 +621,7 @@ function SharedPlanCommentRail({
   onReveal: (thread: PlanCommentThread) => void;
   onRevealPending: () => void;
   pendingTarget: MarkdownCommentTarget | null;
+  signInLabel: string;
   threads: ReadonlyArray<PlanCommentThread>;
   workspace: HTMLElement | null;
 }) {
@@ -778,13 +781,9 @@ function SharedPlanCommentRail({
         ) : null}
         {commenting && !commenting.canComment ? (
           <div className="plan-comment-position general-comment-sign-in" ref={signInRef}>
-            <button
-              className="codiff-open-button"
-              onClick={() => commenting?.onSignIn()}
-              type="button"
-            >
-              Sign in with GitLab to comment
-            </button>
+            <Button action={() => commenting?.onSignIn()} pendingPlaceholder="Signing in…">
+              {signInLabel}
+            </Button>
           </div>
         ) : null}
       </div>
@@ -792,11 +791,13 @@ function SharedPlanCommentRail({
   );
 }
 
-export function SharedPlanApp({
+export function PlanReviewSurface({
   commenting,
+  signInLabel = 'Sign in to comment',
   snapshot,
 }: {
-  commenting?: SharedPlanCommenting;
+  commenting?: PlanReviewCommenting;
+  signInLabel?: string;
   snapshot: SharedPlanSnapshot;
 }) {
   const editorRef = useRef<MarkdownEditorHandle>(null);
@@ -896,15 +897,6 @@ export function SharedPlanApp({
     }
   }, [commentingColorIndex, workspace]);
 
-  useEffect(() => {
-    const root = document.documentElement;
-    if (snapshot.preferences.theme === 'system') {
-      root.removeAttribute('data-theme');
-    } else {
-      root.setAttribute('data-theme', snapshot.preferences.theme);
-    }
-  }, [snapshot.preferences.theme]);
-
   const revealThread = useCallback((thread: PlanCommentThread) => {
     setActiveThreadId(thread.id);
     editorRef.current?.focusAnnotation(thread.id);
@@ -962,7 +954,10 @@ export function SharedPlanApp({
   }, [snapshot]);
 
   return (
-    <main className="plan-shell shared-plan-shell">
+    <main
+      className="plan-shell shared-plan-shell"
+      data-theme={snapshot.preferences.theme === 'system' ? undefined : snapshot.preferences.theme}
+    >
       <header className="plan-header">
         <div className="plan-title" title={snapshot.document.title}>
           {snapshot.document.title}
@@ -994,15 +989,16 @@ export function SharedPlanApp({
                     </span>
                   </span>
                 </div>
-                <button
+                <Button
                   aria-label="Download plan"
-                  className="codiff-open-button plan-download-button"
+                  className="plan-download-button"
                   onClick={downloadPlan}
+                  size="icon"
                   title="Download plan"
                   type="button"
                 >
                   <DownloadSimple aria-hidden size={16} weight="bold" />
-                </button>
+                </Button>
               </div>
               <MarkdownEditor
                 activeAnnotationId={pendingTarget ? pendingPlanCommentId : activeThreadId}
@@ -1038,6 +1034,7 @@ export function SharedPlanApp({
               onReveal={revealThread}
               onRevealPending={() => editorRef.current?.focusAnnotation(pendingPlanCommentId)}
               pendingTarget={pendingTarget}
+              signInLabel={signInLabel}
               threads={snapshot.review.threads}
               workspace={workspace}
             />

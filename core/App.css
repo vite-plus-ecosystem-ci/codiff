@@ -2571,7 +2571,7 @@ html[data-codiff-platform='darwin'] .sidebar {
 .codiff-source-description-collapse-button,
 .codiff-file-comment-button,
 .codiff-markdown-button,
-.codiff-open-button,
+.codiff-button,
 .codiff-viewed-button,
 .codiff-copy-path-button {
   -webkit-app-region: no-drag;
@@ -2615,7 +2615,7 @@ html[data-codiff-platform='darwin'] .sidebar {
   color: var(--viewed);
 }
 
-.codiff-open-button.plan-download-button {
+.codiff-button.plan-download-button {
   height: 30px;
   padding: 0;
   width: 30px;
@@ -2666,7 +2666,7 @@ html[data-codiff-platform='darwin'] .sidebar {
 .codiff-source-description-collapse-button:hover .codiff-chevron-box,
 .codiff-file-comment-button:hover,
 .codiff-markdown-button:hover,
-.codiff-open-button:hover:not(:disabled),
+.codiff-button:hover:not(:disabled),
 .codiff-viewed-button:hover {
   background: rgb(127 127 127 / 0.11);
 }
@@ -2734,7 +2734,7 @@ html[data-codiff-platform='darwin'] .sidebar {
 .codiff-file-comment-button,
 .codiff-load-button,
 .codiff-markdown-button,
-.codiff-open-button,
+.codiff-button,
 .codiff-viewed-button {
   border-radius: 14px;
   corner-shape: squircle;
@@ -2789,7 +2789,6 @@ html[data-codiff-platform='darwin'] .sidebar {
 .codiff-markdown-button,
 .codiff-load-button,
 .codiff-file-comment-button,
-.codiff-open-button,
 .codiff-viewed-button {
   border: 1px solid rgb(127 127 127 / 0.18);
   flex: none;
@@ -2818,30 +2817,83 @@ html[data-codiff-platform='darwin'] .sidebar {
   opacity: 0.72;
 }
 
-.codiff-open-button {
+.codiff-button {
   box-shadow:
     0 0 0 1px rgb(255 255 255 / 0) inset,
     0 10px 32px -24px rgb(0 0 0 / 0),
     0 8px 20px -16px rgb(0 0 0 / 0);
+  flex: none;
+  gap: 7px;
   transform: scale(1);
   transition:
     background 160ms ease,
     box-shadow 250ms ease,
     transform 250ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  white-space: nowrap;
 }
 
-.codiff-open-button:hover:not(:disabled) {
+.codiff-button-size-default {
+  min-height: 30px;
+  padding: 0 12px;
+}
+
+.codiff-button-size-sm {
+  min-height: 26px;
+  padding: 0 9px;
+}
+
+.codiff-button-size-lg {
+  min-height: 36px;
+  padding: 0 16px;
+}
+
+.codiff-button-size-icon {
+  height: 30px;
+  padding: 0;
+  width: 30px;
+}
+
+.codiff-button-default,
+.codiff-button-outline {
+  border: 1px solid rgb(127 127 127 / 0.18);
+}
+
+.codiff-button-secondary {
+  background: var(--hover-wash);
+  border: 1px solid transparent;
+}
+
+.codiff-button-destructive {
+  border: 1px solid color-mix(in srgb, var(--danger) 38%, transparent);
+  color: var(--danger);
+}
+
+.codiff-button-ghost,
+.codiff-button-link {
+  border: 1px solid transparent;
+}
+
+.codiff-button-link {
+  box-shadow: none;
+  color: var(--codiff-link);
+}
+
+.codiff-button-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.codiff-button:hover:not(:disabled) {
   box-shadow:
     0 10px 32px -24px rgb(0 0 0 / 0.92),
     0 8px 20px -16px rgb(0 0 0 / 0.82);
   transform: scale(1.05);
 }
 
-.codiff-open-button:active:not(:disabled):not(:has(.review-submit-toggle:active)) {
+.codiff-button:active:not(:disabled):not(:has(.review-submit-toggle:active)) {
   transform: scale(0.95);
 }
 
-.codiff-open-button:disabled {
+.codiff-button:disabled {
   color: var(--muted);
   cursor: default;
   opacity: 0.55;
@@ -3721,7 +3773,7 @@ diffs-container .review-comment-thread {
   .codiff-markdown-button,
   .codiff-load-button,
   .codiff-file-comment-button,
-  .codiff-open-button,
+  .codiff-button,
   .codiff-viewed-button {
     padding-inline: 9px;
   }

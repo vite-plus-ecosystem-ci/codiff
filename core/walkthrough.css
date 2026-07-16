@@ -1302,7 +1302,7 @@
   display: flex;
   gap: 8px;
 }
-.codiff-open-button.wt-commit-btn {
+.codiff-button.wt-commit-btn {
   background: var(--viewed);
   border-color: color-mix(in srgb, var(--viewed) 46%, transparent);
   box-shadow:
@@ -1312,7 +1312,7 @@
     0 10px 30px -16px color-mix(in srgb, var(--viewed) 90%, transparent);
   color: #fff;
 }
-.codiff-open-button.wt-commit-btn:hover:not(:disabled) {
+.codiff-button.wt-commit-btn:hover:not(:disabled) {
   background: color-mix(in srgb, var(--viewed) 92%, #fff);
   box-shadow:
     0 0 0 1px rgb(255 255 255 / 0.2) inset,
@@ -1321,10 +1321,10 @@
     0 10px 30px -16px color-mix(in srgb, var(--viewed) 90%, transparent);
   transform: scale(1.05);
 }
-.codiff-open-button.wt-commit-btn:active:not(:disabled) {
+.codiff-button.wt-commit-btn:active:not(:disabled) {
   transform: scale(0.95);
 }
-.codiff-open-button.wt-commit-btn:disabled {
+.codiff-button.wt-commit-btn:disabled {
   background: var(--hover-wash);
   border-color: rgb(127 127 127 / 0.18);
   box-shadow: none;

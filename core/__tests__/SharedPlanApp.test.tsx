@@ -6,7 +6,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { expect, test, vi } from 'vite-plus/test';
 import { PlanCommentCard } from '../app/components/PlanEditorView.tsx';
-import { getSharedPlanDownloadContent, SharedPlanApp } from '../SharedPlanApp.tsx';
+import { getSharedPlanDownloadContent, PlanReviewSurface } from '../SharedPlanApp.tsx';
 import type { PlanCommentThread, SharedPlanSnapshot } from '../types.ts';
 import { waitFor } from './helpers/react.tsx';
 
@@ -162,7 +162,7 @@ test('shared plans render Markdown and comments read-only', async () => {
   try {
     await act(async () => {
       root = createRoot(container);
-      root.render(<SharedPlanApp snapshot={snapshot} />);
+      root.render(<PlanReviewSurface snapshot={snapshot} />);
     });
 
     await waitFor(() => {
@@ -253,7 +253,7 @@ test('shared plans collapse resolved comments without rendering their annotation
 
   try {
     await act(async () => {
-      root.render(<SharedPlanApp snapshot={snapshot} />);
+      root.render(<PlanReviewSurface snapshot={snapshot} />);
     });
     await waitFor(() => {
       expect(container.querySelector('.plan-resolved-comments')).not.toBeNull();
@@ -325,7 +325,7 @@ test('shared plans do not render active HTML from documents or comments', async 
   try {
     await act(async () => {
       root = createRoot(container);
-      root.render(<SharedPlanApp snapshot={snapshot} />);
+      root.render(<PlanReviewSurface snapshot={snapshot} />);
     });
 
     await waitFor(() => {

@@ -365,6 +365,8 @@ export type SharedPlanSnapshot = {
   version: 1;
 };
 
+export type WalkthroughShareManifestV1 = SharedWalkthroughSnapshot;
+
 export type ShareResult =
   | {
       status: 'uploaded';
@@ -751,6 +753,11 @@ export type CodiffPreferences = {
   walkthroughPrompt: string;
   wordWrap: boolean;
 };
+
+export type ReviewPreferences = Pick<
+  CodiffPreferences,
+  'codeFontFamily' | 'codeFontSize' | 'diffStyle' | 'showWhitespace' | 'theme' | 'wordWrap'
+>;
 
 export type PullRequestReviewComment = {
   anchor?: 'file' | 'line';

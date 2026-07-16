@@ -113,6 +113,7 @@ import type {
   ReviewSource,
 } from '../../types.ts';
 import { Avatar } from './Avatar.tsx';
+import { Button } from './Button.tsx';
 import {
   RepositoryMarkdownEditor,
   type MarkdownDocumentEditorHandle,
@@ -284,7 +285,7 @@ function CodeViewHeader({
       <DiffLineCountBadge lineCount={lineCount} />
       <div className={`codiff-status-badge ${file.status}`}>{statusLabel[file.status]}</div>
       {canCreateFileComment ? (
-        <button
+        <Button
           className="codiff-file-comment-button"
           onClick={onCreateFileComment}
           title="Comment on file"
@@ -292,10 +293,10 @@ function CodeViewHeader({
         >
           <ChatCircle aria-hidden className="codiff-file-comment-icon" size={14} weight="bold" />
           Comment
-        </button>
+        </Button>
       ) : null}
       {canRenderMarkdown ? (
-        <button
+        <Button
           aria-pressed={isMarkdownPreview}
           className={`codiff-markdown-button${isMarkdownPreview ? ' active' : ''}`}
           onClick={() => onToggleMarkdownPreview(file, section)}
@@ -303,7 +304,7 @@ function CodeViewHeader({
           type="button"
         >
           {isMarkdownPreview ? 'View as Diff' : 'View as Markdown'}
-        </button>
+        </Button>
       ) : null}
       {canLoadSection && !readOnly ? (
         <button
@@ -317,15 +318,14 @@ function CodeViewHeader({
         </button>
       ) : null}
       {!readOnly && onOpenFile ? (
-        <button
-          className="codiff-open-button"
+        <Button
           disabled={!canOpenFile}
           onClick={() => onOpenFile(file)}
           title={canOpenFile ? 'Open file in editor' : 'Deleted files cannot be opened'}
           type="button"
         >
           Open
-        </button>
+        </Button>
       ) : null}
       {!readOnly || allowViewedToggle ? (
         <button

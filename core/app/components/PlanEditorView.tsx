@@ -27,6 +27,7 @@ import type {
   PlanReview,
 } from '../../types.ts';
 import { Avatar } from './Avatar.tsx';
+import { Button } from './Button.tsx';
 import {
   MarkdownDocumentEditor,
   type MarkdownDocumentEditorHandle,
@@ -890,25 +891,27 @@ export function PlanEditorView({
                 </div>
                 <div className="plan-actions">
                   {shareEnabled ? (
-                    <button
-                      className="codiff-open-button plan-share-button"
+                    <Button
+                      action={sharePlan}
+                      className="plan-share-button"
                       disabled={completing || sharing}
-                      onClick={() => void sharePlan()}
+                      pendingPlaceholder="Sharing…"
                       title="Share plan"
                       type="button"
                     >
                       <ShareNetwork aria-hidden size={13} />
                       {sharing ? 'Sharing…' : shareCopied ? 'Copied' : 'Share'}
-                    </button>
+                    </Button>
                   ) : null}
-                  <button
-                    className="codiff-open-button plan-done-button"
+                  <Button
+                    action={() => completePlan('done')}
+                    className="plan-done-button"
                     disabled={completing || sharing}
-                    onClick={() => void completePlan('done')}
+                    pendingPlaceholder="Saving…"
                     type="button"
                   >
                     {completing ? 'Saving…' : 'Done'}
-                  </button>
+                  </Button>
                 </div>
               </div>
               <MarkdownDocumentEditor

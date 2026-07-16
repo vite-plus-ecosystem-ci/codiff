@@ -29,6 +29,7 @@ import type {
   PullRequestReviewEvent,
   PullRequestReviewStatus,
 } from '../../types.ts';
+import { Button, buttonVariants } from './Button.tsx';
 import { useCopiedState } from './useCopiedState.ts';
 
 export function ReviewSourceLoading() {
@@ -495,7 +496,7 @@ function PullRequestReviewAction({
   return (
     <div className="review-submit-action" ref={rootRef}>
       <div
-        className={`codiff-open-button review-submit-button ${variant}`}
+        className={buttonVariants({ className: `review-submit-button ${variant}` })}
         data-disabled={disabled || undefined}
       >
         <button
@@ -557,15 +558,15 @@ function PullRequestReviewAction({
             variant="embedded"
           />
           <div className="review-submit-popover-footer">
-            <button
-              className={`codiff-open-button review-submit-popover-submit ${variant}`}
+            <Button
+              className={`review-submit-popover-submit ${variant}`}
               disabled={disabled || !trimmedBody}
               onClick={submitWithComment}
               type="button"
             >
               {icon}
               <span>{label}</span>
-            </button>
+            </Button>
           </div>
         </div>
       ) : null}
@@ -660,17 +661,18 @@ export function PullRequestReviewButtons({
         />
       ) : null}
       {closeVisible ? (
-        <button
+        <Button
+          action={onClosePullRequest}
           aria-label="Close merge request"
-          className="codiff-open-button review-submit-button close"
+          className="review-submit-button close"
           disabled={disabled}
-          onClick={onClosePullRequest}
+          pendingPlaceholder="Closing…"
           title={closeStatus.reason ?? 'Close merge request'}
           type="button"
         >
           <Power aria-hidden className="review-submit-icon close" size={15} weight="bold" />
           <span>Close</span>
-        </button>
+        </Button>
       ) : null}
     </div>
   );
@@ -770,23 +772,21 @@ export function PullRequestMergeControls({
       : mergeState.canSetAutoMerge
         ? 'Merge this merge request when GitLab checks pass'
         : primaryLabel);
-  const submitMerge = () => {
+  const submitMerge = async () => {
     if (primaryActionDisabled || !onMergePullRequest) {
       return;
     }
-    void Promise.resolve(
-      onMergePullRequest({
-        autoMerge: !mergeState.canMerge && mergeState.canSetAutoMerge,
-        removeSourceBranch,
-        squash,
-      }),
-    );
+    await onMergePullRequest({
+      autoMerge: !mergeState.canMerge && mergeState.canSetAutoMerge,
+      removeSourceBranch,
+      squash,
+    });
   };
-  const cancelAutoMerge = () => {
+  const cancelAutoMerge = async () => {
     if (cancelDisabled || !onCancelAutoMerge) {
       return;
     }
-    void Promise.resolve(onCancelAutoMerge());
+    await onCancelAutoMerge();
   };
   const pendingLabel = <em>Thinking…</em>;
   if (isTerminalPullRequestMergeState(mergeState)) {
@@ -874,27 +874,29 @@ export function PullRequestMergeControls({
           </div>
           <div className="pull-request-merge-actions">
             {mergeState.autoMergeEnabled ? (
-              <button
-                className="codiff-open-button pull-request-merge-button cancel"
+              <Button
+                action={cancelAutoMerge}
+                className="pull-request-merge-button cancel"
                 disabled={cancelDisabled}
-                onClick={cancelAutoMerge}
+                pendingPlaceholder={pendingLabel}
                 title={
                   mergeState.canCancelAutoMerge ? 'Cancel GitLab auto-merge' : mergeState.reason
                 }
                 type="button"
               >
                 {isPending ? pendingLabel : 'Cancel Auto-Merge'}
-              </button>
+              </Button>
             ) : (
-              <button
-                className="codiff-open-button pull-request-merge-button primary"
+              <Button
+                action={submitMerge}
+                className="pull-request-merge-button primary"
                 disabled={primaryActionDisabled}
-                onClick={submitMerge}
+                pendingPlaceholder={pendingLabel}
                 title={primaryTitle}
                 type="button"
               >
                 {isPending ? pendingLabel : primaryLabel}
-              </button>
+              </Button>
             )}
           </div>
         </div>
