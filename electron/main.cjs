@@ -21,7 +21,6 @@ const {
   readDiffImageContent,
   readDiffSectionContent,
   readGitIdentity,
-  readRepositoryChangeSignature,
   readRepositoryState,
   readWalkthroughRepositoryState,
   submitPullRequestComment,
@@ -59,7 +58,7 @@ const { readReviewAssistantReply } = require('./review-assist.cjs');
 const {
   findMatchingWindowIdentity,
   getWindowIdentity,
-  getWindowIdentityForSource,
+  getWindowIdentityForRepositoryState,
 } = require('./window-identity.cjs');
 const { createPendingCommentsClipboardController } = require('./pending-comments.cjs');
 const {
@@ -78,9 +77,12 @@ const {
   writeWindowState,
 } = require('./window-state.cjs');
 const {
+  getNarrativeWalkthroughCacheKey,
   normalizeNarrativeWalkthrough,
   readNarrativeWalkthrough,
+  resolveNarrativeWalkthroughModel,
 } = require('./narrative-walkthrough.cjs');
+const { readStoredWalkthrough, writeStoredWalkthrough } = require('./walkthrough-store.cjs');
 const { uploadSharedSnapshot } = require('./shared-walkthrough-upload.cjs');
 const {
   resolvePlanShareTarget,
@@ -96,12 +98,13 @@ const {
   writeMarkdownDocument,
 } = require('./markdown-document.cjs');
 const {
-  normalizeRepositoryWatcherPath,
-  repositoryWatcherSnapshotsMatchExpectedWrites,
+  createRepositoryWatcherCoordinator,
+  readRepositoryWatcherSnapshot,
 } = require('./repository-watcher.cjs');
 const { getPlanReviewPath, readPlanReview, writePlanReview } = require('./plan-review.cjs');
 const { createSharedPlanSnapshot } = require('./shared-plan.cjs');
 const { readLocalIdentity } = require('./local-identity.cjs');
+const { createWalkthroughProgressReporter } = require('./walkthrough-progress.cjs');
 
 /**
  * @typedef {import('../core/config/types.ts').CodiffConfig} CodiffConfig
@@ -111,17 +114,11 @@ const { readLocalIdentity } = require('./local-identity.cjs');
  * @typedef {{key: string; repositoryRoot: string; sourceKey: string}} WindowIdentity
  * @typedef {{direction: string; name: string; owner: string; repo: string}} GitHubRemote
  * @typedef {{repositoryPath?: string; launchOptions?: CodiffLaunchOptions}} SingleInstanceAdditionalData
- * @typedef {{head: string; pathSignatures: Record<string, string>; root: string; signature: string}} RepositoryWatcherSnapshot
- * @typedef {{completed: boolean; generation: number; version?: string}} RepositorySelfWrite
- * @typedef {{changed: boolean; checkTimer?: ReturnType<typeof setTimeout>; checking: boolean; interval?: ReturnType<typeof setInterval>; notify: (root: string) => void; pendingSelfWrites: Map<string, RepositorySelfWrite>; recheckRequested: boolean; repositoryPath: string; snapshot?: RepositoryWatcherSnapshot}} RepositoryWatcher
- * @typedef {{generation: number; path: string; webContentsId: number}} RepositorySelfWriteToken
  * @typedef {{args: Array<string>; command: string}} EditorCommand
  * @typedef {{launchOptions: CodiffLaunchOptions; pullRequestNumber: number | null; repositoryPath: string | null}} ParsedCommandLineArguments
  */
 
 const root = dirname(__dirname);
-/** @type {Map<number, RepositoryWatcher>} */
-const repositoryWatchers = new Map();
 /** @type {Map<number, WindowIdentity | null>} */
 const windowIdentities = new Map();
 /** @type {Map<number, string>} */
@@ -130,6 +127,8 @@ const windowRepositories = new Map();
 const windowLaunchOptions = new Map();
 /** @type {Map<number, Promise<RepositoryState>>} */
 const windowInitialRepositoryStates = new Map();
+/** @type {Map<number, number>} */
+const walkthroughProgressGenerations = new Map();
 /** @type {Map<number, string>} */
 const planInitialVersions = new Map();
 /** @type {Set<number>} */
@@ -217,10 +216,32 @@ const openConfigFile = async () => {
 };
 
 /** @param {number} webContentsId */
+const getWindowRepositoryRoot = (webContentsId) =>
+  windowIdentities.get(webContentsId)?.repositoryRoot ||
+  windowRepositories.get(webContentsId) ||
+  getLaunchPath();
+
+/** @param {number} webContentsId */
 const getMarkdownDocumentContext = (webContentsId) => ({
   planFile: windowLaunchOptions.get(webContentsId)?.planFile,
-  repositoryRoot: windowRepositories.get(webContentsId) || getLaunchPath(),
+  repositoryRoot: getWindowRepositoryRoot(webContentsId),
 });
+
+/** @param {number} webContentsId @param {RepositoryState} state */
+const storeResolvedRepositoryState = (webContentsId, state) => {
+  windowRepositories.set(webContentsId, state.root);
+  const launchOptions = windowLaunchOptions.get(webContentsId);
+  if (launchOptions) {
+    windowLaunchOptions.set(webContentsId, {
+      ...launchOptions,
+      source: state.source,
+    });
+  }
+  const identity = getWindowIdentityForRepositoryState(state);
+  if (identity) {
+    windowIdentities.set(webContentsId, identity);
+  }
+};
 
 /** @param {number} webContentsId */
 const clearMarkdownDocumentWatchers = (webContentsId) => {
@@ -425,204 +446,65 @@ const rememberLastRepositoryPath = (repositoryPath) => {
   writeConfig(config);
 };
 
-/** @param {string} repositoryPath @param {Iterable<string>} [additionalPaths] */
-const readRepositoryWatcherSnapshot = async (repositoryPath, additionalPaths = []) => {
+/**
+ * @param {string} repositoryRoot
+ * @param {Iterable<string>} [exactPaths]
+ * @param {Iterable<string>} [knownDirtyPaths]
+ */
+const readSafeRepositoryWatcherSnapshot = async (
+  repositoryRoot,
+  exactPaths = [],
+  knownDirtyPaths = [],
+) => {
   try {
-    return await readRepositoryChangeSignature(repositoryPath, additionalPaths);
+    return await readRepositoryWatcherSnapshot(repositoryRoot, exactPaths, knownDirtyPaths);
   } catch (error) {
     return {
       head: `error:${error instanceof Error ? error.message : String(error)}`,
       pathSignatures: {},
-      root: repositoryPath,
+      pathVersions: {},
+      root: repositoryRoot,
       signature: `error:${error instanceof Error ? error.message : String(error)}`,
     };
   }
 };
 
+const repositoryWatcherCoordinator = createRepositoryWatcherCoordinator({
+  readSnapshot: readSafeRepositoryWatcherSnapshot,
+});
+
 /** @param {number} webContentsId @param {string} repositoryPath */
-const resetRepositoryWatcher = async (webContentsId, repositoryPath) => {
-  const watcher = repositoryWatchers.get(webContentsId);
-  if (!watcher) {
-    return;
-  }
-
-  const snapshot = await readRepositoryWatcherSnapshot(repositoryPath);
-  watcher.changed = false;
-  watcher.pendingSelfWrites.clear();
-  watcher.snapshot = snapshot;
-};
-
-/** @param {number} webContentsId */
-const scheduleRepositoryWatcherCheck = (webContentsId) => {
-  const watcher = repositoryWatchers.get(webContentsId);
-  if (!watcher) {
-    return;
-  }
-
-  if (watcher.checkTimer) {
-    clearTimeout(watcher.checkTimer);
-  }
-  watcher.checkTimer = setTimeout(() => {
-    const currentWatcher = repositoryWatchers.get(webContentsId);
-    if (!currentWatcher) {
-      return;
-    }
-    currentWatcher.checkTimer = undefined;
-    void checkRepositoryWatcher(webContentsId);
-  }, 250);
-};
-
-/** @param {number} webContentsId @param {boolean} [reset] */
-const checkRepositoryWatcher = async (webContentsId, reset = false) => {
-  const watcher = repositoryWatchers.get(webContentsId);
-  if (!watcher) {
-    return;
-  }
-  if (watcher.checkTimer) {
-    clearTimeout(watcher.checkTimer);
-    watcher.checkTimer = undefined;
-  }
-  if (watcher.checking) {
-    watcher.recheckRequested = true;
-    return;
-  }
-
-  watcher.checking = true;
-  const pendingSelfWrites = new Map(watcher.pendingSelfWrites);
-  const snapshotPaths = new Set([
-    ...Object.keys(watcher.snapshot?.pathSignatures ?? {}),
-    ...pendingSelfWrites.keys(),
-  ]);
-  try {
-    const snapshot = await readRepositoryWatcherSnapshot(watcher.repositoryPath, snapshotPaths);
-    if (reset || watcher.snapshot == null) {
-      watcher.changed = false;
-      watcher.pendingSelfWrites.clear();
-      watcher.snapshot = snapshot;
-      return;
-    }
-
-    if (watcher.changed) {
-      return;
-    }
-
-    const pendingWritesChanged =
-      watcher.pendingSelfWrites.size !== pendingSelfWrites.size ||
-      [...pendingSelfWrites].some(
-        ([path, pendingWrite]) =>
-          watcher.pendingSelfWrites.get(path)?.generation !== pendingWrite.generation,
-      );
-    if (pendingWritesChanged) {
-      watcher.recheckRequested = true;
-      return;
-    }
-    if ([...pendingSelfWrites.values()].some(({ completed }) => !completed)) {
-      return;
-    }
-
-    const expectedPathVersions = new Map(
-      [...pendingSelfWrites]
-        .filter((entry) => entry[1].version)
-        .map(([path, pendingWrite]) => [path, /** @type {string} */ (pendingWrite.version)]),
-    );
-    if (
-      repositoryWatcherSnapshotsMatchExpectedWrites(
-        watcher.snapshot,
-        snapshot,
-        expectedPathVersions,
-      )
-    ) {
-      watcher.snapshot = snapshot;
-      for (const [path, pendingWrite] of pendingSelfWrites) {
-        const currentWrite = watcher.pendingSelfWrites.get(path);
-        if (pendingWrite.completed && currentWrite?.generation === pendingWrite.generation) {
-          watcher.pendingSelfWrites.delete(path);
-        }
-      }
-      return;
-    }
-
-    watcher.changed = true;
-    watcher.notify(snapshot.root);
-  } finally {
-    watcher.checking = false;
-    const hasCompletedSelfWrites = [...watcher.pendingSelfWrites.values()].some(
-      ({ completed }) => completed,
-    );
-    if (watcher.recheckRequested || (!watcher.changed && hasCompletedSelfWrites)) {
-      watcher.recheckRequested = false;
-      scheduleRepositoryWatcherCheck(webContentsId);
-    }
-  }
-};
+const resetRepositoryWatcher = (webContentsId, repositoryPath) =>
+  repositoryWatcherCoordinator.reset(webContentsId, repositoryPath);
 
 /**
  * @param {number} webContentsId
  * @param {string} path
- * @returns {RepositorySelfWriteToken | null}
  */
-const beginRepositorySelfWrite = (webContentsId, path) => {
-  const watcher = repositoryWatchers.get(webContentsId);
-  if (!watcher || watcher.changed) {
-    return null;
-  }
+const beginRepositorySelfWrite = (webContentsId, path) =>
+  repositoryWatcherCoordinator.beginWrite(webContentsId, path);
 
-  const normalizedPath = normalizeRepositoryWatcherPath(path);
-  const generation = (watcher.pendingSelfWrites.get(normalizedPath)?.generation ?? 0) + 1;
-  watcher.pendingSelfWrites.set(normalizedPath, {
-    completed: false,
-    generation,
-  });
-  if (watcher.checking) {
-    watcher.recheckRequested = true;
-  }
-  return { generation, path: normalizedPath, webContentsId };
-};
-
-/** @param {RepositorySelfWriteToken | null} token @param {string | null} version */
-const finishRepositorySelfWrite = (token, version) => {
-  if (!token) {
-    return;
-  }
-
-  const watcher = repositoryWatchers.get(token.webContentsId);
-  const pendingWrite = watcher?.pendingSelfWrites.get(token.path);
-  if (!watcher || pendingWrite?.generation !== token.generation) {
-    return;
-  }
-
-  if (version) {
-    pendingWrite.completed = true;
-    pendingWrite.version = version;
-  } else {
-    watcher.pendingSelfWrites.delete(token.path);
-  }
-  scheduleRepositoryWatcherCheck(token.webContentsId);
-};
+/** @param {{generation: number; path: string; root: string} | null} token @param {string | null} version */
+const finishRepositorySelfWrite = (token, version) =>
+  repositoryWatcherCoordinator.finishWrite(token, version);
 
 /** @param {import('electron').BrowserWindow} browserWindow @param {string} repositoryPath */
 const startRepositoryWatcher = (browserWindow, repositoryPath) => {
   const webContentsId = browserWindow.webContents.id;
-  /** @type {RepositoryWatcher} */
-  const watcher = {
-    changed: false,
-    checkTimer: undefined,
-    checking: false,
-    interval: undefined,
+  void repositoryWatcherCoordinator.attach({
+    getState: () => ({
+      focused: !browserWindow.isDestroyed() && browserWindow.isFocused(),
+      visible:
+        !browserWindow.isDestroyed() && browserWindow.isVisible() && !browserWindow.isMinimized(),
+    }),
+    id: webContentsId,
     notify: (root) => {
       if (!browserWindow.isDestroyed()) {
         browserWindow.webContents.send('codiff:repositoryChanged', { root });
       }
     },
-    pendingSelfWrites: new Map(),
-    recheckRequested: false,
-    repositoryPath,
-    snapshot: undefined,
-  };
-  repositoryWatchers.set(webContentsId, watcher);
-
-  void checkRepositoryWatcher(webContentsId, true);
-  watcher.interval = setInterval(() => void checkRepositoryWatcher(webContentsId), 2500);
+    root: repositoryPath,
+  });
 };
 
 /** @param {import('electron').BaseWindow | undefined} browserWindow */
@@ -895,7 +777,18 @@ const buildApplicationMenu = () =>
           },
           { type: 'separator' },
           { role: 'togglefullscreen' },
-          { role: 'reload' },
+          {
+            // In-place refresh handled by the renderer; the window itself is
+            // only reloaded via Force Reload below.
+            accelerator: 'CommandOrControl+R',
+            click: (_menuItem, browserWindow) => {
+              if (browserWindow instanceof BrowserWindow) {
+                browserWindow.webContents.send('codiff:refreshRequest');
+              }
+            },
+            label: 'Refresh Changes',
+          },
+          { role: 'forceReload' },
           {
             accelerator: 'CommandOrControl+Alt+J',
             click: (_menuItem, browserWindow) => {
@@ -981,30 +874,50 @@ const createWindow = (
   if (identity) {
     windowIdentities.set(webContentsId, identity);
   }
-  windowRepositories.set(webContentsId, repositoryPath);
+  windowRepositories.set(webContentsId, identity?.repositoryRoot || repositoryPath);
   windowLaunchOptions.set(webContentsId, launchOptions);
-  const initialRepositoryState = launchOptions.planFile
+  const initialRepositoryStatePromise = launchOptions.planFile
     ? null
     : readInitialRepositoryStateWithConfig(repositoryPath, launchOptions);
+  const initialRepositoryState = initialRepositoryStatePromise?.then((state) => {
+    if (!window.isDestroyed()) {
+      storeResolvedRepositoryState(webContentsId, state);
+    }
+    return state;
+  });
   initialRepositoryState?.catch(() => {});
   if (initialRepositoryState) {
     windowInitialRepositoryStates.set(webContentsId, initialRepositoryState);
   }
-  if (!launchOptions.planFile && !launchOptions.source) {
+  if (
+    !launchOptions.planFile &&
+    (!launchOptions.source ||
+      launchOptions.source.type === 'branch' ||
+      launchOptions.source.type === 'branch-working-tree')
+  ) {
     void initialRepositoryState
       .then((state) => {
-        if (state.source.type === 'working-tree' && !window.isDestroyed()) {
-          startRepositoryWatcher(window, repositoryPath);
+        if (
+          (state.source.type === 'working-tree' || state.source.type === 'branch-working-tree') &&
+          !window.isDestroyed()
+        ) {
+          startRepositoryWatcher(window, state.root);
         }
       })
       .catch(() => {});
   }
+  window.on('blur', () => repositoryWatcherCoordinator.visibilityChanged(webContentsId));
   window.on('enter-full-screen', () => {
     window.webContents.send('codiff:windowFullScreenChanged', true);
   });
+  window.on('focus', () => repositoryWatcherCoordinator.focus(webContentsId));
+  window.on('hide', () => repositoryWatcherCoordinator.visibilityChanged(webContentsId));
   window.on('leave-full-screen', () => {
     window.webContents.send('codiff:windowFullScreenChanged', false);
   });
+  window.on('minimize', () => repositoryWatcherCoordinator.visibilityChanged(webContentsId));
+  window.on('restore', () => repositoryWatcherCoordinator.focus(webContentsId));
+  window.on('show', () => repositoryWatcherCoordinator.focus(webContentsId));
   window.once('ready-to-show', () => window.show());
   let allowClose = false;
   let copyingPendingCommentsBeforeClose = false;
@@ -1055,20 +968,14 @@ const createWindow = (
   });
   window.on('closed', () => {
     openWindows.delete(window);
-    const watcher = repositoryWatchers.get(webContentsId);
-    if (watcher?.checkTimer) {
-      clearTimeout(watcher.checkTimer);
-    }
-    if (watcher?.interval) {
-      clearInterval(watcher.interval);
-    }
-    repositoryWatchers.delete(webContentsId);
+    repositoryWatcherCoordinator.detach(webContentsId);
     clearMarkdownDocumentWatchers(webContentsId);
     completedPlanWindows.delete(webContentsId);
     planInitialVersions.delete(webContentsId);
     readyPlanWindows.delete(webContentsId);
     windowIdentities.delete(webContentsId);
     windowInitialRepositoryStates.delete(webContentsId);
+    walkthroughProgressGenerations.delete(webContentsId);
     windowRepositories.delete(webContentsId);
     windowLaunchOptions.delete(webContentsId);
   });
@@ -1219,7 +1126,7 @@ const focusOrCreateWindow = (
 
   if (matchingWindow) {
     if (launchOptions.planFile || launchOptions.walkthrough || launchOptions.walkthroughFile) {
-      windowRepositories.set(matchingWebContentsId, repositoryPath);
+      windowRepositories.set(matchingWebContentsId, identity?.repositoryRoot || repositoryPath);
       windowLaunchOptions.set(matchingWebContentsId, launchOptions);
       if (launchOptions.planFile) {
         planInitialVersions.delete(matchingWebContentsId);
@@ -1367,19 +1274,9 @@ ipcMain.handle('codiff:getRepositoryState', async (event, source) => {
   const state = initialState
     ? await initialState
     : await readRepositoryStateWithConfig(repositoryPath, source || launchOptions?.source);
-  windowRepositories.set(event.sender.id, state.root);
-  if (launchOptions) {
-    windowLaunchOptions.set(event.sender.id, {
-      ...launchOptions,
-      source: state.source,
-    });
-  }
+  storeResolvedRepositoryState(event.sender.id, state);
   rememberLastRepositoryPath(state.root);
-  const identity = getWindowIdentityForSource(state.root, state.source);
-  if (identity) {
-    windowIdentities.set(event.sender.id, identity);
-  }
-  void resetRepositoryWatcher(event.sender.id, repositoryPath);
+  void resetRepositoryWatcher(event.sender.id, state.root);
   return state;
 });
 
@@ -1481,8 +1378,15 @@ ipcMain.handle('codiff:installTerminalHelper', async (event) => {
   return getTerminalHelperStatus();
 });
 
-ipcMain.handle('codiff:getNarrativeWalkthrough', async (event, source) => {
+ipcMain.handle('codiff:getNarrativeWalkthrough', async (event, source, options) => {
   const launchOptions = windowLaunchOptions.get(event.sender.id);
+  const progressGeneration = (walkthroughProgressGenerations.get(event.sender.id) || 0) + 1;
+  walkthroughProgressGenerations.set(event.sender.id, progressGeneration);
+  const reportProgress = createWalkthroughProgressReporter(
+    event.sender,
+    () => walkthroughProgressGenerations.get(event.sender.id) === progressGeneration,
+  );
+
   try {
     const repositoryPath = windowRepositories.get(event.sender.id) || getLaunchPath();
     const state = await readRepositoryStateWithConfig(
@@ -1492,9 +1396,23 @@ ipcMain.handle('codiff:getNarrativeWalkthrough', async (event, source) => {
     const agent = resolveWindowAgent(event.sender.id);
     const walkthroughFile = launchOptions?.walkthroughFile;
     if (walkthroughFile) {
+      let contents;
       let input;
       try {
-        input = JSON.parse(readFileSync(walkthroughFile, 'utf8'));
+        contents = readFileSync(walkthroughFile, 'utf8');
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        return {
+          reason: `Could not read walkthrough file: ${detail}`,
+          status: 'unavailable',
+        };
+      }
+
+      const sessionContext = await Promise.resolve(
+        agent.readSessionContext(launchOptions?.[agent.sessionLaunchOptionKey]),
+      ).catch(() => null);
+      try {
+        input = JSON.parse(contents);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         return {
@@ -1504,9 +1422,6 @@ ipcMain.handle('codiff:getNarrativeWalkthrough', async (event, source) => {
       }
 
       try {
-        const sessionContext = await Promise.resolve(
-          agent.readSessionContext(launchOptions?.[agent.sessionLaunchOptionKey]),
-        ).catch(() => null);
         return {
           status: 'ready',
           walkthrough: normalizeNarrativeWalkthrough(input, state.files, {
@@ -1539,13 +1454,70 @@ ipcMain.handle('codiff:getNarrativeWalkthrough', async (event, source) => {
       launchOptions?.walkthroughContext,
       await agent.readSessionContext(launchOptions?.[agent.sessionLaunchOptionKey]),
     );
-    return readNarrativeWalkthrough(
+    const agentOptions = getAgentOptions(agent);
+    const walkthroughModel = resolveNarrativeWalkthroughModel(state, agent, agentOptions.model);
+    const walkthroughPrompt = config.settings.walkthroughPrompt;
+    const cacheKey = getNarrativeWalkthroughCacheKey(
       state,
       agent,
-      getAgentOptions(agent),
+      walkthroughModel,
       walkthroughContext,
-      config.settings.walkthroughPrompt,
+      walkthroughPrompt,
     );
+    if (!options?.force) {
+      const cachedWalkthrough = readStoredWalkthrough(cacheKey);
+      if (cachedWalkthrough) {
+        return {
+          status: 'ready',
+          walkthrough: {
+            ...cachedWalkthrough,
+            ...(walkthroughContext ? { context: walkthroughContext } : {}),
+            agent: agent.id,
+            repo: {
+              branch: state.branch,
+              root: state.root,
+            },
+            source: state.source,
+          },
+        };
+      }
+    }
+
+    let generatedModel = walkthroughModel;
+    const onModelFallback = agentOptions.onModelFallback;
+    const result = await readNarrativeWalkthrough(
+      state,
+      agent,
+      {
+        ...agentOptions,
+        model: walkthroughModel,
+        onModelFallback: async (fallbackModel, originalModel) => {
+          generatedModel = fallbackModel;
+          await onModelFallback(fallbackModel, originalModel);
+        },
+        onProgress: reportProgress,
+      },
+      walkthroughContext,
+      walkthroughPrompt,
+      options?.previousWalkthrough,
+    );
+    if (result.status === 'ready') {
+      const generatedCacheKey = getNarrativeWalkthroughCacheKey(
+        state,
+        agent,
+        generatedModel,
+        walkthroughContext,
+        walkthroughPrompt,
+      );
+      try {
+        const cacheableWalkthrough = { ...result.walkthrough };
+        delete cacheableWalkthrough.context;
+        writeStoredWalkthrough(generatedCacheKey, cacheableWalkthrough);
+      } catch {
+        // Caching is optional; a filesystem failure must not hide a generated result.
+      }
+    }
+    return result;
   } catch (error) {
     return {
       reason: error instanceof Error ? error.message : String(error),
@@ -1607,7 +1579,11 @@ ipcMain.handle('codiff:askReviewAssistant', async (event, request) => {
 
 ipcMain.handle('codiff:createWalkthroughCommit', async (event, request) => {
   const repositoryPath = windowRepositories.get(event.sender.id) || getLaunchPath();
-  const result = await createWalkthroughCommit(repositoryPath, request);
+  const result = await createWalkthroughCommit(repositoryPath, request, (chunk) => {
+    if (!event.sender.isDestroyed()) {
+      event.sender.send('codiff:walkthroughCommitOutput', chunk);
+    }
+  });
   if (result.status === 'committed') {
     await resetRepositoryWatcher(event.sender.id, repositoryPath);
   }
@@ -1699,33 +1675,29 @@ ipcMain.handle('codiff:resetCodeFontSize', () => {
 ipcMain.handle('codiff:openConfigFile', () => openConfigFile());
 
 ipcMain.handle('codiff:openFile', async (event, filePath) => {
-  const repositoryPath = windowRepositories.get(event.sender.id) || getLaunchPath();
-  const state = await readRepositoryStateWithConfig(repositoryPath);
+  const repositoryRoot = getWindowRepositoryRoot(event.sender.id);
   const repositoryFilePath = validateRepositoryPath(filePath);
-  const absolutePath = resolve(state.root, repositoryFilePath);
+  const absolutePath = resolve(repositoryRoot, repositoryFilePath);
 
   if (existsSync(absolutePath)) {
-    await openFileInEditor(absolutePath, { repoPath: state.root });
+    await openFileInEditor(absolutePath, { repoPath: repositoryRoot });
   } else {
-    await shell.openPath(state.root);
+    await shell.openPath(repositoryRoot);
   }
 });
 
-ipcMain.handle('codiff:showInFolder', async (event, filePath) => {
-  const repositoryPath = windowRepositories.get(event.sender.id) || getLaunchPath();
-  const state = await readRepositoryStateWithConfig(repositoryPath);
+ipcMain.handle('codiff:showInFolder', (event, filePath) => {
+  const repositoryRoot = getWindowRepositoryRoot(event.sender.id);
   const repositoryFilePath = validateRepositoryPath(filePath);
-  const absolutePath = resolve(state.root, repositoryFilePath);
+  const absolutePath = resolve(repositoryRoot, repositoryFilePath);
 
   if (existsSync(absolutePath)) {
     shell.showItemInFolder(absolutePath);
   } else {
-    shell.openPath(state.root);
+    void shell.openPath(repositoryRoot);
   }
 });
 
-ipcMain.handle('codiff:getRelativePath', async (event, filePath) => {
-  const repositoryPath = windowRepositories.get(event.sender.id) || getLaunchPath();
-  const state = await readRepositoryStateWithConfig(repositoryPath);
-  return relative(state.root, filePath);
-});
+ipcMain.handle('codiff:getRelativePath', (event, filePath) =>
+  relative(getWindowRepositoryRoot(event.sender.id), filePath),
+);

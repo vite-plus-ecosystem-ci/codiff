@@ -6,7 +6,7 @@ import reviewSource from '../electron/review-source.cjs';
 
 const { parseReviewUrl, resolveReviewUrl } = reviewSource;
 
-export const flagDefinitions = [
+const flagDefinitions = [
   {
     argument: '<codex|claude|opencode|pi>',
     description: 'Override the agent backend for this session.',
@@ -87,7 +87,7 @@ export const flagDefinitions = [
   },
 ];
 
-export const usageExamples = [
+const usageExamples = [
   { command: 'codiff', description: 'Review staged and unstaged changes.' },
   { command: 'codiff /path/to/repo', description: 'Review changes in a specific repository.' },
   { command: 'codiff main', description: 'Review the current branch against main.' },
@@ -102,6 +102,32 @@ export const usageExamples = [
   { command: 'codiff --share', description: 'Share local changes, or HEAD when clean.' },
   { command: 'codiff --share HEAD', description: 'Share a walkthrough for a commit.' },
 ];
+
+export const getReviewSource = ({
+  branchRef,
+  commitRef,
+  pullRequestProvider,
+  pullRequestUrl,
+  range,
+}) =>
+  range
+    ? {
+        base: range.base,
+        head: range.head,
+        symmetric: range.symmetric,
+        type: 'range',
+      }
+    : pullRequestUrl
+      ? {
+          ...(pullRequestProvider ? { provider: pullRequestProvider } : {}),
+          type: 'pull-request',
+          url: pullRequestUrl,
+        }
+      : commitRef
+        ? { ref: commitRef, type: 'commit' }
+        : branchRef
+          ? { ref: branchRef, type: 'branch-working-tree' }
+          : undefined;
 
 const parseArgsOptions = Object.fromEntries(
   flagDefinitions.map(({ name, short, type }) => [name, { type, ...(short ? { short } : {}) }]),

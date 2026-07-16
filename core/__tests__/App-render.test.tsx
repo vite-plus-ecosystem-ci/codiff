@@ -21,6 +21,7 @@ import type {
   PlanReview,
   RepositoryState,
   ReviewSource,
+  WalkthroughProgressEvent,
 } from '../types.ts';
 import { createChangedFile } from './helpers/fixtures.ts';
 import { renderReact, waitFor } from './helpers/react.tsx';
@@ -86,6 +87,53 @@ const repositoryState = {
   root: '/repo',
   source: { type: 'working-tree' },
 } satisfies RepositoryState;
+
+const createCommitMetadataFixture = (body: string): CommitMetadata => ({
+  author: {
+    date: '2026-01-01T12:00:00Z',
+    email: 'author@example.com',
+    gravatarUrl: 'https://www.gravatar.com/avatar/fallback',
+    name: 'Author',
+  },
+  body,
+  committer: {
+    date: '2026-01-01T13:00:00Z',
+    email: 'committer@example.com',
+    name: 'Committer',
+  },
+  files: [
+    {
+      additions: 1,
+      binary: false,
+      deletions: 1,
+      path: 'src/app.ts',
+      status: 'modified',
+    },
+  ],
+  parents: ['parent-sha'],
+  ref: 'abc1234',
+  refs: ['main'],
+  shortRef: 'abc1234',
+  signature: {
+    key: 'SHA256:abcdefghijklmnopqrstuvwxyz0123456789',
+    signer: 'signer@example.test',
+    status: 'G',
+  },
+  stats: {
+    additions: 1,
+    binaryFiles: 0,
+    deletions: 1,
+    files: 1,
+    renamedFiles: 0,
+  },
+  subject: 'Commit subject',
+  trailers: [
+    {
+      key: 'Co-authored-by',
+      value: 'Second Author <second@example.com>',
+    },
+  ],
+});
 
 const createCodiffMock = (overrides: Partial<Window['codiff']> = {}): Window['codiff'] => ({
   askReviewAssistant: vi.fn(async () => ({
@@ -180,7 +228,10 @@ const createCodiffMock = (overrides: Partial<Window['codiff']> = {}): Window['co
   onFindInDiffs: vi.fn(() => () => {}),
   onMarkdownDocumentChanged: vi.fn(() => () => {}),
   onPlanCloseRequested: vi.fn(() => () => {}),
+  onRefreshRequest: vi.fn(() => () => {}),
   onRepositoryChanged: vi.fn(() => () => {}),
+  onWalkthroughCommitOutput: vi.fn(() => () => {}),
+  onWalkthroughProgress: vi.fn(() => () => {}),
   onWindowFullScreenChanged: vi.fn(() => () => {}),
   openConfigFile: vi.fn(async () => {}),
   openFile: vi.fn(async () => {}),
@@ -218,6 +269,48 @@ const createCodiffMock = (overrides: Partial<Window['codiff']> = {}): Window['co
   })),
   ...overrides,
 });
+
+const createNarrativeWalkthroughFixture = (
+  hunks: ReadonlyArray<{ added: number; path: string; status: ChangedFile['status'] }>,
+) =>
+  ({
+    agent: 'codex',
+    chapters: [
+      {
+        blurb: 'Review the implementation.',
+        icon: 'gear',
+        id: 'impl',
+        stops: [
+          {
+            added: hunks.reduce((sum, hunk) => sum + hunk.added, 0),
+            deleted: 1,
+            hunkIds: hunks.map((hunk) => `${hunk.path}:unstaged:h1`),
+            hunks: hunks.map((hunk) => ({
+              added: hunk.added,
+              anchor: { display: hunk.path, sectionId: `${hunk.path}:unstaged`, side: 'both' },
+              deleted: hunk.path === 'src/app.ts' ? 1 : 0,
+              id: `${hunk.path}:unstaged:h1`,
+              path: hunk.path,
+              status: hunk.status,
+            })),
+            id: 'implementation-path',
+            importance: 'critical',
+            prose: 'Review these changes.',
+            title: 'Implementation path',
+          },
+        ],
+        title: 'Implementation',
+      },
+    ],
+    focus: 'Focus.',
+    generatedAt: '2026-06-07T00:00:00.000Z',
+    kind: 'narrative',
+    repo: { branch: 'main', root: '/repo' },
+    source: { type: 'working-tree' },
+    support: [],
+    title: 'Narrative',
+    version: 4,
+  }) satisfies NarrativeWalkthrough;
 
 const dispatchModK = () => {
   const isMac = navigator.platform.toLowerCase().includes('mac');
@@ -631,7 +724,8 @@ test('branch history keeps branch diff available after selecting uncommitted cha
 
     await waitFor(() => {
       expect(container.querySelector('.loading')).toBeNull();
-      expect(findButton('Branch diff')).toBeTruthy();
+      expect(findButton('Committed only vs main')).toBeTruthy();
+      expect(findButton('All changes vs main')).toBeTruthy();
     });
 
     await act(async () => {
@@ -640,11 +734,11 @@ test('branch history keeps branch diff available after selecting uncommitted cha
 
     await waitFor(() => {
       expect(getRepositoryState).toHaveBeenCalledWith({ type: 'working-tree' });
-      expect(findButton('Branch diff')).toBeTruthy();
+      expect(findButton('Committed only vs main')).toBeTruthy();
     });
 
     await act(async () => {
-      findButton('Branch diff')?.click();
+      findButton('Committed only vs main')?.click();
     });
 
     await waitFor(() => {
@@ -708,7 +802,7 @@ test('repository reload restores branch diff scope after selecting uncommitted c
 
     await waitFor(() => {
       expect(container.querySelector('.loading')).toBeNull();
-      expect(findButton('Branch diff')).toBeTruthy();
+      expect(findButton('Committed only vs main')).toBeTruthy();
     });
     expect(getRepositoryState).toHaveBeenCalledWith({ type: 'working-tree' });
     expect(getRepositoryHistory).toHaveBeenCalledWith(expect.any(Number), branchSource);
@@ -721,7 +815,7 @@ test('repository reload restores branch diff scope after selecting uncommitted c
 });
 
 test('repository reload does not let stale selection override launch source', async () => {
-  const launchSource = { ref: 'main', type: 'branch' } satisfies ReviewSource;
+  const launchSource = { ref: 'main', type: 'branch-working-tree' } satisfies ReviewSource;
   const staleState = {
     ...repositoryState,
     source: { type: 'working-tree' },
@@ -814,6 +908,71 @@ test('repository reload colors only git status glyphs for files changed after re
           '[data-item-path="src/unchanged.ts"][data-item-git-status] > [data-item-section="git"]',
         ),
       ).toBeTruthy();
+    });
+  } finally {
+    if (root) {
+      await act(async () => root?.unmount());
+    }
+    container.remove();
+  }
+});
+
+test('walkthrough file reload shows files changed since reload as stale', async () => {
+  const unchangedFile = createChangedFile('src/unchanged.ts', { fingerprint: 'same' });
+  const changedFileBeforeReload = createChangedFile('src/changed.ts', { fingerprint: 'before' });
+  const changedFileAfterReload = createChangedFile('src/changed.ts', { fingerprint: 'after' });
+  const addedFile = createChangedFile('src/added.ts', { fingerprint: 'added', status: 'added' });
+  const previousState = {
+    ...repositoryState,
+    files: [unchangedFile, changedFileBeforeReload],
+  } satisfies RepositoryState;
+  const nextState = {
+    ...repositoryState,
+    files: [unchangedFile, changedFileAfterReload, addedFile],
+  } satisfies RepositoryState;
+  const narrativeWalkthrough = createNarrativeWalkthroughFixture([
+    { added: 1, path: unchangedFile.path, status: 'modified' },
+  ]);
+
+  writeReloadSelection(previousState, changedFileBeforeReload.path);
+
+  window.codiff = createCodiffMock({
+    getLaunchOptions: vi.fn(async () => ({
+      repositoryPathProvided: true,
+      walkthrough: false,
+      walkthroughFile: '/tmp/walkthrough.json',
+    })),
+    getNarrativeWalkthrough: vi.fn(async () => ({
+      status: 'ready' as const,
+      walkthrough: narrativeWalkthrough,
+    })),
+    getRepositoryState: vi.fn(async () => nextState),
+  });
+
+  const container = document.createElement('div');
+  document.body.append(container);
+  let root: Root | null = null;
+
+  try {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<App />);
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('.wt-stop-block')).not.toBeNull();
+    });
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('.wt-upnext')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('Regenerate walkthrough');
+      expect(container.textContent).toContain('changed.ts');
+      expect(container.textContent).toContain('added.ts');
+      expect(container.textContent).not.toContain('unchanged.tsChanged');
     });
   } finally {
     if (root) {
@@ -948,69 +1107,32 @@ test('Mod+K does not open deleted files', async () => {
   }
 });
 
-test('commit details render inline in the diff view', async () => {
+test('commit messages use the shared source description presentation', async () => {
   const changedFile = createChangedFile('src/app.ts');
   const source = { ref: 'abc1234', type: 'commit' } satisfies ReviewSource;
-  const writeClipboardText = vi.fn(async () => undefined);
-  const commitMetadata = {
-    author: {
-      date: '2026-01-01T12:00:00Z',
-      email: 'author@example.com',
-      name: 'Author',
-    },
-    body: 'Detailed commit body.',
-    committer: {
-      date: '2026-01-01T13:00:00Z',
-      email: 'committer@example.com',
-      name: 'Committer',
-    },
-    files: [
-      {
-        additions: 1,
-        binary: false,
-        deletions: 1,
-        path: 'src/app.ts',
-        status: 'modified' as const,
-      },
-    ],
-    parents: ['parent-sha'],
-    ref: 'abc1234',
-    refs: ['main'],
-    shortRef: 'abc1234',
-    signature: {
-      key: 'SHA256:abcdefghijklmnopqrstuvwxyz0123456789',
-      signer: 'signer@example.test',
-      status: 'G',
-    },
-    stats: {
-      additions: 1,
-      binaryFiles: 0,
-      deletions: 1,
-      files: 1,
-      renamedFiles: 0,
-    },
-    subject: 'Commit subject',
-    trailers: [
-      {
-        key: 'Co-authored-by',
-        value: 'Second Author <second@example.com>',
-      },
-    ],
-  } satisfies CommitMetadata;
+  const commitMetadata = createCommitMetadataFixture('## Details\n\nDetailed **commit** body.');
+  const historyAvatarUrl = 'https://avatars.githubusercontent.com/u/1?v=4';
 
   window.codiff = createCodiffMock({
+    getRepositoryHistory: vi.fn(async () => ({
+      entries: [
+        {
+          author: commitMetadata.author.name,
+          committedAt: Date.parse(commitMetadata.author.date),
+          gravatarUrl: historyAvatarUrl,
+          parents: commitMetadata.parents,
+          ref: commitMetadata.ref,
+          subject: commitMetadata.subject,
+        },
+      ],
+      root: '/repo',
+    })),
     getRepositoryState: vi.fn(async () => ({
       ...repositoryState,
       commitMetadata,
       files: [changedFile],
       source,
     })),
-  });
-  Object.defineProperty(navigator, 'clipboard', {
-    configurable: true,
-    value: {
-      writeText: writeClipboardText,
-    },
   });
 
   const container = document.createElement('div');
@@ -1025,53 +1147,76 @@ test('commit details render inline in the diff view', async () => {
 
     await waitFor(() => {
       expect(container.querySelector('.loading')).toBeNull();
-      expect(container.querySelector('.commit-details-panel')).not.toBeNull();
+      expect(container.querySelector('.codiff-source-description-header')).not.toBeNull();
     });
 
     await waitFor(() => {
-      expect(container.querySelector('.commit-details-panel')?.textContent).toContain(
+      expect(container.querySelector('.source-description-markdown')?.textContent).toContain(
         'Detailed commit body.',
       );
-      expect(container.querySelector('.commit-details-panel')?.textContent).toContain(
-        'Co-authored-by',
-      );
     });
 
-    const signature = container.querySelector<HTMLElement>('.commit-details-signature');
-    if (!signature) {
-      throw new Error('Expected commit signature.');
-    }
-    expect(signature.textContent).toBe(
-      'Verified signature by signer@example.test (SHA256:abcd...6789)',
+    const header = container.querySelector<HTMLElement>('.codiff-source-description-header');
+    expect(header?.querySelector('.source-description-title')?.textContent).toBe(
+      commitMetadata.subject,
     );
-    expect(signature.textContent).not.toContain(commitMetadata.signature.key);
-    expect(signature.getAttribute('title')).toBe(commitMetadata.signature.key);
-
-    const fileLineCount = container.querySelector<HTMLElement>('.commit-details-file-line-count');
-    if (!fileLineCount) {
-      throw new Error('Expected commit details file line count.');
-    }
-    expect(fileLineCount.querySelector('.codiff-line-count-added')?.textContent).toBe('+1');
-    expect(fileLineCount.querySelector('.codiff-line-count-deleted')?.textContent).toBe('-1');
-
-    const copyButton = container.querySelector<HTMLButtonElement>('.commit-details-copy');
-    if (!copyButton) {
-      throw new Error('Expected commit details copy button.');
-    }
-
-    await act(async () => {
-      copyButton.click();
-    });
-
-    expect(writeClipboardText).toHaveBeenCalledWith(commitMetadata.ref);
-    expect(copyButton.getAttribute('aria-label')).toBe('Commit hash copied');
-    expect(copyButton.textContent).toContain(commitMetadata.shortRef);
-    expect(copyButton.textContent).not.toContain('Copied');
+    expect(container.querySelector('.source-description-author-header')?.textContent).toContain(
+      commitMetadata.author.name,
+    );
+    expect(
+      container.querySelector<HTMLImageElement>('.source-description-comment > .avatar.medium')
+        ?.src,
+    ).toBe(historyAvatarUrl);
+    expect(container.querySelector('[aria-label="Preview commit message"]')).not.toBeNull();
+    expect(container.querySelector('.codiff-commit-details-header')).toBeNull();
+    expect(container.querySelector('.commit-details-panel')).toBeNull();
+    expect(container.textContent).not.toContain('Verified signature');
+    expect(container.textContent).not.toContain('Co-authored-by');
   } finally {
     if (root) {
       await act(async () => root?.unmount());
     }
     container.remove();
+  }
+});
+
+test('bodyless commits still render the author and profile image', async () => {
+  const commitMetadata = createCommitMetadataFixture('');
+  const source = { ref: commitMetadata.ref, type: 'commit' } satisfies ReviewSource;
+
+  window.codiff = createCodiffMock({
+    getRepositoryState: vi.fn(async () => ({
+      ...repositoryState,
+      commitMetadata,
+      files: [createChangedFile('src/app.ts')],
+      source,
+    })),
+  });
+
+  const app = await renderReact(<App />);
+
+  try {
+    await waitFor(() => {
+      expect(
+        app.container.querySelector('.source-description-author-header')?.textContent,
+      ).toContain(commitMetadata.author.name);
+    });
+
+    expect(
+      app.container.querySelector<HTMLImageElement>('.source-description-comment > .avatar.medium')
+        ?.src,
+    ).toBe(commitMetadata.author.gravatarUrl);
+    expect(
+      app.container.querySelector('.source-description-author-header.without-description'),
+    ).not.toBeNull();
+    expect(app.container.querySelector('.source-description-markdown')).toBeNull();
+    expect(
+      app.container
+        .querySelector('.codiff-source-description-header')
+        ?.querySelector('.source-description-title')?.textContent,
+    ).toBe(commitMetadata.subject);
+  } finally {
+    await app.cleanup();
   }
 });
 
@@ -1491,8 +1636,8 @@ test('narrative walkthrough stops do not repeat commit details', async () => {
       expect(container.querySelector('.wt-stop-block')).not.toBeNull();
     });
 
-    expect(container.querySelector('.codiff-commit-details-header')).toBeNull();
-    expect(container.querySelector('.commit-details-panel')).toBeNull();
+    expect(container.querySelector('.codiff-source-description-header')).toBeNull();
+    expect(container.querySelector('.source-description-markdown')).toBeNull();
     expect(container.querySelector('.wt-stage-title')?.textContent).toContain(
       'Implementation path',
     );
@@ -1686,6 +1831,11 @@ test('plan mode opens the Markdown editor without loading repository state', asy
       planSharing: true,
       walkthroughSharing: false,
     })),
+    getGitIdentity: vi.fn(async () => ({
+      email: 'current-user@example.com',
+      gravatarUrl: 'https://example.com/current-user.png',
+      name: 'Current User',
+    })),
     getLaunchOptions: vi.fn(async () => ({
       planFile: '/tmp/plan.md',
       planResultFile: '/tmp/result.json',
@@ -1737,6 +1887,9 @@ test('plan mode opens the Markdown editor without loading repository state', asy
         'Keep the rollout steps explicit.',
       );
     });
+    const planCommentAvatar = container.querySelector('.plan-comment-thread .avatar.medium');
+    expect(planCommentAvatar?.tagName).toBe('SPAN');
+    expect(planCommentAvatar?.textContent).toBe('RE');
     const commentTargetButton = container.querySelector<HTMLButtonElement>('.plan-comment-target');
     expect(commentTargetButton?.textContent).toBe('Heading · Execute this plan');
     expect(commentTargetButton?.disabled).toBe(false);
@@ -2479,6 +2632,578 @@ test('repository changes show the update banner without refreshing the working t
   }
 });
 
+test('clicking the change banner refreshes the repository in place', async () => {
+  const initialFile = {
+    fingerprint: 'src/app.ts:1',
+    path: 'src/app.ts',
+    sections: [
+      {
+        binary: false,
+        id: 'src/app.ts:unstaged',
+        kind: 'unstaged',
+        patch: 'diff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n',
+      },
+    ],
+    status: 'modified',
+  } satisfies ChangedFile;
+  const addedFile = {
+    fingerprint: 'src/added.ts:1',
+    path: 'src/added.ts',
+    sections: [
+      {
+        binary: false,
+        id: 'src/added.ts:unstaged',
+        kind: 'unstaged',
+        patch: 'diff --git a/src/added.ts b/src/added.ts\n@@ -0,0 +1 @@\n+created\n',
+      },
+    ],
+    status: 'added',
+  } satisfies ChangedFile;
+
+  let onRepositoryChanged: ((change: { root: string }) => void) | null = null;
+  let stateRequests = 0;
+  const getRepositoryState = vi.fn<Window['codiff']['getRepositoryState']>(async () => {
+    stateRequests += 1;
+    return stateRequests === 1
+      ? { ...repositoryState, files: [initialFile] }
+      : {
+          ...repositoryState,
+          files: [
+            addedFile,
+            {
+              ...initialFile,
+              fingerprint: 'src/app.ts:2',
+              sections: [
+                {
+                  binary: false,
+                  id: 'src/app.ts:unstaged',
+                  kind: 'unstaged',
+                  patch: 'diff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n-old\n+newer\n',
+                },
+              ],
+            },
+          ],
+        };
+  });
+
+  window.codiff = createCodiffMock({
+    getRepositoryState,
+    onRepositoryChanged: vi.fn((callback) => {
+      onRepositoryChanged = callback;
+      return () => {
+        onRepositoryChanged = null;
+      };
+    }),
+  });
+
+  const container = document.createElement('div');
+  document.body.append(container);
+  let root: Root | null = null;
+
+  try {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<App />);
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('.loading')).toBeNull();
+      expect(onRepositoryChanged).not.toBeNull();
+    });
+    expect(container.textContent).not.toContain('added.ts');
+
+    await act(async () => {
+      onRepositoryChanged?.({ root: '/repo' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const refreshButton = container.querySelector<HTMLButtonElement>('.repository-change-reload');
+    expect(refreshButton).not.toBeNull();
+    await act(async () => {
+      refreshButton?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // New file appears without a window reload, and the banner clears.
+    expect(getRepositoryState).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain('added.ts');
+    expect(container.querySelector('.repository-change-banner.visible')).toBeNull();
+
+    // The changed file must not appear twice (old + new version).
+    const appOccurrences = container.textContent?.split('app.ts').length ?? 1;
+    expect(appOccurrences - 1).toBeLessThanOrEqual(2);
+    expect(container.textContent).not.toContain('-old\n+new\n');
+  } finally {
+    if (root) {
+      await act(async () => root?.unmount());
+    }
+    container.remove();
+  }
+});
+
+test('refreshing all changes re-resolves the branch snapshot', async () => {
+  const initialSource = {
+    baseRef: 'base123',
+    headRef: 'head123',
+    ref: 'main',
+    type: 'branch-working-tree',
+  } satisfies ReviewSource;
+  const refreshedSource = {
+    baseRef: 'base123',
+    headRef: 'head456',
+    ref: 'main',
+    type: 'branch-working-tree',
+  } satisfies ReviewSource;
+  const initialFile = createChangedFile('src/initial.ts', { kind: 'commit' });
+  const addedFile = createChangedFile('src/added.ts', { kind: 'commit' });
+  const initialState = {
+    ...repositoryState,
+    branch: 'feature',
+    files: [initialFile],
+    source: initialSource,
+  } satisfies RepositoryState;
+  const refreshedState = {
+    ...initialState,
+    files: [initialFile, addedFile],
+    source: refreshedSource,
+  } satisfies RepositoryState;
+  let onRepositoryChanged: ((change: { root: string }) => void) | null = null;
+  let branchWorkingTreeRequests = 0;
+  const getRepositoryState = vi.fn<Window['codiff']['getRepositoryState']>(
+    async (requestedSource) => {
+      if (requestedSource?.type === 'branch-diff') {
+        return {
+          ...refreshedState,
+          source: requestedSource,
+        };
+      }
+      branchWorkingTreeRequests += 1;
+      return branchWorkingTreeRequests === 1 ? initialState : refreshedState;
+    },
+  );
+  const getRepositoryHistory = vi.fn(async () => ({
+    entries: [],
+    root: '/repo',
+  }));
+
+  window.codiff = createCodiffMock({
+    getLaunchOptions: vi.fn(async () => ({
+      repositoryPathProvided: true,
+      source: { ref: 'main', type: 'branch-working-tree' as const },
+      walkthrough: false,
+    })),
+    getRepositoryHistory,
+    getRepositoryState,
+    onRepositoryChanged: vi.fn((callback) => {
+      onRepositoryChanged = callback;
+      return () => {
+        onRepositoryChanged = null;
+      };
+    }),
+  });
+
+  const container = document.createElement('div');
+  document.body.append(container);
+  let root: Root | null = null;
+  const findButton = (label: string) =>
+    Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes(label),
+    );
+
+  try {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<App />);
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('.loading')).toBeNull();
+      expect(onRepositoryChanged).not.toBeNull();
+    });
+
+    await act(async () => {
+      onRepositoryChanged?.({ root: '/repo' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('.repository-change-reload')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('added.ts');
+    });
+    expect(getRepositoryState).toHaveBeenNthCalledWith(2, {
+      ref: 'main',
+      type: 'branch-working-tree',
+    });
+    expect(getRepositoryHistory).toHaveBeenLastCalledWith(expect.any(Number), {
+      ref: 'main',
+      type: 'branch-working-tree',
+    });
+
+    await act(async () => {
+      findButton('History')?.click();
+    });
+    await waitFor(() => {
+      expect(findButton('Committed only vs main')).toBeTruthy();
+    });
+
+    await act(async () => {
+      findButton('Committed only vs main')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(getRepositoryState).toHaveBeenLastCalledWith({
+      baseRef: refreshedSource.baseRef,
+      headRef: refreshedSource.headRef,
+      ref: refreshedSource.ref,
+      type: 'branch-diff',
+    });
+  } finally {
+    if (root) {
+      await act(async () => root?.unmount());
+    }
+    container.remove();
+  }
+});
+
+test('refreshing changed viewed files expands them in place', async () => {
+  const initialFile = createChangedFile('src/viewed.ts', { fingerprint: 'viewed:1' });
+  const refreshedFile = createChangedFile('src/viewed.ts', {
+    fingerprint: 'viewed:2',
+    patch: 'diff --git a/src/viewed.ts b/src/viewed.ts\n@@ -1 +1 @@\n-old\n+newer\n',
+  });
+  window.localStorage.setItem(
+    'codiff:viewed:/repo',
+    JSON.stringify({ [initialFile.path]: initialFile.fingerprint }),
+  );
+
+  let onRepositoryChanged: ((change: { root: string }) => void) | null = null;
+  let stateRequests = 0;
+  const getRepositoryState = vi.fn<Window['codiff']['getRepositoryState']>(async () => {
+    stateRequests += 1;
+    return {
+      ...repositoryState,
+      files: [stateRequests === 1 ? initialFile : refreshedFile],
+    };
+  });
+
+  window.codiff = createCodiffMock({
+    getRepositoryState,
+    onRepositoryChanged: vi.fn((callback) => {
+      onRepositoryChanged = callback;
+      return () => {
+        onRepositoryChanged = null;
+      };
+    }),
+  });
+
+  const container = document.createElement('div');
+  document.body.append(container);
+  let root: Root | null = null;
+
+  try {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<App />);
+    });
+
+    await waitFor(() => {
+      const header = container.querySelector('.codiff-file-header');
+      expect(header).not.toBeNull();
+      expect(header?.classList.contains('collapsed')).toBe(true);
+    });
+
+    await act(async () => {
+      onRepositoryChanged?.({ root: '/repo' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const refreshButton = container.querySelector<HTMLButtonElement>('.repository-change-reload');
+    expect(refreshButton).not.toBeNull();
+    await act(async () => {
+      refreshButton?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await waitFor(() => {
+      const header = container.querySelector('.codiff-file-header');
+      expect(header).not.toBeNull();
+      expect(header?.classList.contains('collapsed')).toBe(false);
+      expect(header?.querySelector('.codiff-viewed-button')?.getAttribute('aria-pressed')).toBe(
+        'false',
+      );
+    });
+  } finally {
+    if (root) {
+      await act(async () => root?.unmount());
+    }
+    container.remove();
+  }
+});
+
+test('regenerating a walkthrough clears refresh-only changed sections', async () => {
+  const appFile = createChangedFile('src/app.ts');
+  const addedFile = createChangedFile('src/added.ts', {
+    fingerprint: 'src/added.ts:1',
+    patch: 'diff --git a/src/added.ts b/src/added.ts\n@@ -0,0 +1 @@\n+created\n',
+    status: 'added',
+  });
+  const laterFile = createChangedFile('src/later.ts', {
+    fingerprint: 'src/later.ts:1',
+    patch: 'diff --git a/src/later.ts b/src/later.ts\n@@ -0,0 +1 @@\n+later\n',
+    status: 'added',
+  });
+  const initialWalkthrough = createNarrativeWalkthroughFixture([
+    { added: 1, path: appFile.path, status: 'modified' },
+  ]);
+  const regeneratedWalkthrough = createNarrativeWalkthroughFixture([
+    { added: 1, path: appFile.path, status: 'modified' },
+    { added: 1, path: addedFile.path, status: 'added' },
+    { added: 1, path: laterFile.path, status: 'added' },
+  ]);
+
+  let onRepositoryChanged: ((change: { root: string }) => void) | null = null;
+  let stateRequests = 0;
+  const getRepositoryState = vi.fn<Window['codiff']['getRepositoryState']>(async () => {
+    stateRequests += 1;
+    return {
+      ...repositoryState,
+      files:
+        stateRequests === 1
+          ? [appFile]
+          : stateRequests === 2
+            ? [appFile, addedFile]
+            : [appFile, addedFile, laterFile],
+    };
+  });
+  let walkthroughRequests = 0;
+  const getNarrativeWalkthrough = vi.fn(async () => {
+    walkthroughRequests += 1;
+    return {
+      status: 'ready' as const,
+      walkthrough: walkthroughRequests === 1 ? initialWalkthrough : regeneratedWalkthrough,
+    };
+  });
+
+  window.codiff = createCodiffMock({
+    getLaunchOptions: vi.fn(async () => ({
+      repositoryPathProvided: true,
+      walkthrough: true,
+    })),
+    getNarrativeWalkthrough,
+    getRepositoryState,
+    onRepositoryChanged: vi.fn((callback) => {
+      onRepositoryChanged = callback;
+      return () => {
+        onRepositoryChanged = null;
+      };
+    }),
+  });
+
+  const container = document.createElement('div');
+  document.body.append(container);
+  let root: Root | null = null;
+
+  try {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<App />);
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('.wt-stop-block')).not.toBeNull();
+      expect(getNarrativeWalkthrough).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      onRepositoryChanged?.({ root: '/repo' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('.repository-change-reload')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('.wt-upnext')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('Changed after the walkthrough was generated.');
+      expect(container.textContent).toContain('Regenerate walkthrough');
+      expect(container.textContent).toContain('added.ts');
+    });
+
+    await act(async () => {
+      onRepositoryChanged?.({ root: '/repo' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('.repository-change-reload')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('Regenerate walkthrough');
+      expect(container.textContent).toContain('added.ts');
+      expect(container.textContent).toContain('later.ts');
+    });
+
+    await act(async () => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+        .find((button) => button.textContent?.includes('Regenerate walkthrough'))
+        ?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await waitFor(() => {
+      expect(getNarrativeWalkthrough).toHaveBeenCalledTimes(2);
+      expect(container.textContent).not.toContain('Changed after the walkthrough was generated.');
+    });
+    expect(getNarrativeWalkthrough).toHaveBeenLastCalledWith(repositoryState.source, {
+      force: true,
+      previousWalkthrough: initialWalkthrough,
+    });
+  } finally {
+    if (root) {
+      await act(async () => root?.unmount());
+    }
+    container.remove();
+  }
+});
+
+test('drops a walkthrough regeneration when the same source refreshes again', async () => {
+  const appFile = createChangedFile('src/app.ts', {
+    fingerprint: 'src/app.ts:1',
+    patch: 'diff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n',
+  });
+  const addedFile = createChangedFile('src/added.ts', {
+    fingerprint: 'src/added.ts:1',
+    patch: 'diff --git a/src/added.ts b/src/added.ts\n@@ -0,0 +1 @@\n+added\n',
+    status: 'added',
+  });
+  const laterFile = createChangedFile('src/later.ts', {
+    fingerprint: 'src/later.ts:1',
+    patch: 'diff --git a/src/later.ts b/src/later.ts\n@@ -0,0 +1 @@\n+later\n',
+    status: 'added',
+  });
+  const initialWalkthrough = createNarrativeWalkthroughFixture([
+    { added: 1, path: appFile.path, status: 'modified' },
+  ]);
+  const staleRegeneration = createNarrativeWalkthroughFixture([
+    { added: 1, path: appFile.path, status: 'modified' },
+    { added: 1, path: addedFile.path, status: 'added' },
+  ]);
+
+  let onRepositoryChanged: ((change: { root: string }) => void) | null = null;
+  let stateRequests = 0;
+  const getRepositoryState = vi.fn<Window['codiff']['getRepositoryState']>(async () => {
+    stateRequests += 1;
+    return {
+      ...repositoryState,
+      files:
+        stateRequests === 1
+          ? [appFile]
+          : stateRequests === 2
+            ? [appFile, addedFile]
+            : [appFile, addedFile, laterFile],
+    };
+  });
+  let walkthroughRequests = 0;
+  let resolveRegeneration:
+    | ((result: { status: 'ready'; walkthrough: NarrativeWalkthrough }) => void)
+    | null = null;
+  const getNarrativeWalkthrough = vi.fn(() => {
+    walkthroughRequests += 1;
+    if (walkthroughRequests === 1) {
+      return Promise.resolve({ status: 'ready' as const, walkthrough: initialWalkthrough });
+    }
+    return new Promise<{ status: 'ready'; walkthrough: NarrativeWalkthrough }>((resolve) => {
+      resolveRegeneration = resolve;
+    });
+  });
+
+  window.codiff = createCodiffMock({
+    getLaunchOptions: vi.fn(async () => ({
+      repositoryPathProvided: true,
+      walkthrough: true,
+    })),
+    getNarrativeWalkthrough,
+    getRepositoryState,
+    onRepositoryChanged: vi.fn((callback) => {
+      onRepositoryChanged = callback;
+      return () => {
+        onRepositoryChanged = null;
+      };
+    }),
+  });
+
+  const container = document.createElement('div');
+  document.body.append(container);
+  let root: Root | null = null;
+
+  const refresh = async () => {
+    await act(async () => {
+      onRepositoryChanged?.({ root: '/repo' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('.repository-change-reload')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  };
+
+  try {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<App />);
+    });
+    await waitFor(() => {
+      expect(getNarrativeWalkthrough).toHaveBeenCalledTimes(1);
+    });
+
+    await refresh();
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('.wt-upnext')?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitFor(() => {
+      expect(container.textContent).toContain('Regenerate walkthrough');
+    });
+
+    await act(async () => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+        .find((button) => button.textContent?.includes('Regenerate walkthrough'))
+        ?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitFor(() => {
+      expect(getNarrativeWalkthrough).toHaveBeenCalledTimes(2);
+    });
+
+    await refresh();
+    await act(async () => {
+      resolveRegeneration?.({ status: 'ready', walkthrough: staleRegeneration });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('Changed after the walkthrough was generated.');
+      expect(container.textContent).toContain('later.ts');
+      expect(container.textContent).not.toContain('Regenerating…');
+    });
+  } finally {
+    if (root) {
+      await act(async () => root?.unmount());
+    }
+    container.remove();
+  }
+});
+
 test('walkthrough launch errors stay on the walkthrough tab without automatic retries', async () => {
   const changedFile = {
     fingerprint: 'src/app.ts:1',
@@ -2553,6 +3278,87 @@ test('walkthrough launch errors stay on the walkthrough tab without automatic re
     container.remove();
   }
 });
+
+test('walkthrough progress events replace the loading line without exposing agent output', async () => {
+  const changedFile = {
+    fingerprint: 'src/app.ts:1',
+    path: 'src/app.ts',
+    sections: [
+      {
+        binary: false,
+        id: 'src/app.ts:unstaged',
+        kind: 'unstaged',
+        patch: 'diff --git a/src/app.ts b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n',
+      },
+    ],
+    status: 'modified',
+  } satisfies ChangedFile;
+  let onProgress: ((progress: WalkthroughProgressEvent) => void) | null = null;
+  let resolveWalkthrough: ((result: { reason: string; status: 'unavailable' }) => void) | null =
+    null;
+  const getNarrativeWalkthrough = vi.fn(
+    () =>
+      new Promise<{ reason: string; status: 'unavailable' }>((resolve) => {
+        resolveWalkthrough = resolve;
+      }),
+  );
+
+  window.codiff = createCodiffMock({
+    getLaunchOptions: vi.fn(async () => ({
+      repositoryPathProvided: true,
+      walkthrough: true,
+    })),
+    getNarrativeWalkthrough,
+    getRepositoryState: vi.fn(async () => ({
+      ...repositoryState,
+      files: [changedFile],
+    })),
+    onWalkthroughProgress: vi.fn((callback) => {
+      onProgress = callback;
+      return () => {
+        onProgress = null;
+      };
+    }),
+  });
+
+  const container = document.createElement('div');
+  document.body.append(container);
+  let root: Root | null = null;
+
+  try {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<App />);
+    });
+
+    await waitFor(() => {
+      expect(container.textContent).toContain('Generating walkthrough…');
+    });
+
+    await act(async () => {
+      onProgress?.({ phase: 'agent-generation' });
+    });
+    expect(container.textContent).toContain('Analyzing changes…');
+    expect(container.textContent).not.toContain('Generating walkthrough…');
+
+    await act(async () => {
+      onProgress?.({ phase: 'response-received' });
+    });
+    expect(container.textContent).toContain('Building walkthrough…');
+    expect(container.querySelector('.wt-generation')).toBeNull();
+
+    await act(async () => {
+      resolveWalkthrough?.({ reason: 'Stopped for test.', status: 'unavailable' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  } finally {
+    if (root) {
+      await act(async () => root?.unmount());
+    }
+    container.remove();
+  }
+});
+
 test('history filter matches commits by author name', async () => {
   window.codiff = createCodiffMock({
     getRepositoryHistory: vi.fn(async () => ({

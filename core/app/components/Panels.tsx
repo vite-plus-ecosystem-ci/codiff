@@ -1,5 +1,7 @@
+import { MarkdownEditor, type MarkdownEditorHandle } from '@nkzw/mdx-editor';
 import { CaretDownIcon as CaretDown } from '@phosphor-icons/react/CaretDown';
 import { CaretUpIcon as CaretUp } from '@phosphor-icons/react/CaretUp';
+import { ChatCircleIcon as ChatCircle } from '@phosphor-icons/react/ChatCircle';
 import { CheckIcon as Check } from '@phosphor-icons/react/Check';
 import { CheckCircleIcon as CheckCircle } from '@phosphor-icons/react/CheckCircle';
 import { PowerIcon as Power } from '@phosphor-icons/react/Power';
@@ -10,6 +12,7 @@ import { Copy as LucideCopy } from 'lucide-react';
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -18,7 +21,6 @@ import {
 import { matchesShortcut } from '../../config/keymap.ts';
 import type { CodiffKeymap } from '../../config/types.ts';
 import type { RepositoryLoadError, ReviewComment } from '../../lib/app-types.ts';
-import { getReloadShortcutLabel } from '../../lib/keyboard.ts';
 import { buildReviewCommentsMarkdown } from '../../lib/review-comments.ts';
 import type {
   ChangedFile,
@@ -27,6 +29,7 @@ import type {
   PullRequestReviewEvent,
   PullRequestReviewStatus,
 } from '../../types.ts';
+import { Button, buttonVariants } from './Button.tsx';
 import { useCopiedState } from './useCopiedState.ts';
 
 export function ReviewSourceLoading() {
@@ -38,28 +41,33 @@ export function ReviewSourceLoading() {
   }, []);
 
   return (
-    <div className="review-source-loading loading pulse italic" role="status">
+    <div className="review-source-loading loading pulse" role="status">
       {visible ? 'Thinking…' : null}
     </div>
   );
 }
 
 export function RepositoryChangeBanner({
-  onReload,
+  onRefresh,
   visible,
 }: {
-  onReload: () => void;
+  onRefresh: () => void;
   visible: boolean;
 }) {
   const [dismissed, setDismissed] = useState(false);
+  // Re-arm the dismiss latch once the current change is refreshed away, so the
+  // banner comes back for the next change instead of staying dismissed forever.
+  if (!visible && dismissed) {
+    setDismissed(false);
+  }
   const isVisible = visible && !dismissed;
 
   return (
     <div aria-live="polite" className={`repository-change-banner${isVisible ? ' visible' : ''}`}>
       <span className="repository-change-banner-content">
         <span>Local changes detected,</span>
-        <button className="repository-change-reload" onClick={onReload} type="button">
-          {getReloadShortcutLabel()} to reload.
+        <button className="repository-change-reload" onClick={onRefresh} type="button">
+          refresh to see them.
         </button>
       </span>
       <button
@@ -352,7 +360,12 @@ export function CopyCommentsButton({
 const getPullRequestReviewActionStatus = (
   reviewStatus: PullRequestReviewStatus | undefined,
   event: PullRequestReviewEvent,
-) => (event === 'APPROVE' ? reviewStatus?.approve : reviewStatus?.requestChanges);
+) =>
+  event === 'APPROVE'
+    ? reviewStatus?.approve
+    : event === 'COMMENT'
+      ? reviewStatus?.comment
+      : reviewStatus?.requestChanges;
 
 export const isPullRequestReviewActionDisabled = (
   reviewStatus: PullRequestReviewStatus | undefined,
@@ -365,24 +378,227 @@ const getPullRequestReviewActionTitle = (
   fallback: string,
 ) => getPullRequestReviewActionStatus(reviewStatus, event)?.reason ?? fallback;
 
+function PullRequestReviewAction({
+  disabled,
+  event,
+  hasPendingComments = false,
+  icon,
+  label,
+  onSubmitReview,
+  title,
+}: {
+  disabled: boolean;
+  event: PullRequestReviewEvent;
+  hasPendingComments?: boolean;
+  icon: ReactNode;
+  label: string;
+  onSubmitReview: (event: PullRequestReviewEvent, body?: string) => Promise<void> | void;
+  title: string;
+}) {
+  const [body, setBody] = useState('');
+  const [open, setOpen] = useState(false);
+  const [previousDisabled, setPreviousDisabled] = useState(disabled);
+  const editorRef = useRef<MarkdownEditorHandle>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const popoverId = useId();
+  const trimmedBody = body.trim();
+  const isApprove = event === 'APPROVE';
+  const isComment = event === 'COMMENT';
+  const variant = isApprove ? 'approve' : isComment ? 'comment' : 'request-changes';
+  const actionLabel = isApprove
+    ? 'Approve review'
+    : isComment
+      ? 'Submit review comments'
+      : 'Request changes';
+  const commentLabel = isApprove
+    ? 'Add approval comment'
+    : isComment
+      ? 'Add review comment'
+      : 'Add request changes comment';
+  const placeholder = isApprove
+    ? 'Add an approval comment…'
+    : isComment
+      ? 'Add a review comment…'
+      : 'Add a change request comment…';
+  const primaryDisabled = disabled || (isComment && !hasPendingComments);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      editorRef.current?.focus({ defaultSelection: 'rootEnd', preventScroll: true });
+    });
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false);
+      }
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      // oxlint-disable-next-line @nkzw/no-instanceof
+      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [open]);
+
+  if (disabled !== previousDisabled) {
+    setPreviousDisabled(disabled);
+    if (disabled) {
+      setOpen(false);
+    }
+  }
+
+  const submitWithComment = useCallback(() => {
+    if (disabled || !trimmedBody) {
+      return;
+    }
+    void Promise.resolve(onSubmitReview(event, trimmedBody))
+      .then(() => {
+        setBody('');
+        setOpen(false);
+      })
+      .catch(() => {});
+  }, [disabled, event, onSubmitReview, trimmedBody]);
+
+  const submitWithoutComment = useCallback(() => {
+    if (primaryDisabled) {
+      return;
+    }
+    setOpen(false);
+    void Promise.resolve(onSubmitReview(event)).catch(() => {});
+  }, [event, onSubmitReview, primaryDisabled]);
+
+  const handleEditorKeyDown = useCallback(
+    (keyboardEvent: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (
+        keyboardEvent.key !== 'Enter' ||
+        (!keyboardEvent.metaKey && !keyboardEvent.ctrlKey) ||
+        !trimmedBody
+      ) {
+        return;
+      }
+      keyboardEvent.preventDefault();
+      keyboardEvent.stopPropagation();
+      submitWithComment();
+    },
+    [submitWithComment, trimmedBody],
+  );
+
+  return (
+    <div className="review-submit-action" ref={rootRef}>
+      <div
+        className={buttonVariants({ className: `review-submit-button ${variant}` })}
+        data-disabled={disabled || undefined}
+      >
+        <button
+          aria-label={actionLabel}
+          className="review-submit-primary"
+          disabled={primaryDisabled}
+          onClick={submitWithoutComment}
+          title={
+            isComment && !hasPendingComments
+              ? 'Add an inline comment or write a review comment from the menu'
+              : title
+          }
+          type="button"
+        >
+          {icon}
+          <span>{label}</span>
+        </button>
+        <span aria-hidden className="review-submit-divider">
+          |
+        </span>
+        <button
+          aria-controls={popoverId}
+          aria-expanded={open}
+          aria-label={commentLabel}
+          className="review-submit-toggle"
+          disabled={disabled}
+          onClick={() => setOpen((current) => !current)}
+          title={commentLabel}
+          type="button"
+        >
+          <CaretDown
+            aria-hidden
+            className={`review-submit-chevron${open ? ' expanded' : ''}`}
+            size={13}
+            weight="bold"
+          />
+        </button>
+      </div>
+      {open ? (
+        <div
+          aria-label={`${label} with comment`}
+          className="review-submit-popover"
+          id={popoverId}
+          role="group"
+        >
+          <MarkdownEditor
+            ariaLabel={commentLabel}
+            className="review-comment-markdown-editor review-submit-popover-editor"
+            colorScheme="inherit"
+            contentClassName="review-comment-input general-comment-input"
+            density="compact"
+            onChange={setBody}
+            onKeyDown={handleEditorKeyDown}
+            placeholder={placeholder}
+            readOnly={disabled}
+            ref={editorRef}
+            spellCheck
+            value={body}
+            variant="embedded"
+          />
+          <div className="review-submit-popover-footer">
+            <Button
+              className={`review-submit-popover-submit ${variant}`}
+              disabled={disabled || !trimmedBody}
+              onClick={submitWithComment}
+              type="button"
+            >
+              {icon}
+              <span>{label}</span>
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function PullRequestReviewButtons({
   children,
   disabled,
+  hasPendingComments,
   onClosePullRequest,
   onSubmitReview,
   reviewStatus,
+  showCommentReview = false,
 }: {
   children?: ReactNode;
   disabled: boolean;
+  hasPendingComments: boolean;
   onClosePullRequest?: () => void;
-  onSubmitReview: (event: PullRequestReviewEvent) => void;
+  onSubmitReview: (event: PullRequestReviewEvent, body?: string) => Promise<void> | void;
   reviewStatus?: PullRequestReviewStatus;
+  showCommentReview?: boolean;
 }) {
   const approveBlocked = isPullRequestReviewActionDisabled(reviewStatus, 'APPROVE');
+  const commentBlocked = isPullRequestReviewActionDisabled(reviewStatus, 'COMMENT');
   const requestChangesBlocked = isPullRequestReviewActionDisabled(reviewStatus, 'REQUEST_CHANGES');
   const closeStatus = reviewStatus?.close;
   const closeVisible = onClosePullRequest && closeStatus && closeStatus.disabled !== true;
-  const hasReviewActions = !approveBlocked || !requestChangesBlocked || closeVisible;
+  const commentVisible = showCommentReview && !commentBlocked;
+  const hasReviewActions =
+    commentVisible || !approveBlocked || !requestChangesBlocked || closeVisible;
   if (!hasReviewActions && !children) {
     return null;
   }
@@ -393,53 +609,70 @@ export function PullRequestReviewButtons({
       className="source-description-review-actions"
     >
       {children}
-      {!approveBlocked ? (
-        <button
-          aria-label="Approve review"
-          className="codiff-open-button review-submit-button approve"
+      {commentVisible ? (
+        <PullRequestReviewAction
           disabled={disabled}
-          onClick={() => onSubmitReview('APPROVE')}
+          event="COMMENT"
+          hasPendingComments={hasPendingComments}
+          icon={
+            <ChatCircle
+              aria-hidden
+              className="review-submit-icon comment"
+              size={15}
+              weight="bold"
+            />
+          }
+          label="Comment"
+          onSubmitReview={onSubmitReview}
+          title={getPullRequestReviewActionTitle(reviewStatus, 'COMMENT', 'Submit review comments')}
+        />
+      ) : null}
+      {!approveBlocked ? (
+        <PullRequestReviewAction
+          disabled={disabled}
+          event="APPROVE"
+          icon={
+            <Check aria-hidden className="review-submit-icon approve" size={15} weight="bold" />
+          }
+          label="Approve"
+          onSubmitReview={onSubmitReview}
           title={getPullRequestReviewActionTitle(reviewStatus, 'APPROVE', 'Approve review')}
-          type="button"
-        >
-          <Check aria-hidden className="review-submit-icon approve" size={15} weight="bold" />
-          <span>Approve</span>
-        </button>
+        />
       ) : null}
       {!requestChangesBlocked ? (
-        <button
-          aria-label="Request changes"
-          className="codiff-open-button review-submit-button request-changes"
+        <PullRequestReviewAction
           disabled={disabled}
-          onClick={() => onSubmitReview('REQUEST_CHANGES')}
+          event="REQUEST_CHANGES"
+          icon={
+            <SealQuestion
+              aria-hidden
+              className="review-submit-icon request-changes"
+              size={15}
+              weight="bold"
+            />
+          }
+          label="Request Changes"
+          onSubmitReview={onSubmitReview}
           title={getPullRequestReviewActionTitle(
             reviewStatus,
             'REQUEST_CHANGES',
             'Request changes',
           )}
-          type="button"
-        >
-          <SealQuestion
-            aria-hidden
-            className="review-submit-icon request-changes"
-            size={15}
-            weight="bold"
-          />
-          <span>Request Changes</span>
-        </button>
+        />
       ) : null}
       {closeVisible ? (
-        <button
+        <Button
+          action={onClosePullRequest}
           aria-label="Close merge request"
-          className="codiff-open-button review-submit-button close"
+          className="review-submit-button close"
           disabled={disabled}
-          onClick={onClosePullRequest}
+          pendingPlaceholder="Closing…"
           title={closeStatus.reason ?? 'Close merge request'}
           type="button"
         >
           <Power aria-hidden className="review-submit-icon close" size={15} weight="bold" />
           <span>Close</span>
-        </button>
+        </Button>
       ) : null}
     </div>
   );
@@ -539,23 +772,21 @@ export function PullRequestMergeControls({
       : mergeState.canSetAutoMerge
         ? 'Merge this merge request when GitLab checks pass'
         : primaryLabel);
-  const submitMerge = () => {
+  const submitMerge = async () => {
     if (primaryActionDisabled || !onMergePullRequest) {
       return;
     }
-    void Promise.resolve(
-      onMergePullRequest({
-        autoMerge: !mergeState.canMerge && mergeState.canSetAutoMerge,
-        removeSourceBranch,
-        squash,
-      }),
-    );
+    await onMergePullRequest({
+      autoMerge: !mergeState.canMerge && mergeState.canSetAutoMerge,
+      removeSourceBranch,
+      squash,
+    });
   };
-  const cancelAutoMerge = () => {
+  const cancelAutoMerge = async () => {
     if (cancelDisabled || !onCancelAutoMerge) {
       return;
     }
-    void Promise.resolve(onCancelAutoMerge());
+    await onCancelAutoMerge();
   };
   const pendingLabel = <em>Thinking…</em>;
   if (isTerminalPullRequestMergeState(mergeState)) {
@@ -643,27 +874,29 @@ export function PullRequestMergeControls({
           </div>
           <div className="pull-request-merge-actions">
             {mergeState.autoMergeEnabled ? (
-              <button
-                className="codiff-open-button pull-request-merge-button cancel"
+              <Button
+                action={cancelAutoMerge}
+                className="pull-request-merge-button cancel"
                 disabled={cancelDisabled}
-                onClick={cancelAutoMerge}
+                pendingPlaceholder={pendingLabel}
                 title={
                   mergeState.canCancelAutoMerge ? 'Cancel GitLab auto-merge' : mergeState.reason
                 }
                 type="button"
               >
                 {isPending ? pendingLabel : 'Cancel Auto-Merge'}
-              </button>
+              </Button>
             ) : (
-              <button
-                className="codiff-open-button pull-request-merge-button primary"
+              <Button
+                action={submitMerge}
+                className="pull-request-merge-button primary"
                 disabled={primaryActionDisabled}
-                onClick={submitMerge}
+                pendingPlaceholder={pendingLabel}
                 title={primaryTitle}
                 type="button"
               >
                 {isPending ? pendingLabel : primaryLabel}
-              </button>
+              </Button>
             )}
           </div>
         </div>

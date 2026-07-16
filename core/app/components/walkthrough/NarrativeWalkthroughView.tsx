@@ -1,3 +1,12 @@
+import { ArrowLeftIcon as ArrowLeft } from '@phosphor-icons/react/ArrowLeft';
+import { ArrowRightIcon as ArrowRight } from '@phosphor-icons/react/ArrowRight';
+import { ArrowsClockwiseIcon as ArrowsClockwise } from '@phosphor-icons/react/ArrowsClockwise';
+import { CaretLeftIcon as CaretLeft } from '@phosphor-icons/react/CaretLeft';
+import { CaretRightIcon as CaretRight } from '@phosphor-icons/react/CaretRight';
+import { CheckIcon as Check } from '@phosphor-icons/react/Check';
+import { GitBranchIcon as GitBranch } from '@phosphor-icons/react/GitBranch';
+import { PathIcon as Path } from '@phosphor-icons/react/Path';
+import { ShareNetworkIcon as ShareNetwork } from '@phosphor-icons/react/ShareNetwork';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ReviewIdentity } from '../../../lib/app-types.ts';
 import type { ReviewScrollBehavior } from '../../../lib/app-types.ts';
@@ -17,17 +26,12 @@ import {
 } from '../../../lib/narrative-walkthrough.ts';
 import type { ChangedFile, NarrativeWalkthrough, WalkthroughHunkGroup } from '../../../types.ts';
 import type { ReviewDiffBlock } from '../ReviewCodeView.tsx';
-import { CommitView, type CommitHandler, type CommitMessageHandler } from './CommitView.tsx';
 import {
-  ArrowLeft,
-  ArrowRight,
-  CaretLeft,
-  CaretRight,
-  Check,
-  GitBranch,
-  Path,
-  ShareNetwork,
-} from './icons.tsx';
+  CommitView,
+  type CommitHandler,
+  type CommitMessageHandler,
+  type CommitOutputSubscriber,
+} from './CommitView.tsx';
 import { ChapterIcon, ImportancePill, Narration } from './parts.tsx';
 import type { NarrativeNavigation } from './useNarrativeNavigation.ts';
 
@@ -47,6 +51,33 @@ export type WalkthroughBlockScrollTarget = {
   blockId: string;
   request: number;
 };
+
+export const getWalkthroughBlockScrollTarget = ({
+  activeBlockId,
+  firstSupportBlockId,
+  mode,
+  stopScrollRequest,
+  supportScrollRequest,
+}: {
+  activeBlockId: string | null | undefined;
+  firstSupportBlockId: string | null;
+  mode: NarrativeNavigation['mode'];
+  stopScrollRequest: number;
+  supportScrollRequest: number;
+}): WalkthroughBlockScrollTarget | null =>
+  mode === 'support' && firstSupportBlockId
+    ? {
+        behavior: 'smooth',
+        blockId: firstSupportBlockId,
+        request: supportScrollRequest,
+      }
+    : mode === 'stop' && activeBlockId && stopScrollRequest > 0
+      ? {
+          behavior: 'smooth',
+          blockId: activeBlockId,
+          request: stopScrollRequest,
+        }
+      : null;
 
 const getFocusedRunDiffs = (
   item: WalkthroughHunkGroup,
@@ -139,6 +170,36 @@ function SupportHeader({ current }: { current: boolean }) {
   );
 }
 
+function ChangedHeader({
+  current,
+  onRegenerate,
+  regenerateDisabled = false,
+}: {
+  current: boolean;
+  onRegenerate?: () => void;
+  regenerateDisabled?: boolean;
+}) {
+  return (
+    <div className={`wt-stop-block wt-stop-block-header${current ? ' current' : ''}`}>
+      <div className="wt-stage-title-row">
+        <h2 className="wt-stage-title">Changed</h2>
+        {onRegenerate ? (
+          <button
+            className="wt-regenerate"
+            disabled={regenerateDisabled}
+            onClick={onRegenerate}
+            type="button"
+          >
+            <ArrowsClockwise size={13} weight="bold" />
+            {regenerateDisabled ? 'Regenerating…' : 'Regenerate walkthrough'}
+          </button>
+        ) : null}
+      </div>
+      <Narration prose="These changes arrived after the walkthrough was generated and are not part of its narrative yet." />
+    </div>
+  );
+}
+
 const createWalkthroughBlocks = (
   files: ReadonlyArray<ChangedFile>,
   walkthroughView: WalkthroughView,
@@ -201,6 +262,9 @@ const createSupportBlocks = (
   selected: boolean,
   walkthroughView: WalkthroughView,
   showWhitespace: boolean,
+  changedPaths?: ReadonlySet<string>,
+  onRegenerateWalkthrough?: () => void,
+  regenerateDisabled?: boolean,
 ): ReadonlyArray<ReviewDiffBlock> => {
   const blocks: Array<ReviewDiffBlock> = [];
   for (const group of walkthroughView.supportByReason) {
@@ -221,7 +285,14 @@ const createSupportBlocks = (
     }
   }
 
-  for (const file of getUncoveredWalkthroughFiles(files, walkthroughView, showWhitespace)) {
+  const uncoveredFiles = getUncoveredWalkthroughFiles(files, walkthroughView, showWhitespace);
+  // Changes that arrived after the walkthrough was generated (e.g. via an
+  // in-place refresh) get their own "Changed" section; other uncovered hunks
+  // stay under "Support" as before.
+  const changedFiles = uncoveredFiles.filter((file) => changedPaths?.has(file.path));
+  const uncoveredSupportFiles = uncoveredFiles.filter((file) => !changedPaths?.has(file.path));
+
+  for (const file of uncoveredSupportFiles) {
     const blockId = `walkthrough:uncovered:${file.path}`;
     const isFirstBlock = blocks.length === 0;
     blocks.push({
@@ -237,6 +308,29 @@ const createSupportBlocks = (
       },
     });
   }
+
+  changedFiles.forEach((file, fileIndex) => {
+    const blockId = `walkthrough:changed:${file.path}`;
+    blocks.push({
+      file,
+      header:
+        fileIndex === 0 ? (
+          <ChangedHeader
+            current={selected}
+            onRegenerate={onRegenerateWalkthrough}
+            regenerateDisabled={regenerateDisabled}
+          />
+        ) : null,
+      headerSelected: selected,
+      id: blockId,
+      itemIdPrefix: blockId,
+      note: 'Changed after the walkthrough was generated.',
+      reviewIdentity: {
+        fingerprint: file.fingerprint,
+        key: blockId,
+      },
+    });
+  });
 
   return blocks;
 };
@@ -466,24 +560,32 @@ function Arc({
 
 export function NarrativeWalkthroughView({
   allowCommit = true,
+  changedPaths,
   files,
   navigation,
   onActiveReviewTargetChange,
   onCommit,
+  onCommitOutput,
+  onRegenerateWalkthrough,
   onShareWalkthrough,
   onUpdateCommitMessage,
+  regenerateDisabled,
   renderDiffBlocks,
   shareWalkthroughDisabled,
   showWhitespace,
   walkthrough,
 }: {
   allowCommit?: boolean;
+  changedPaths?: ReadonlySet<string>;
   files: ReadonlyArray<ChangedFile>;
   navigation: NarrativeNavigation;
   onActiveReviewTargetChange: (target: WalkthroughReviewTarget | null) => void;
   onCommit: CommitHandler;
+  onCommitOutput?: CommitOutputSubscriber;
+  onRegenerateWalkthrough?: () => void;
   onShareWalkthrough?: () => void;
   onUpdateCommitMessage: CommitMessageHandler;
+  regenerateDisabled?: boolean;
   renderDiffBlocks: RenderWalkthroughDiffBlocks;
   shareWalkthroughDisabled?: boolean;
   showWhitespace: boolean;
@@ -501,9 +603,25 @@ export function NarrativeWalkthroughView({
   const supportBlocks = useMemo(
     () =>
       walkthroughView
-        ? createSupportBlocks(files, navigation.mode === 'support', walkthroughView, showWhitespace)
+        ? createSupportBlocks(
+            files,
+            navigation.mode === 'support',
+            walkthroughView,
+            showWhitespace,
+            changedPaths,
+            onRegenerateWalkthrough,
+            regenerateDisabled,
+          )
         : [],
-    [files, navigation.mode, showWhitespace, walkthroughView],
+    [
+      changedPaths,
+      files,
+      navigation.mode,
+      onRegenerateWalkthrough,
+      regenerateDisabled,
+      showWhitespace,
+      walkthroughView,
+    ],
   );
   const supportAvailable = supportBlocks.length > 0;
   const firstSupportBlockId = supportBlocks[0]?.id ?? null;
@@ -516,20 +634,13 @@ export function NarrativeWalkthroughView({
     [supportBlocks, walkthroughBlocks.blocks],
   );
   const activeBlockId = walkthroughBlocks.firstBlockIdByStop[navigation.scrollTarget.index];
-  const reviewBlockScrollTarget: WalkthroughBlockScrollTarget | null =
-    navigation.mode === 'support' && firstSupportBlockId
-      ? {
-          behavior: 'smooth',
-          blockId: firstSupportBlockId,
-          request: navigation.supportScrollRequest,
-        }
-      : navigation.mode === 'stop' && activeBlockId
-        ? {
-            behavior: 'smooth',
-            blockId: activeBlockId,
-            request: navigation.scrollTarget.nonce,
-          }
-        : null;
+  const reviewBlockScrollTarget = getWalkthroughBlockScrollTarget({
+    activeBlockId,
+    firstSupportBlockId,
+    mode: navigation.mode,
+    stopScrollRequest: navigation.scrollTarget.nonce,
+    supportScrollRequest: navigation.supportScrollRequest,
+  });
   const handleActiveBlockChange = useCallback(
     (blockId: string) => {
       onActiveReviewTargetChange(getBlockReviewTarget(reviewBlocks, blockId));
@@ -659,6 +770,7 @@ export function NarrativeWalkthroughView({
           draft={navigation}
           model={buildCommitModel(walkthroughView, files)}
           onCommit={onCommit}
+          onCommitOutput={onCommitOutput}
           onUpdateMessage={onUpdateCommitMessage}
         />
       ) : walkthroughView.sequence.length > 0 ? (

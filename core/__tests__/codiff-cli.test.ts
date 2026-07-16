@@ -6,7 +6,6 @@ import {
   mkdtemp,
   readFile,
   realpath,
-  rm,
   truncate,
   writeFile,
 } from 'node:fs/promises';
@@ -14,18 +13,24 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, expect, test } from 'vite-plus/test';
-import { formatHelpText, parseArguments, resolvePullRequestUrl } from '../../bin/arguments.js';
+import {
+  formatHelpText,
+  getReviewSource,
+  parseArguments,
+  resolvePullRequestUrl,
+} from '../../bin/arguments.js';
 import type { PlanReview } from '../types.ts';
 import { createFakeCommandLogger, createFakeOpenLogger } from './helpers/cli.ts';
+import { removeGitTestDirectory } from './helpers/git.ts';
+import { getGitTestEnvironment } from './helpers/git.ts';
 
 const execFileAsync = promisify(execFile);
 
 const git = async (repo: string, args: ReadonlyArray<string>) => {
-  await execFileAsync(
-    'git',
-    ['-c', 'commit.gpgsign=false', '-c', 'tag.gpgsign=false', '-C', repo, ...args],
-    { encoding: 'utf8' },
-  );
+  await execFileAsync('git', ['-C', repo, ...args], {
+    encoding: 'utf8',
+    env: getGitTestEnvironment(),
+  });
 };
 
 let refRepositoryPath = '';
@@ -34,8 +39,6 @@ let refRepositoryShortHash = '';
 beforeAll(async () => {
   refRepositoryPath = await realpath(await mkdtemp(join(tmpdir(), 'codiff-cli-refs-')));
   await git(refRepositoryPath, ['init']);
-  await git(refRepositoryPath, ['config', 'user.email', 'codiff@example.com']);
-  await git(refRepositoryPath, ['config', 'user.name', 'Codiff Test']);
   await git(refRepositoryPath, ['commit', '--allow-empty', '-m', 'first']);
   await git(refRepositoryPath, ['branch', 'base']);
   await git(refRepositoryPath, ['commit', '--allow-empty', '-m', 'second']);
@@ -50,7 +53,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (refRepositoryPath) {
-    await rm(refRepositoryPath, { force: true, recursive: true });
+    await removeGitTestDirectory(refRepositoryPath);
   }
 });
 
@@ -115,6 +118,21 @@ test('parseArguments treats plain branch refs as branch refs', async () => {
   });
 });
 
+test('shared branch reviews include uncommitted changes', () => {
+  expect(
+    getReviewSource({
+      branchRef: 'main',
+      commitRef: null,
+      pullRequestProvider: null,
+      pullRequestUrl: null,
+      range: null,
+    }),
+  ).toEqual({
+    ref: 'main',
+    type: 'branch-working-tree',
+  });
+});
+
 test('parseArguments treats missing plain refs in Git repositories as branch refs', async () => {
   await withCwd(refRepositoryPath, () => {
     expect(parseArguments(['definitely-missing-branch'])).toMatchObject({
@@ -163,7 +181,7 @@ test('parseArguments keeps existing hash-like paths as repository paths', async 
       walkthrough: false,
     });
   } finally {
-    await rm(directory, { force: true, recursive: true });
+    await removeGitTestDirectory(directory);
   }
 });
 
@@ -194,7 +212,7 @@ test.sequential('parseArguments does not inspect Git refs for plan working direc
     expect(await readFile(gitMarker, 'utf8').catch(() => null)).toBeNull();
   } finally {
     process.env.PATH = previousPath;
-    await rm(directory, { force: true, recursive: true });
+    await removeGitTestDirectory(directory);
   }
 });
 
@@ -365,7 +383,7 @@ test('resolvePullRequestUrl builds GitHub PR URLs from the origin remote', async
       'https://github.com/nkzw-tech/codiff/pull/75',
     );
   } finally {
-    await rm(repositoryPath, { force: true, recursive: true });
+    await removeGitTestDirectory(repositoryPath);
   }
 });
 
@@ -385,7 +403,7 @@ test('resolvePullRequestUrl builds GitLab MR URLs from an arbitrary GitLab remot
       'https://gitlab.example.com/group/subgroup/project/-/merge_requests/23',
     );
   } finally {
-    await rm(repositoryPath, { force: true, recursive: true });
+    await removeGitTestDirectory(repositoryPath);
   }
 });
 
@@ -892,7 +910,7 @@ test('Codex skill launcher resolves handled plan comments', async () => {
       review.threads[1],
     ]);
   } finally {
-    await rm(directory, { force: true, recursive: true });
+    await removeGitTestDirectory(directory);
   }
 });
 

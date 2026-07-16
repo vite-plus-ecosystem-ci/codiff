@@ -14,8 +14,20 @@ const { readPiSessionContext } = require('./pi-session-context.cjs');
  * @typedef {{
  *   fallbackModel?: string;
  *   model?: string;
+ *   onMetrics?: (metrics: {
+ *     transport: 'app-server' | 'exec';
+ *     usage?: {
+ *       cachedInputTokens: number;
+ *       inputTokens: number;
+ *       outputTokens: number;
+ *       reasoningOutputTokens: number;
+ *       totalTokens: number;
+ *     };
+ *   }) => void;
  *   onModelFallback?: (fallbackModel: string, originalModel: string) => Promise<void> | void;
  *   onPartialText?: (delta: string) => void;
+ *   onProgress?: (phase: import('../core/types.ts').WalkthroughProgressPhase) => void;
+ *   reasoningEffort?: 'low' | 'medium' | 'high';
  *   timeoutMs?: number;
  * }} AgentOptions
  * @typedef {{
@@ -186,8 +198,6 @@ const detectInitialAgentBackend = (isAvailable = (agent) => agent.isAvailable())
   listAgents().find(isAvailable)?.id ?? DEFAULT_AGENT_BACKEND;
 
 module.exports = {
-  AGENT_BACKENDS,
-  DEFAULT_AGENT_BACKEND,
   detectInitialAgentBackend,
   getAgentMenuModels,
   getAgent,

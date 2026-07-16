@@ -6,6 +6,7 @@ import { CheckIcon as Check } from '@phosphor-icons/react/Check';
 import { ColumnsIcon as Columns } from '@phosphor-icons/react/Columns';
 import { ImageBrokenIcon as ImageBroken } from '@phosphor-icons/react/ImageBroken';
 import { SquareSplitVerticalIcon as SquareSplitVertical } from '@phosphor-icons/react/SquareSplitVertical';
+import { WarningOctagonIcon as WarningOctagon } from '@phosphor-icons/react/WarningOctagon';
 import { XIcon as X } from '@phosphor-icons/react/X';
 import {
   type CodeViewLineSelection,
@@ -13,6 +14,7 @@ import {
   type CodeViewOptions,
   type CodeViewScrollTarget,
   type DiffLineAnnotation,
+  type FileDiffLoadedFiles,
   type FileDiffMetadata,
   type LineAnnotation,
   type SelectedLineRange,
@@ -46,6 +48,7 @@ import type { CodiffDiffStyle, CodiffKeymap } from '../../config/types.ts';
 import type {
   CodeViewInstance,
   CodeViewItemMetadata,
+  CodeQualityAnnotationMetadata,
   DiffSearchMatch,
   ReviewAnnotationMetadata,
   ReviewComment,
@@ -73,19 +76,24 @@ import {
   getDiffLineCountFromVisibleSections,
   getItemId,
   getMarkdownPreviewContents,
+  getSectionForFileDiff,
   getVisibleDiffSections,
   isMarkdownFilePath,
+  loadSectionContents,
   shouldLoadDiffSectionContents,
 } from '../../lib/diff.ts';
 import { getItemVersion } from '../../lib/item-version.ts';
 import { isNativeInputTarget } from '../../lib/keyboard.ts';
 import { sanitizeMarkdownImages } from '../../lib/markdown.tsx';
+import { isGeneratedWalkthroughFile } from '../../lib/narrative-walkthrough-diff.js';
 import {
   getCommentKey,
   getReviewCommentLineLabel,
   getReviewCommentsDigest,
   hasActiveTextSelection,
+  isFileReviewComment,
   isInteractiveReviewEvent,
+  isLineReviewComment,
   shouldDiscardReviewCommentOnEscape,
   updateStickyHeaderState,
 } from '../../lib/review-comments.ts';
@@ -99,16 +107,13 @@ import type {
   DiffImageContentResult,
   DiffSection,
   GitIdentity,
+  PullRequestCodeQualityFinding,
   PullRequestExistingReviewComment,
   ReviewAuthor,
   ReviewSource,
 } from '../../types.ts';
-import {
-  CommitDetailsHeader,
-  CommitDetailsPanel,
-  type CommitDetailsFile,
-} from './CommitDetails.tsx';
-import { Gravatar } from './Gravatar.tsx';
+import { Avatar } from './Avatar.tsx';
+import { Button } from './Button.tsx';
 import {
   RepositoryMarkdownEditor,
   type MarkdownDocumentEditorHandle,
@@ -118,6 +123,7 @@ import { DiffLineCountBadge } from './Sidebar.tsx';
 import { useCopiedState } from './useCopiedState.ts';
 
 const emptyMarkdownPreviewSectionIds = new Set<string>();
+const emptyExpandedGenerated = new Set<string>();
 const markdownPreviewPlugins = [
   frontmatterPlugin(),
   imagePlugin({
@@ -136,6 +142,16 @@ const preloadMarkdownEditor = () => {
   void loadMarkdownEditor();
 };
 const MarkdownEditor = lazy(loadMarkdownEditor);
+
+const isEditableWorkingTreeSection = (
+  sourceType: ReviewSource['type'],
+  file: ChangedFile,
+  section: DiffSection,
+) =>
+  (sourceType === 'working-tree' || sourceType === 'branch-working-tree') &&
+  file.status !== 'deleted' &&
+  file.sections.at(-1)?.id === section.id &&
+  (section.kind === 'staged' || section.kind === 'unstaged');
 
 function CopyFilePathButton({ path }: { path: string }) {
   const [copied, markCopied] = useCopiedState(1600);
@@ -177,8 +193,10 @@ function CopyFilePathButton({ path }: { path: string }) {
 
 function CodeViewHeader({
   allowViewedToggle,
+  canCreateFileComment,
   isSectionLoading,
   meta,
+  onCreateFileComment,
   onLoadSection,
   onOpenFile,
   onToggleCollapsed,
@@ -187,8 +205,10 @@ function CodeViewHeader({
   readOnly,
 }: {
   allowViewedToggle: boolean;
+  canCreateFileComment: boolean;
   isSectionLoading: boolean;
   meta: CodeViewItemMetadata;
+  onCreateFileComment: () => void;
   onLoadSection: (file: ChangedFile, section: DiffSection) => void;
   onOpenFile?: (file: ChangedFile) => void;
   onToggleCollapsed: (file: ChangedFile, isCollapsed: boolean, reviewKey: string) => void;
@@ -210,7 +230,7 @@ function CodeViewHeader({
     walkthroughNote,
   } = meta;
   const canOpenFile = file.status !== 'deleted';
-  const canLoadSection = section.loadState === 'deferred' && shouldLoadDiffSectionContents(section);
+  const canLoadSection = shouldLoadDiffSectionContents(section);
 
   return (
     <div
@@ -256,11 +276,27 @@ function CodeViewHeader({
             {sectionLabel[section.kind]}
           </span>
         ) : null}
+        {isGeneratedWalkthroughFile(file) ? (
+          <span className="codiff-generated-badge" title="Generated file">
+            Generated
+          </span>
+        ) : null}
       </div>
       <DiffLineCountBadge lineCount={lineCount} />
       <div className={`codiff-status-badge ${file.status}`}>{statusLabel[file.status]}</div>
+      {canCreateFileComment ? (
+        <Button
+          className="codiff-file-comment-button"
+          onClick={onCreateFileComment}
+          title="Comment on file"
+          type="button"
+        >
+          <ChatCircle aria-hidden className="codiff-file-comment-icon" size={14} weight="bold" />
+          Comment
+        </Button>
+      ) : null}
       {canRenderMarkdown ? (
-        <button
+        <Button
           aria-pressed={isMarkdownPreview}
           className={`codiff-markdown-button${isMarkdownPreview ? ' active' : ''}`}
           onClick={() => onToggleMarkdownPreview(file, section)}
@@ -268,7 +304,7 @@ function CodeViewHeader({
           type="button"
         >
           {isMarkdownPreview ? 'View as Diff' : 'View as Markdown'}
-        </button>
+        </Button>
       ) : null}
       {canLoadSection && !readOnly ? (
         <button
@@ -282,15 +318,14 @@ function CodeViewHeader({
         </button>
       ) : null}
       {!readOnly && onOpenFile ? (
-        <button
-          className="codiff-open-button"
+        <Button
           disabled={!canOpenFile}
           onClick={() => onOpenFile(file)}
           title={canOpenFile ? 'Open file in editor' : 'Deleted files cannot be opened'}
           type="button"
         >
           Open
-        </button>
+        </Button>
       ) : null}
       {!readOnly || allowViewedToggle ? (
         <button
@@ -309,17 +344,25 @@ function CodeViewHeader({
   );
 }
 
-function ReviewAvatar({
-  author,
-  identity,
-}: {
-  author?: PullRequestExistingReviewComment['author'];
-  identity: GitIdentity | null;
-}) {
-  const label = author?.login || identity?.name || identity?.email || 'Git user';
-  const avatarUrl = author?.avatarUrl || identity?.gravatarUrl;
+const getReviewAuthorDisplayName = (author: PullRequestExistingReviewComment['author']) =>
+  author.name || author.login || 'Git user';
 
-  return <Gravatar fallback={label} size="medium" url={avatarUrl} />;
+const getGitIdentityDisplayName = (identity: GitIdentity | null) =>
+  identity?.name || identity?.email || 'Git user';
+
+function ReviewAvatar({ author }: { author: PullRequestExistingReviewComment['author'] }) {
+  return <Avatar name={getReviewAuthorDisplayName(author)} size="medium" url={author.avatarUrl} />;
+}
+
+function IdentityReviewAvatar({ identity }: { identity: GitIdentity | null }) {
+  return (
+    <ReviewAvatar
+      author={{
+        avatarUrl: identity?.gravatarUrl,
+        login: getGitIdentityDisplayName(identity),
+      }}
+    />
+  );
 }
 
 function AgentAvatar({ agentId }: { agentId: 'codex' | 'claude' | 'opencode' | 'pi' }) {
@@ -449,7 +492,21 @@ const getPullRequestDescriptionLabel = (source: Extract<ReviewSource, { type: 'p
     : source.provider === 'gitlab'
       ? 'MR description'
       : 'Description';
-const getSourceAuthorDisplayName = (author: ReviewAuthor) => author.name || `@${author.login}`;
+type SourceDescriptionAuthor = {
+  avatarUrl?: string;
+  displayName: string;
+  title?: string;
+};
+const getPullRequestDescriptionAuthor = (author: ReviewAuthor): SourceDescriptionAuthor => ({
+  avatarUrl: author.avatarUrl,
+  displayName: author.name || `@${author.login}`,
+  title: `@${author.login}`,
+});
+const getCommitDescriptionAuthor = (author: CommitMetadata['author']): SourceDescriptionAuthor => ({
+  avatarUrl: author.gravatarUrl,
+  displayName: author.name || author.email || 'Unknown author',
+  title: author.email || undefined,
+});
 const htmlCommentPattern = /<!--[\s\S]*?-->/g;
 const stripHtmlComments = (value: string) => value.replaceAll(htmlCommentPattern, '');
 type PullRequestSource = Extract<ReviewSource, { type: 'pull-request' }>;
@@ -565,7 +622,6 @@ function SourceDescriptionHeader({
       <span className="codiff-file-path-row">
         <SourceDescriptionTitle
           canEdit={editableTitle}
-          key={title}
           label={label}
           onUpdateTitle={onUpdateTitle}
           title={title}
@@ -631,6 +687,7 @@ function SourceDescriptionHeader({
 }
 
 function SourceDescriptionBody({
+  ariaLabel = 'Preview source description',
   author,
   canEdit,
   description,
@@ -640,7 +697,8 @@ function SourceDescriptionBody({
   onUpdateDescription,
   onUploadDescriptionAsset,
 }: {
-  author?: ReviewAuthor;
+  ariaLabel?: string;
+  author?: SourceDescriptionAuthor;
   canEdit?: boolean;
   description: string;
   keymap?: CodiffKeymap;
@@ -771,23 +829,15 @@ function SourceDescriptionBody({
         author ? '' : ' source-description-comment-anonymous'
       }`}
     >
-      {author ? (
-        <Gravatar
-          fallback={getSourceAuthorDisplayName(author)}
-          size="medium"
-          url={author.avatarUrl}
-        />
-      ) : null}
+      {author ? <Avatar name={author.displayName} size="medium" url={author.avatarUrl} /> : null}
       <div className="review-comment-body source-description-body">
         {author || canEditDescription || editing ? (
           <div
             className={`review-comment-header read-only source-description-author-header${
               canEditDescription || editing ? ' with-comment-action' : ''
-            }`}
+            }${!sanitizedDescription && !editing ? ' without-description' : ''}`}
           >
-            <strong title={author ? `@${author.login}` : undefined}>
-              {author ? getSourceAuthorDisplayName(author) : 'Description'}
-            </strong>
+            <strong title={author?.title}>{author ? author.displayName : 'Description'}</strong>
             {editing ? (
               <span className="general-comment-edit-actions">
                 <button
@@ -826,7 +876,7 @@ function SourceDescriptionBody({
               <Suspense
                 fallback={
                   <ReadOnlyMarkdown
-                    ariaLabel="Preview source description"
+                    ariaLabel={ariaLabel}
                     className="codiff-markdown-preview-editor source-description-markdown-editor source-description-edit-preview"
                     density="compact"
                     onHeightChange={() => onLayoutReady(layoutKey)}
@@ -842,7 +892,7 @@ function SourceDescriptionBody({
                 >
                   {!editEditorReady ? (
                     <ReadOnlyMarkdown
-                      ariaLabel="Preview source description"
+                      ariaLabel={ariaLabel}
                       className="codiff-markdown-preview-editor source-description-markdown-editor source-description-edit-preview"
                       density="compact"
                       onHeightChange={() => onLayoutReady(layoutKey)}
@@ -873,10 +923,10 @@ function SourceDescriptionBody({
             </div>
             {editError ? <div className="review-comment-error">{editError}</div> : null}
           </>
-        ) : (
+        ) : sanitizedDescription ? (
           <div className="codiff-markdown-preview source-description-markdown">
             <ReadOnlyMarkdown
-              ariaLabel="Preview source description"
+              ariaLabel={ariaLabel}
               className="codiff-markdown-preview-editor source-description-markdown-editor"
               density="compact"
               onHeightChange={() => onLayoutReady(layoutKey)}
@@ -884,7 +934,7 @@ function SourceDescriptionBody({
               variant="embedded"
             />
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -910,6 +960,7 @@ export function PullRequestSourceDescription({
   const sourceDescription = source.description?.trim() ?? '';
   const sourceTitle = source.title?.trim() ?? '';
   const sourceDescriptionHasBody = sourceDescription.length > 0;
+  const sourceAuthor = source.author ? getPullRequestDescriptionAuthor(source.author) : undefined;
   const canEditDescription = source.canEditDescription === true && onUpdateDescription != null;
   const canEditTitle =
     (source.canEditTitle === true || source.canEditDescription === true) && onUpdateTitle != null;
@@ -937,7 +988,7 @@ export function PullRequestSourceDescription({
       {!isCollapsed ? (
         <div className="codiff-source-description-panel-body">
           <SourceDescriptionBody
-            author={source.author}
+            author={sourceAuthor}
             canEdit={canEditDescription}
             description={sourceDescription}
             keymap={keymap}
@@ -1222,9 +1273,9 @@ function ReviewCommentEditor({
   keymap,
   onAskCodex,
   onCommentBlur,
+  onCommentDraftChange,
   onCommentFocus,
   onDeleteComment,
-  onHeightChange,
   onSaveCommentEdit,
   onSubmitComment,
   onUpdateComment,
@@ -1240,9 +1291,9 @@ function ReviewCommentEditor({
   keymap: CodiffKeymap;
   onAskCodex?: (commentId: string) => void;
   onCommentBlur: (comment: ReviewComment, body: string) => void;
+  onCommentDraftChange?: (comment: Pick<ReviewComment, 'body' | 'id'> | null) => void;
   onCommentFocus: (comment: ReviewComment) => void;
   onDeleteComment: (commentId: string) => void;
-  onHeightChange: () => void;
   onSaveCommentEdit: (commentId: string, body: string) => Promise<void> | void;
   onSubmitComment: (commentId: string) => void;
   onUpdateComment: (commentId: string, body: string) => void;
@@ -1367,8 +1418,9 @@ function ReviewCommentEditor({
         dirty: true,
         draft,
       }));
+      onCommentDraftChange?.({ body: draft, id: comment.id });
     },
-    [comment.body, comment.id],
+    [comment.body, comment.id, onCommentDraftChange],
   );
 
   const handleAskCodex = useCallback(() => {
@@ -1531,30 +1583,20 @@ function ReviewCommentEditor({
       onDeleteComment,
     ],
   );
-  const previousHeightRef = useRef<number | null>(null);
-  const handleHeightChange = useCallback(
-    (height: number) => {
-      if (previousHeightRef.current == null) {
-        previousHeightRef.current = height;
-        return;
-      }
-      if (previousHeightRef.current !== height) {
-        previousHeightRef.current = height;
-        onHeightChange();
-      }
-    },
-    [onHeightChange],
-  );
-
   return (
     <Fragment>
       <div className="review-comment">
-        <ReviewAvatar author={comment.author} identity={identity} />
+        {comment.author ? (
+          <ReviewAvatar author={comment.author} />
+        ) : (
+          <IdentityReviewAvatar identity={identity} />
+        )}
         <div className="review-comment-body">
           <div
             className={`review-comment-header${
               (isPullRequest && !comment.isReadOnly) ||
               canEditExistingComment ||
+              comment.canDelete ||
               editingExistingComment
                 ? ' with-comment-action'
                 : ''
@@ -1589,6 +1631,17 @@ function ReviewCommentEditor({
                 type="button"
               >
                 Edit
+              </button>
+            ) : null}
+            {comment.isReadOnly && comment.canDelete ? (
+              <button
+                aria-label="Delete comment"
+                className="review-comment-delete"
+                onClick={() => onDeleteComment(comment.id)}
+                title="Delete comment"
+                type="button"
+              >
+                <X aria-hidden className="review-comment-delete-icon" size={14} weight="bold" />
               </button>
             ) : null}
             {!comment.isReadOnly && onAskCodex ? (
@@ -1653,7 +1706,6 @@ function ReviewCommentEditor({
                     className="review-comment-markdown-editor"
                     contentClassName="review-comment-input read-only"
                     fallback={<div className="review-comment-input read-only" />}
-                    onHeightChange={handleHeightChange}
                     value={displayedBody}
                     variant="embedded"
                   />
@@ -1670,7 +1722,6 @@ function ReviewCommentEditor({
                       className="review-comment-markdown-editor review-comment-edit-preview"
                       contentClassName="review-comment-input read-only"
                       fallback={<div className="review-comment-input read-only" />}
-                      onHeightChange={handleHeightChange}
                       value={displayedBody}
                       variant="embedded"
                     />
@@ -1685,7 +1736,6 @@ function ReviewCommentEditor({
                       contentClassName="review-comment-input"
                       density="compact"
                       onChange={handleEditDraftChange}
-                      onHeightChange={handleHeightChange}
                       onKeyDown={handleEditKeyDown}
                       readOnly={editSubmitting}
                       ref={setEditEditorRef}
@@ -1704,7 +1754,6 @@ function ReviewCommentEditor({
               className="review-comment-markdown-editor"
               contentClassName="review-comment-input read-only"
               fallback={<div className="review-comment-input read-only" />}
-              onHeightChange={handleHeightChange}
               value={displayedBody}
               variant="embedded"
             />
@@ -1719,7 +1768,6 @@ function ReviewCommentEditor({
                 onBlur={handleBlur}
                 onChange={handleChange}
                 onFocus={handleFocus}
-                onHeightChange={handleHeightChange}
                 onKeyDown={handleKeyDown}
                 placeholder="Write a review comment…"
                 ref={comment.id === focusCommentId ? focusEditorRef : undefined}
@@ -1753,7 +1801,6 @@ function ReviewCommentEditor({
                   ariaLabel={`${agentLabel} reply`}
                   className="review-comment-codex-reply-markdown"
                   density="compact"
-                  onHeightChange={handleHeightChange}
                   value={comment.codexReply.body ?? comment.codexReply.error ?? ''}
                   variant="embedded"
                 />
@@ -1790,6 +1837,10 @@ const groupReviewCommentsByThread = (comments: ReadonlyArray<ReviewComment>) => 
 
 const noopResolveThread = () => {};
 
+// The CodeView header host is measured by a ResizeObserver, so no manual
+// layout pass is needed when the description body settles.
+const noopLayoutReady = () => {};
+
 function ReviewCommentThreadGroup({
   agentId,
   agentLabel,
@@ -1801,9 +1852,9 @@ function ReviewCommentThreadGroup({
   keymap,
   onAskCodex,
   onCommentBlur,
+  onCommentDraftChange,
   onCommentFocus,
   onDeleteComment,
-  onHeightChange,
   onReplyToThread,
   onResolveThread = noopResolveThread,
   onSaveCommentEdit,
@@ -1820,9 +1871,9 @@ function ReviewCommentThreadGroup({
   keymap: CodiffKeymap;
   onAskCodex?: (commentId: string) => void;
   onCommentBlur: (comment: ReviewComment, body: string) => void;
+  onCommentDraftChange?: (comment: Pick<ReviewComment, 'body' | 'id'> | null) => void;
   onCommentFocus: (comment: ReviewComment) => void;
   onDeleteComment: (commentId: string) => void;
-  onHeightChange: () => void;
   onReplyToThread: (threadId: string, comment: ReviewComment) => void;
   onResolveThread?: (threadId: string, resolved: boolean) => Promise<void> | void;
   onSaveCommentEdit: (commentId: string, body: string) => Promise<void> | void;
@@ -1836,16 +1887,18 @@ function ReviewCommentThreadGroup({
   }>({ error: null, submitting: false, threadId: null });
   const lastComment = comments.at(-1);
   const threadId = lastComment?.threadId;
+  const threadResolved = comments.some((comment) => comment.isThreadResolved === true);
   const canResolveThread =
     isPullRequest &&
     threadId != null &&
-    comments.some((comment) => comment.canResolveThread === true) &&
-    !comments.some((comment) => comment.isThreadResolved === true);
+    comments.some((comment) => comment.canResolveThread === true);
   const canReplyToThread =
     isPullRequest &&
     threadId != null &&
     comments.some((comment) => comment.isReadOnly) &&
-    !comments.some((comment) => !comment.isReadOnly);
+    !comments.some((comment) => !comment.isReadOnly) &&
+    !comments.some((comment) => comment.canReplyThread === false) &&
+    !threadResolved;
   const hasThreadActions = canReplyToThread || canResolveThread;
   const resolving = resolveState.threadId === threadId && resolveState.submitting;
   const resolveError = resolveState.threadId === threadId ? resolveState.error : null;
@@ -1862,7 +1915,7 @@ function ReviewCommentThreadGroup({
       return;
     }
     setResolveState({ error: null, submitting: true, threadId });
-    void Promise.resolve(onResolveThread(threadId, true))
+    void Promise.resolve(onResolveThread(threadId, !threadResolved))
       .then(() => setResolveState({ error: null, submitting: false, threadId }))
       .catch((error: unknown) => {
         setResolveState({
@@ -1871,17 +1924,14 @@ function ReviewCommentThreadGroup({
           threadId,
         });
       });
-  }, [onResolveThread, resolving, threadId]);
+  }, [onResolveThread, resolving, threadId, threadResolved]);
 
   return (
     <div className="review-comment-thread-group">
       {comments.map((comment) => {
-        const displayName =
-          comment.author?.name ||
-          comment.author?.login ||
-          identity?.name ||
-          identity?.email ||
-          'Git user';
+        const displayName = comment.author
+          ? getReviewAuthorDisplayName(comment.author)
+          : getGitIdentityDisplayName(identity);
 
         return (
           <ReviewCommentEditor
@@ -1897,9 +1947,9 @@ function ReviewCommentThreadGroup({
             keymap={keymap}
             onAskCodex={onAskCodex}
             onCommentBlur={onCommentBlur}
+            onCommentDraftChange={onCommentDraftChange}
             onCommentFocus={onCommentFocus}
             onDeleteComment={onDeleteComment}
-            onHeightChange={onHeightChange}
             onSaveCommentEdit={onSaveCommentEdit}
             onSubmitComment={onSubmitComment}
             onUpdateComment={onUpdateComment}
@@ -1924,7 +1974,7 @@ function ReviewCommentThreadGroup({
                 onClick={handleResolve}
                 type="button"
               >
-                {resolving ? 'Resolving' : 'Resolve'}
+                {resolving ? 'Saving' : threadResolved ? 'Reopen' : 'Resolve'}
               </button>
             ) : null}
           </div>
@@ -1946,6 +1996,7 @@ function ReviewAnnotation({
   keymap,
   onAskCodex,
   onCommentBlur,
+  onCommentDraftChange,
   onCommentFocus,
   onDeleteComment,
   onHeightChange,
@@ -1966,6 +2017,7 @@ function ReviewAnnotation({
   keymap: CodiffKeymap;
   onAskCodex?: (commentId: string) => void;
   onCommentBlur: (comment: ReviewComment, body: string) => void;
+  onCommentDraftChange?: (comment: Pick<ReviewComment, 'body' | 'id'> | null) => void;
   onCommentFocus: (comment: ReviewComment) => void;
   onDeleteComment: (commentId: string) => void;
   onHeightChange: () => void;
@@ -1976,6 +2028,7 @@ function ReviewAnnotation({
   onUpdateComment: (commentId: string, body: string) => void;
 }) {
   const focusEditorRef = useRef<MarkdownEditorHandle>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
   const setFocusEditorRef = useCallback((node: MarkdownEditorHandle | null) => {
     focusEditorRef.current = node;
   }, []);
@@ -1991,13 +2044,32 @@ function ReviewAnnotation({
     }
   }, [focusCommentId, focusCommentRequest, hasFocusedComment]);
 
+  // Observe the whole thread so independent markdown blocks cannot invalidate each other.
+  useLayoutEffect(() => {
+    const thread = threadRef.current;
+    if (!thread) {
+      return;
+    }
+
+    let height = thread.getBoundingClientRect().height;
+    const observer = new ResizeObserver(() => {
+      const nextHeight = thread.getBoundingClientRect().height;
+      if (height !== nextHeight) {
+        height = nextHeight;
+        onHeightChange();
+      }
+    });
+    observer.observe(thread);
+    return () => observer.disconnect();
+  }, [annotationComments.length, onHeightChange]);
+
   if (annotationComments.length === 0) {
     return null;
   }
   const commentGroups = groupReviewCommentsByThread(annotationComments);
 
   return (
-    <div className="review-comment-thread">
+    <div className="review-comment-thread" ref={threadRef}>
       {commentGroups.map((group) => (
         <ReviewCommentThreadGroup
           agentId={agentId}
@@ -2011,9 +2083,9 @@ function ReviewAnnotation({
           keymap={keymap}
           onAskCodex={onAskCodex}
           onCommentBlur={onCommentBlur}
+          onCommentDraftChange={onCommentDraftChange}
           onCommentFocus={onCommentFocus}
           onDeleteComment={onDeleteComment}
-          onHeightChange={onHeightChange}
           onReplyToThread={onReplyToThread}
           onResolveThread={onResolveThread}
           onSaveCommentEdit={onSaveCommentEdit}
@@ -2025,28 +2097,46 @@ function ReviewAnnotation({
   );
 }
 
+const codeQualitySeverityLabel: Record<PullRequestCodeQualityFinding['severity'], string> = {
+  blocker: 'Blocker',
+  critical: 'Critical',
+  info: 'Info',
+  major: 'Major',
+  minor: 'Minor',
+  unknown: 'Unknown',
+};
+
+function CodeQualityAnnotation({
+  annotation,
+}: {
+  annotation: DiffLineAnnotation<CodeQualityAnnotationMetadata>;
+}) {
+  const { finding } = annotation.metadata;
+  return (
+    <div className="review-comment-thread code-quality-finding-thread">
+      <div
+        className="review-comment-body code-quality-finding"
+        data-severity={finding.severity}
+        data-status={finding.status}
+      >
+        <div className="review-comment-header code-quality-finding-header">
+          <WarningOctagon aria-hidden size={16} weight="fill" />
+          <strong>Code Quality</strong>
+          <span className="code-quality-finding-severity">
+            {codeQualitySeverityLabel[finding.severity]}
+          </span>
+          {finding.status === 'new' ? <span className="code-quality-finding-new">New</span> : null}
+        </div>
+        <div className="code-quality-finding-content">
+          <p>{finding.description}</p>
+          {finding.engineName ? <span>{finding.engineName}</span> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const scrollTargetRetryFrameLimit = 90;
-// Render commit details as a CodeView item so scrolling treats the panel like the diffs.
-const commitDetailsFileName = '__codiff_commit_details__';
-
-// Build an id from commit details that can change the panel height. When the panel first appears,
-// we change only layoutPass to make CodeView measure again; this id still means "same content."
-const getCommitDetailsContentKey = (metadata: CommitMetadata) =>
-  [
-    metadata.ref,
-    metadata.refs.join('\u0000'),
-    metadata.stats.files,
-    metadata.stats.additions,
-    metadata.stats.deletions,
-    metadata.stats.renamedFiles,
-    metadata.stats.binaryFiles,
-  ].join('\u0001');
-
-const getCommitDetailsVersionKey = (
-  metadata: CommitMetadata,
-  layoutPass: number,
-  navigationKey: string,
-) => [getCommitDetailsContentKey(metadata), layoutPass, navigationKey].join('\u0001');
 
 const getEffectiveScrollBehavior = (behavior: ReviewScrollBehavior) =>
   behavior === 'smooth' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
@@ -2136,7 +2226,9 @@ const lineIsVisibleInFileDiff = (
 const reviewCommentAnchorIsVisibleInFileDiff = (
   comment: ReviewComment,
   fileDiff: FileDiffMetadata,
-) => lineIsVisibleInFileDiff(fileDiff, comment.side, comment.lineNumber);
+) =>
+  !isLineReviewComment(comment) ||
+  lineIsVisibleInFileDiff(fileDiff, comment.side, comment.lineNumber);
 
 const diffSearchMatchIsVisibleInFileDiff = (match: DiffSearchMatch, fileDiff: FileDiffMetadata) => {
   if (match.lineNumber == null) {
@@ -2345,12 +2437,14 @@ export function ReviewCodeView({
   allowViewedToggle = false,
   blocks,
   bottomInset = codeViewLayout.paddingBottom,
+  codeQualityFindings = [],
   collapsed,
   comments,
   commitMetadata,
   diffLineHeight = DIFF_LINE_HEIGHT,
   diffStyle,
   disableWorkerPool = false,
+  expandedGenerated = emptyExpandedGenerated,
   files,
   focusCommentId,
   focusCommentRequest,
@@ -2365,10 +2459,12 @@ export function ReviewCodeView({
   loadingSectionIds,
   onActiveBlockChange,
   onAskCodex,
+  onCommentDraftChange,
   onCreateComment,
   onDeleteComment,
   onLoadImageContent,
   onLoadSection,
+  onLoadSectionContents,
   onOpenFile,
   onRefreshMarkdown,
   onResolveThread = noopResolveThread,
@@ -2390,7 +2486,6 @@ export function ReviewCodeView({
   source,
   sourceDescriptionActions,
   sourceDescriptionFooter,
-  sourceDescriptionFooterKey,
   theme = 'system',
   viewed,
   walkthroughNotes,
@@ -2402,12 +2497,14 @@ export function ReviewCodeView({
   allowViewedToggle?: boolean;
   blocks?: ReadonlyArray<ReviewDiffBlock>;
   bottomInset?: number;
+  codeQualityFindings?: ReadonlyArray<PullRequestCodeQualityFinding>;
   collapsed: ReadonlySet<string>;
   comments: ReadonlyArray<ReviewComment>;
   commitMetadata: CommitMetadata | null;
   diffLineHeight?: number;
   diffStyle: CodiffDiffStyle;
   disableWorkerPool?: boolean;
+  expandedGenerated?: ReadonlySet<string>;
   files: ReadonlyArray<ChangedFile>;
   focusCommentId: string | null;
   focusCommentRequest: number;
@@ -2422,10 +2519,12 @@ export function ReviewCodeView({
   loadingSectionIds: ReadonlySet<string>;
   onActiveBlockChange?: (blockId: string) => void;
   onAskCodex?: (commentId: string) => void;
+  onCommentDraftChange?: (comment: Pick<ReviewComment, 'body' | 'id'> | null) => void;
   onCreateComment: (comment: Omit<ReviewComment, 'body' | 'id'>) => void;
   onDeleteComment: (commentId: string) => void;
   onLoadImageContent?: (request: DiffImageContentRequest) => Promise<DiffImageContentResult>;
   onLoadSection: (file: ChangedFile, section: DiffSection) => void;
+  onLoadSectionContents?: (file: ChangedFile, section: DiffSection) => Promise<FileDiffLoadedFiles>;
   onOpenFile?: (file: ChangedFile) => void;
   onRefreshMarkdown?: (file: ChangedFile, section: DiffSection) => Promise<boolean>;
   onResolveThread?: (threadId: string, resolved: boolean) => Promise<void> | void;
@@ -2447,7 +2546,6 @@ export function ReviewCodeView({
   source: ReviewSource;
   sourceDescriptionActions?: ReactNode;
   sourceDescriptionFooter?: ReactNode;
-  sourceDescriptionFooterKey?: string;
   theme?: CodiffPreferences['theme'];
   viewed: Record<string, string>;
   walkthroughNotes: ReadonlyMap<string, WalkthroughNote>;
@@ -2459,7 +2557,6 @@ export function ReviewCodeView({
   const deferredTimersRef = useRef<Set<number>>(new Set());
   const handledScrollRequestRef = useRef<number | null>(null);
   const handledHunkNavRef = useRef<number | null>(hunkNavigation?.request ?? null);
-  const measuredCommitDetailsLayoutKeyRef = useRef<string | null>(null);
   const emptyCommentDeleteTimersRef = useRef<Map<string, number>>(new Map());
   const highlightFrameRef = useRef<number | null>(null);
   const ignoreNextLineSelectionEndRef = useRef(false);
@@ -2469,15 +2566,16 @@ export function ReviewCodeView({
       ? files
       : (blocks?.map((block) => block.file).filter((file): file is ChangedFile => file != null) ??
         []);
-  const initialEditableMarkdownSections =
-    !isReadOnly && source.type === 'working-tree'
-      ? initialMarkdownFiles.flatMap((file) => {
-          const section = file.sections.at(-1);
-          return file.status !== 'deleted' && isMarkdownFilePath(file.path) && section
-            ? [section.id]
-            : [];
-        })
-      : [];
+  const initialEditableMarkdownSections = !isReadOnly
+    ? initialMarkdownFiles.flatMap((file) => {
+        const section = file.sections.at(-1);
+        return section &&
+          isMarkdownFilePath(file.path) &&
+          isEditableWorkingTreeSection(source.type, file, section)
+          ? [section.id]
+          : [];
+      })
+    : [];
   const [markdownPreviewSections, setMarkdownPreviewSections] = useState<ReadonlySet<string>>(
     () => new Set([...initialMarkdownPreviewSectionIds, ...initialEditableMarkdownSections]),
   );
@@ -2494,11 +2592,16 @@ export function ReviewCodeView({
   >({});
   const [selectedLines, setSelectedLines] = useState<CodeViewLineSelection | null>(null);
   const selectedLinesRef = useRef<CodeViewLineSelection | null>(null);
-  const commitRef = source.type === 'commit' ? source.ref : null;
-  const commitDetailsItemId = commitRef ? `commit-details:${commitRef}` : null;
+  const commitMessageMetadata = source.type === 'commit' ? commitMetadata : null;
+  const shouldShowCommitMessage = commitMessageMetadata != null;
   const shouldShowSourceDescription = showSourceDescription && source.type === 'pull-request';
-  const sourceDescription = shouldShowSourceDescription ? (source.description?.trim() ?? '') : '';
+  const sourceDescription = shouldShowCommitMessage
+    ? commitMessageMetadata.body.trim()
+    : shouldShowSourceDescription
+      ? (source.description?.trim() ?? '')
+      : '';
   const sourceDescriptionHasBody = sourceDescription.length > 0;
+  const sourceDescriptionHasContent = sourceDescriptionHasBody || shouldShowCommitMessage;
   const canEditSourceDescription =
     shouldShowSourceDescription &&
     source.canEditDescription === true &&
@@ -2507,32 +2610,35 @@ export function ReviewCodeView({
     shouldShowSourceDescription &&
     (source.canEditTitle === true || source.canEditDescription === true) &&
     onUpdateSourceTitle != null;
-  const sourceAuthor = shouldShowSourceDescription ? source.author : undefined;
-  const sourceTitle = shouldShowSourceDescription ? (source.title?.trim() ?? '') : '';
+  const sourceAuthor = shouldShowCommitMessage
+    ? getCommitDescriptionAuthor(commitMessageMetadata.author)
+    : shouldShowSourceDescription && source.author
+      ? getPullRequestDescriptionAuthor(source.author)
+      : undefined;
+  const sourceTitle = shouldShowCommitMessage
+    ? commitMessageMetadata.subject.trim() || commitMessageMetadata.shortRef
+    : shouldShowSourceDescription
+      ? (source.title?.trim() ?? '')
+      : '';
   const sourceDescriptionItemId =
-    shouldShowSourceDescription && (sourceDescription || sourceTitle)
-      ? `source-description:${source.provider ?? ''}:${source.url}`
-      : null;
-  const sourceDescriptionLabel =
-    source.type === 'pull-request' ? getPullRequestDescriptionLabel(source) : '';
-  const [commitDetailsLayoutPass, setCommitDetailsLayoutPass] = useState(0);
-  const [sourceDescriptionLayoutPass, setSourceDescriptionLayoutPass] = useState(0);
-  const [commitDetailsCollapseState, setCommitDetailsCollapseState] = useState<{
-    collapsed: boolean;
-    itemId: string | null;
-  }>({
-    collapsed: false,
-    itemId: null,
-  });
-  const commitDetailsCollapsed =
-    commitDetailsCollapseState.itemId === commitDetailsItemId
-      ? commitDetailsCollapseState.collapsed
-      : false;
+    shouldShowCommitMessage && source.type === 'commit'
+      ? `commit-message:${source.ref}`
+      : shouldShowSourceDescription && (sourceDescription || sourceTitle)
+        ? `source-description:${source.provider ?? ''}:${source.url}`
+        : null;
+  const sourceDescriptionLabel = shouldShowCommitMessage
+    ? 'Commit'
+    : source.type === 'pull-request'
+      ? getPullRequestDescriptionLabel(source)
+      : '';
+  const sourceDescriptionAriaLabel = shouldShowCommitMessage
+    ? 'Preview commit message'
+    : 'Preview source description';
   const [collapsedSourceDescriptionItemId, setCollapsedSourceDescriptionItemId] = useState<
     string | null
   >(null);
   const sourceDescriptionCollapsed =
-    (!sourceDescriptionHasBody && !canEditSourceDescription) ||
+    (!sourceDescriptionHasContent && !canEditSourceDescription) ||
     collapsedSourceDescriptionItemId === sourceDescriptionItemId;
   const toggleSourceDescriptionCollapsed = useCallback(() => {
     setCollapsedSourceDescriptionItemId((current) =>
@@ -2581,29 +2687,7 @@ export function ReviewCodeView({
     }));
   }, []);
 
-  const markCommitDetailsLayoutReady = useCallback((layoutKey: string) => {
-    // After the panel appears, ask CodeView to measure it once. Repeated renders of the same
-    // commit details should not change the item version again.
-    if (measuredCommitDetailsLayoutKeyRef.current === layoutKey) {
-      return;
-    }
-
-    measuredCommitDetailsLayoutKeyRef.current = layoutKey;
-    setCommitDetailsLayoutPass((current) => current + 1);
-  }, []);
-
-  const markSourceDescriptionLayoutReady = useCallback((_layoutKey: string) => {
-    setSourceDescriptionLayoutPass((current) => current + 1);
-  }, []);
-
-  useEffect(() => {
-    if (!commitDetailsItemId || !commitMetadata) {
-      measuredCommitDetailsLayoutKeyRef.current = null;
-    }
-  }, [commitDetailsItemId, commitMetadata]);
-
   const {
-    commitDetailsFiles,
     firstItemByBlockId,
     firstItemByPath,
     itemBlockId,
@@ -2618,56 +2702,6 @@ export function ReviewCodeView({
     const nextItemMetadata = new Map<string, CodeViewItemMetadata>();
     const nextSearchTargetsByBaseItemId = new Map<string, Array<RenderedSearchTarget>>();
     const fontLayoutKey = `line-height:${diffLineHeight}`;
-
-    if (sourceDescriptionItemId) {
-      const sourceDescriptionLayoutKey = `${sourceDescriptionItemId}:${sourceTitle}:${sourceDescription}:${sourceAuthor?.login ?? ''}:${sourceAuthor?.avatarUrl ?? ''}:${sourceDescriptionCollapsed ? 'collapsed' : 'open'}:${sourceDescriptionFooterKey ?? ''}`;
-      nextItems.push({
-        annotations: [
-          {
-            lineNumber: 1,
-            metadata: {
-              header: (
-                <>
-                  <SourceDescriptionBody
-                    author={sourceAuthor}
-                    canEdit={canEditSourceDescription}
-                    description={sourceDescription}
-                    keymap={keymap}
-                    layoutKey={sourceDescriptionLayoutKey}
-                    onLayoutReady={markSourceDescriptionLayoutReady}
-                    onUpdateDescription={onUpdateSourceDescription}
-                    onUploadDescriptionAsset={onUploadSourceDescriptionAsset}
-                  />
-                  {sourceDescriptionFooter ? (
-                    <div className="codiff-source-description-footer">
-                      {sourceDescriptionFooter}
-                    </div>
-                  ) : null}
-                </>
-              ),
-              type: 'walkthrough-header',
-            },
-          } satisfies LineAnnotation<ReviewAnnotationMetadata>,
-        ].filter(
-          () =>
-            (sourceDescriptionHasBody || canEditSourceDescription) && !sourceDescriptionCollapsed,
-        ),
-        // The header (rendered via renderCustomHeader) carries the title; the body is the
-        // collapsible content.
-        collapsed: sourceDescriptionCollapsed,
-        file: {
-          cacheKey: sourceDescriptionLayoutKey,
-          contents: ' ',
-          lang: 'text',
-          name: 'source-description.md',
-        },
-        id: sourceDescriptionItemId,
-        type: 'file',
-        version: getItemVersion(
-          `${sourceDescriptionLayoutKey}:${fontLayoutKey}:${sourceDescriptionLayoutPass}`,
-        ),
-      });
-    }
 
     for (const block of reviewBlocks) {
       if (block.header) {
@@ -2709,7 +2743,10 @@ export function ReviewCodeView({
       const reviewIdentity = block.reviewIdentity ?? getReviewIdentity(file, reviewIdentityByPath);
       const reviewKey = reviewIdentity.key;
       const isViewed = isReviewIdentityViewed(viewed, reviewIdentity);
-      const isCollapsed = collapsed.has(reviewKey) && !forceExpandedPaths.has(file.path);
+      const isCollapsed =
+        !forceExpandedPaths.has(file.path) &&
+        !expandedGenerated.has(reviewKey) &&
+        (collapsed.has(reviewKey) || isGeneratedWalkthroughFile(file));
       const visibleSections = getVisibleDiffSections(file, showWhitespace);
       const lineCount = getDiffLineCountFromVisibleSections(visibleSections);
       const sections = isCollapsed ? visibleSections.slice(0, 1) : visibleSections;
@@ -2730,9 +2767,7 @@ export function ReviewCodeView({
         const canEditMarkdown =
           canRenderMarkdown &&
           !isReadOnly &&
-          source.type === 'working-tree' &&
-          file.status !== 'deleted' &&
-          file.sections.at(-1)?.id === section.id;
+          isEditableWorkingTreeSection(source.type, file, section);
         const isMarkdownPreview = canRenderMarkdown && markdownPreviewSections.has(section.id);
         const isSelected = block.fileSelected ?? block.selected ?? selectedPath === file.path;
         const reviewVersionPrefix = `${itemVersionByKey[reviewKey] ?? 0}:${block.id}:${
@@ -2765,16 +2800,42 @@ export function ReviewCodeView({
               },
             });
           } else {
+            const isLineComment = isLineReviewComment(comment);
             annotationMap.set(key, {
-              lineNumber: comment.lineNumber,
+              lineNumber: isLineComment ? comment.lineNumber : 0,
               metadata: {
                 commentIds: [comment.id],
                 type: 'review-comment',
               },
-              side: comment.side,
+              side: isLineComment
+                ? comment.side
+                : file.status === 'deleted'
+                  ? 'deletions'
+                  : 'additions',
             });
           }
         }
+        const fileCommentAnnotations = [...annotationMap.values()].filter(
+          (annotation) => annotation.lineNumber === 0,
+        );
+        const codeQualityAnnotations = codeQualityFindings
+          .filter(
+            (finding) =>
+              finding.status !== 'resolved' &&
+              finding.filePath === file.path &&
+              lineIsVisibleInFileDiff(fileDiff, 'additions', finding.lineNumber),
+          )
+          .map(
+            (finding) =>
+              ({
+                lineNumber: finding.lineNumber,
+                metadata: {
+                  finding,
+                  type: 'code-quality',
+                },
+                side: 'additions',
+              }) satisfies DiffLineAnnotation<ReviewAnnotationMetadata>,
+          );
 
         nextItemMetadata.set(id, {
           blockId: block.id,
@@ -2797,6 +2858,7 @@ export function ReviewCodeView({
         if (canRenderImage) {
           nextItems.push({
             annotations: [
+              ...fileCommentAnnotations,
               {
                 lineNumber: 1,
                 metadata: {
@@ -2828,6 +2890,7 @@ export function ReviewCodeView({
           const markdownPreviewLayoutKey = `${section.id}:${markdownPreview.contents.length}:${markdownPreviewAddedLinesDigest}`;
           nextItems.push({
             annotations: [
+              ...fileCommentAnnotations,
               {
                 lineNumber: 1,
                 metadata: {
@@ -2861,7 +2924,7 @@ export function ReviewCodeView({
           continue;
         }
         nextItems.push({
-          annotations: [...annotationMap.values()],
+          annotations: [...annotationMap.values(), ...codeQualityAnnotations],
           collapsed: isCollapsed,
           fileDiff,
           id,
@@ -2869,57 +2932,19 @@ export function ReviewCodeView({
           version: getItemVersion(
             `${reviewVersionPrefix}:${sectionStateVersionKey}:${
               showWhitespace ? 'ws' : 'ignore-ws'
-            }:${diffStyle}:${getReviewCommentsDigest(sectionComments)}`,
+            }:${diffStyle}:${getReviewCommentsDigest(sectionComments)}:${codeQualityAnnotations
+              .map(({ metadata }) =>
+                metadata.type === 'code-quality'
+                  ? `${metadata.finding.fingerprint}:${metadata.finding.status}`
+                  : '',
+              )
+              .join(',')}`,
           ),
         });
       }
     }
 
-    // Keep all commit files visible, but only rows with rendered diff items can navigate.
-    const nextCommitDetailsFiles: ReadonlyArray<CommitDetailsFile> = commitMetadata
-      ? commitMetadata.files.map((file) => ({
-          ...file,
-          destinationItemId: nextFirstItemByPath.get(file.path) ?? null,
-        }))
-      : [];
-
-    if (commitMetadata && commitDetailsItemId) {
-      const navigationKey = nextCommitDetailsFiles
-        .map(
-          (file) => `${file.oldPath ?? ''}\u0000${file.path}\u0000${file.destinationItemId ?? ''}`,
-        )
-        .join('\u0001');
-      nextItems.unshift({
-        annotations: [
-          {
-            lineNumber: 1,
-            metadata: {
-              metadata: commitMetadata,
-              type: 'commit-details',
-            },
-          } satisfies LineAnnotation<ReviewAnnotationMetadata>,
-        ],
-        collapsed: commitDetailsCollapsed,
-        file: {
-          cacheKey: `${commitDetailsItemId}:${commitMetadata.ref}`,
-          contents: ' ',
-          lang: 'text',
-          name: commitDetailsFileName,
-        },
-        id: commitDetailsItemId,
-        type: 'file',
-        version: getItemVersion(
-          `${getCommitDetailsVersionKey(
-            commitMetadata,
-            commitDetailsLayoutPass,
-            navigationKey,
-          )}:${fontLayoutKey}:${commitDetailsCollapsed ? 'collapsed' : 'open'}`,
-        ),
-      });
-    }
-
     return {
-      commitDetailsFiles: nextCommitDetailsFiles,
       firstItemByBlockId: nextFirstItemByBlockId,
       firstItemByPath: nextFirstItemByPath,
       itemBlockId: nextItemBlockId,
@@ -2929,43 +2954,47 @@ export function ReviewCodeView({
     };
   }, [
     collapsed,
-    canEditSourceDescription,
-    commitDetailsItemId,
-    commitDetailsCollapsed,
-    commitDetailsLayoutPass,
-    commitMetadata,
+    codeQualityFindings,
     commentLayoutPassByItem,
     commentsBySection,
     diffLineHeight,
     diffStyle,
+    expandedGenerated,
     forceExpandedPaths,
     imagePreviewLayoutPassBySection,
     isReadOnly,
     itemVersionByKey,
-    keymap,
-    markSourceDescriptionLayoutReady,
     markdownPreviewLayoutPassBySection,
     markdownPreviewSections,
     onLoadImageContent,
-    onUpdateSourceDescription,
-    onUploadSourceDescriptionAsset,
     reviewBlocks,
     selectedPath,
     showWhitespace,
-    sourceAuthor,
-    sourceDescription,
-    sourceDescriptionCollapsed,
-    sourceDescriptionFooter,
-    sourceDescriptionFooterKey,
-    sourceDescriptionHasBody,
-    sourceDescriptionItemId,
-    sourceDescriptionLayoutPass,
-    sourceTitle,
     source.type,
     viewed,
     reviewIdentityByPath,
     walkthroughNotes,
   ]);
+
+  const codeViewItems = useMemo<ReadonlyArray<CodeViewItem<ReviewAnnotationMetadata>>>(() => {
+    if (items.length > 0 || !sourceDescriptionItemId) {
+      return items;
+    }
+
+    return [
+      {
+        collapsed: true,
+        file: {
+          cacheKey: sourceDescriptionItemId,
+          contents: '',
+          lang: 'text',
+          name: shouldShowCommitMessage ? 'commit-message.md' : 'source-description.md',
+        },
+        id: sourceDescriptionItemId,
+        type: 'file',
+      },
+    ];
+  }, [items, shouldShowCommitMessage, sourceDescriptionItemId]);
 
   const clearCommentLineHighlight = useCallback(() => {
     codeViewRef.current?.clearSelectedLines();
@@ -3005,6 +3034,59 @@ export function ReviewCodeView({
     }
     emptyCommentDeleteTimersRef.current.clear();
   }, []);
+
+  const scrollFileItemToTop = useCallback((itemId: string) => {
+    const handle = codeViewRef.current;
+    const viewer = handle?.getInstance();
+    if (!handle || !viewer || viewer.getTopForItem(itemId) == null) {
+      return;
+    }
+
+    handle.scrollTo({
+      behavior: 'smooth-auto',
+      id: itemId,
+      offset: DEFAULT_PADDING,
+      type: 'item',
+    });
+  }, []);
+
+  const canCreateFileComments =
+    !isReadOnly && source.type === 'pull-request' && source.provider === 'gitlab';
+
+  const createFileComment = useCallback(
+    (meta: CodeViewItemMetadata, itemId: string) => {
+      if (!canCreateFileComments) {
+        return;
+      }
+
+      cancelPendingEmptyCommentDeletes();
+      scrollFileItemToTop(itemId);
+      if (meta.isCollapsed) {
+        onToggleCollapsed(meta.file, true, meta.reviewIdentity.key);
+      }
+      if (meta.isMarkdownPreview) {
+        setMarkdownPreviewSections((current) => {
+          const next = new Set(current);
+          next.delete(meta.section.id);
+          return next;
+        });
+      }
+      onCreateComment({
+        anchor: 'file',
+        filePath: meta.file.path,
+        sectionId: meta.section.id,
+      });
+      clearCommentLineHighlight();
+    },
+    [
+      canCreateFileComments,
+      cancelPendingEmptyCommentDeletes,
+      clearCommentLineHighlight,
+      onCreateComment,
+      onToggleCollapsed,
+      scrollFileItemToTop,
+    ],
+  );
 
   const createCommentForRange = useCallback(
     (
@@ -3051,6 +3133,26 @@ export function ReviewCodeView({
     ],
   );
 
+  // Lets the library fetch full file contents when the user expands unchanged
+  // context on a patch-only diff; the partial FileDiffMetadata is hydrated in
+  // place (see `parseSectionDiffWithOptions` for the identity contract).
+  const loadDiffFiles = useMemo(() => {
+    if (!onLoadSectionContents || isReadOnly) {
+      return undefined;
+    }
+
+    return (fileDiff: FileDiffMetadata) => {
+      const target = getSectionForFileDiff(fileDiff);
+      if (!target) {
+        return Promise.reject(
+          new Error(`No loadable diff section registered for '${fileDiff.name}'.`),
+        );
+      }
+
+      return loadSectionContents(target.file, target.section, onLoadSectionContents);
+    };
+  }, [isReadOnly, onLoadSectionContents]);
+
   const codeViewOptions: CodeViewOptions<ReviewAnnotationMetadata> = useMemo(
     () =>
       ({
@@ -3068,6 +3170,7 @@ export function ReviewCodeView({
           paddingBottom: bottomInset,
         },
         lineHoverHighlight: 'both',
+        loadDiffFiles,
         onGutterUtilityClick: (range, context) => {
           if (isReadOnly) {
             return;
@@ -3088,10 +3191,7 @@ export function ReviewCodeView({
             return;
           }
 
-          if (
-            meta.section.loadState === 'deferred' &&
-            shouldLoadDiffSectionContents(meta.section)
-          ) {
+          if (shouldLoadDiffSectionContents(meta.section)) {
             onLoadSection(meta.file, meta.section);
             return;
           }
@@ -3131,14 +3231,6 @@ export function ReviewCodeView({
         onPostRender: (node, _instance, _phase, context) => {
           const metadata = itemMetadata.get(context.item.id);
           const isWalkthroughHeaderItem = context.item.id.endsWith(':walkthrough-header');
-          node.classList.toggle(
-            'codiff-commit-details-item',
-            context.item.id === commitDetailsItemId,
-          );
-          node.classList.toggle(
-            'codiff-source-description-item',
-            context.item.id === sourceDescriptionItemId,
-          );
           node.classList.toggle('codiff-walkthrough-header-item', isWalkthroughHeaderItem);
           node.classList.toggle('codiff-selected-item', metadata?.isSelected === true);
           node.classList.toggle(
@@ -3152,8 +3244,7 @@ export function ReviewCodeView({
           );
           node.classList.toggle(
             'codiff-loadable-summary-item',
-            metadata?.section.loadState === 'deferred' &&
-              shouldLoadDiffSectionContents(metadata.section),
+            metadata != null && shouldLoadDiffSectionContents(metadata.section),
           );
           node.classList.toggle(
             'codiff-loading-summary-item',
@@ -3173,33 +3264,37 @@ export function ReviewCodeView({
     [
       bottomInset,
       cancelPendingEmptyCommentDeletes,
-      commitDetailsItemId,
       createCommentForRange,
       diffStyle,
       isReadOnly,
       itemMetadata,
+      loadDiffFiles,
       loadingSectionIds,
       onCreateComment,
       onLoadSection,
-      sourceDescriptionItemId,
       theme,
       wordWrap,
     ],
   );
 
-  const focusComment = useCallback((comment: ReviewComment) => {
-    const timer = emptyCommentDeleteTimersRef.current.get(comment.id);
-    if (timer == null) {
-      return;
-    }
+  const focusComment = useCallback(
+    (comment: ReviewComment) => {
+      onCommentDraftChange?.({ body: comment.body, id: comment.id });
+      const timer = emptyCommentDeleteTimersRef.current.get(comment.id);
+      if (timer == null) {
+        return;
+      }
 
-    window.clearTimeout(timer);
-    deferredTimersRef.current.delete(timer);
-    emptyCommentDeleteTimersRef.current.delete(comment.id);
-  }, []);
+      window.clearTimeout(timer);
+      deferredTimersRef.current.delete(timer);
+      emptyCommentDeleteTimersRef.current.delete(comment.id);
+    },
+    [onCommentDraftChange],
+  );
 
   const blurComment = useCallback(
     (comment: ReviewComment, body: string) => {
+      onCommentDraftChange?.(null);
       clearCommentLineHighlight();
       if (!comment.isReadOnly && body.trim().length === 0) {
         const existingTimer = emptyCommentDeleteTimersRef.current.get(comment.id);
@@ -3217,7 +3312,7 @@ export function ReviewCodeView({
         emptyCommentDeleteTimersRef.current.set(comment.id, timer);
       }
     },
-    [clearCommentLineHighlight, onDeleteComment],
+    [clearCommentLineHighlight, onCommentDraftChange, onDeleteComment],
   );
 
   const replyToThread = useCallback(
@@ -3225,10 +3320,11 @@ export function ReviewCodeView({
       clearCommentLineHighlight();
       cancelPendingEmptyCommentDeletes();
       onCreateComment({
+        ...(isFileReviewComment(comment) ? { anchor: 'file' as const } : {}),
         filePath: comment.filePath,
-        lineNumber: comment.lineNumber,
+        ...(comment.lineNumber != null ? { lineNumber: comment.lineNumber } : {}),
         sectionId: comment.sectionId,
-        side: comment.side,
+        ...(comment.side ? { side: comment.side } : {}),
         ...(comment.startLineNumber != null ? { startLineNumber: comment.startLineNumber } : {}),
         ...(comment.startSide ? { startSide: comment.startSide } : {}),
         threadId,
@@ -3261,8 +3357,7 @@ export function ReviewCodeView({
       clearCommentLineHighlight();
       if (
         markdownPreviewSections.has(section.id) &&
-        source.type === 'working-tree' &&
-        file.status !== 'deleted'
+        isEditableWorkingTreeSection(source.type, file, section)
       ) {
         if (refreshingMarkdownSectionsRef.current.has(section.id)) {
           return;
@@ -3325,13 +3420,6 @@ export function ReviewCodeView({
       return true;
     },
     [],
-  );
-
-  const scrollToCommitDetailsDestination = useCallback(
-    (itemId: string) => {
-      requestScrollItemHeaderIntoView(itemId, 'smooth');
-    },
-    [requestScrollItemHeaderIntoView],
   );
 
   useLayoutEffect(() => {
@@ -3421,10 +3509,6 @@ export function ReviewCodeView({
     };
 
     for (const item of items) {
-      if (item.id === commitDetailsItemId || item.id === sourceDescriptionItemId) {
-        continue;
-      }
-
       const itemTop = viewer.getTopForItem(item.id);
       if (itemTop == null) {
         continue;
@@ -3487,12 +3571,28 @@ export function ReviewCodeView({
       }
 
       for (const comment of meta.comments) {
-        addLineEntry(comment.lineNumber, comment.side, {
-          end: comment.lineNumber,
-          endSide: comment.side,
-          side: comment.side,
-          start: comment.lineNumber,
-        });
+        if (!isLineReviewComment(comment)) {
+          push({
+            itemId: item.id,
+            key: `file-comment:${item.id}:${comment.id}`,
+            scrollTarget: {
+              align: 'start',
+              behavior: 'smooth-auto',
+              id: item.id,
+              offset: DEFAULT_PADDING,
+              type: 'item',
+            },
+            selection: null,
+            top: itemTop,
+          });
+        } else {
+          addLineEntry(comment.lineNumber, comment.side, {
+            end: comment.lineNumber,
+            endSide: comment.side,
+            side: comment.side,
+            start: comment.lineNumber,
+          });
+        }
       }
 
       entries.sort((a, b) => a.renderedIndex - b.renderedIndex);
@@ -3554,16 +3654,7 @@ export function ReviewCodeView({
       clearCommentLineHighlight();
     }
     handle.scrollTo(target.scrollTarget);
-  }, [
-    clearCommentLineHighlight,
-    commitDetailsItemId,
-    diffLineHeight,
-    diffStyle,
-    hunkNavigation,
-    itemMetadata,
-    items,
-    sourceDescriptionItemId,
-  ]);
+  }, [clearCommentLineHighlight, diffLineHeight, diffStyle, hunkNavigation, itemMetadata, items]);
 
   // Enter on a navigated hunk starts a review comment on its selection and moves
   // focus into the new comment input.
@@ -3691,44 +3782,73 @@ export function ReviewCodeView({
     scheduleSearchHighlights();
   }, [resolvedActiveSearchMatch, scheduleSearchHighlights]);
 
+  // Rendered as a non-virtualized element at the top of the CodeView scroll
+  // content. Height changes (async markdown layout, editing) are re-measured
+  // by the viewer automatically.
+  const renderCodeViewHeader = useCallback(
+    () => (
+      <div className="codiff-source-description-panel codiff-code-view-source-description">
+        <SourceDescriptionHeader
+          actions={sourceDescriptionActions}
+          canCollapse={sourceDescription.length > 0 || canEditSourceDescription}
+          canEditTitle={canEditSourceTitle}
+          isCollapsed={sourceDescriptionCollapsed}
+          label={sourceDescriptionLabel}
+          onToggleCollapsed={toggleSourceDescriptionCollapsed}
+          onUpdateTitle={onUpdateSourceTitle}
+          title={sourceTitle}
+        />
+        {!sourceDescriptionCollapsed &&
+        (sourceDescriptionHasContent || canEditSourceDescription) ? (
+          <div className="codiff-source-description-panel-body">
+            <SourceDescriptionBody
+              ariaLabel={sourceDescriptionAriaLabel}
+              author={sourceAuthor}
+              canEdit={canEditSourceDescription}
+              description={sourceDescription}
+              keymap={keymap}
+              layoutKey="code-view-header"
+              onLayoutReady={noopLayoutReady}
+              onUpdateDescription={onUpdateSourceDescription}
+              onUploadDescriptionAsset={onUploadSourceDescriptionAsset}
+            />
+            {sourceDescriptionFooter ? (
+              <div className="codiff-source-description-footer">{sourceDescriptionFooter}</div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    ),
+    [
+      canEditSourceDescription,
+      canEditSourceTitle,
+      keymap,
+      onUpdateSourceDescription,
+      onUpdateSourceTitle,
+      onUploadSourceDescriptionAsset,
+      sourceAuthor,
+      sourceDescription,
+      sourceDescriptionActions,
+      sourceDescriptionAriaLabel,
+      sourceDescriptionCollapsed,
+      sourceDescriptionFooter,
+      sourceDescriptionHasContent,
+      sourceDescriptionLabel,
+      sourceTitle,
+      toggleSourceDescriptionCollapsed,
+    ],
+  );
+
   const renderCustomHeader = useCallback(
     (item: CodeViewItem<ReviewAnnotationMetadata>) => {
-      if (item.id === commitDetailsItemId) {
-        return commitMetadata ? (
-          <CommitDetailsHeader
-            isCollapsed={commitDetailsCollapsed}
-            metadata={commitMetadata}
-            onToggleCollapsed={() =>
-              setCommitDetailsCollapseState((current) => ({
-                collapsed: current.itemId === commitDetailsItemId ? !current.collapsed : true,
-                itemId: commitDetailsItemId,
-              }))
-            }
-          />
-        ) : null;
-      }
-
-      if (item.id === sourceDescriptionItemId) {
-        return (
-          <SourceDescriptionHeader
-            actions={sourceDescriptionActions}
-            canCollapse={sourceDescription.length > 0 || canEditSourceDescription}
-            canEditTitle={canEditSourceTitle}
-            isCollapsed={sourceDescriptionCollapsed}
-            label={sourceDescriptionLabel}
-            onToggleCollapsed={toggleSourceDescriptionCollapsed}
-            onUpdateTitle={onUpdateSourceTitle}
-            title={sourceTitle}
-          />
-        );
-      }
-
       const meta = itemMetadata.get(item.id);
       return meta ? (
         <CodeViewHeader
           allowViewedToggle={allowViewedToggle}
+          canCreateFileComment={canCreateFileComments}
           isSectionLoading={loadingSectionIds.has(meta.section.id)}
           meta={meta}
+          onCreateFileComment={() => createFileComment(meta, item.id)}
           onLoadSection={onLoadSection}
           onOpenFile={onOpenFile}
           onToggleCollapsed={onToggleCollapsed}
@@ -3739,12 +3859,9 @@ export function ReviewCodeView({
       ) : null;
     },
     [
-      commitDetailsItemId,
-      commitDetailsCollapsed,
-      commitMetadata,
       allowViewedToggle,
-      canEditSourceDescription,
-      canEditSourceTitle,
+      canCreateFileComments,
+      createFileComment,
       itemMetadata,
       isReadOnly,
       loadingSectionIds,
@@ -3752,14 +3869,6 @@ export function ReviewCodeView({
       onOpenFile,
       onToggleCollapsed,
       onToggleViewed,
-      onUpdateSourceTitle,
-      sourceDescription,
-      sourceDescriptionCollapsed,
-      sourceDescriptionItemId,
-      sourceDescriptionLabel,
-      sourceDescriptionActions,
-      sourceTitle,
-      toggleSourceDescriptionCollapsed,
       toggleMarkdownPreview,
     ],
   );
@@ -3798,23 +3907,19 @@ export function ReviewCodeView({
         );
       }
 
-      if (annotation.metadata.type === 'commit-details') {
-        return (
-          <CommitDetailsPanel
-            files={commitDetailsFiles}
-            layoutKey={getCommitDetailsContentKey(annotation.metadata.metadata)}
-            metadata={annotation.metadata.metadata}
-            onLayoutReady={markCommitDetailsLayoutReady}
-            onSelectFileDestination={scrollToCommitDetailsDestination}
-          />
-        );
-      }
-
       if (annotation.metadata.type === 'walkthrough-header') {
         return annotation.metadata.header;
       }
 
-      return item.type === 'diff' ? (
+      if (annotation.metadata.type === 'code-quality') {
+        return (
+          <CodeQualityAnnotation
+            annotation={annotation as DiffLineAnnotation<CodeQualityAnnotationMetadata>}
+          />
+        );
+      }
+
+      return (
         <ReviewAnnotation
           agentId={agentId}
           agentLabel={agentLabel}
@@ -3827,6 +3932,7 @@ export function ReviewCodeView({
           keymap={keymap}
           onAskCodex={onAskCodex}
           onCommentBlur={blurComment}
+          onCommentDraftChange={onCommentDraftChange}
           onCommentFocus={focusComment}
           onDeleteComment={deleteComment}
           onHeightChange={() => markCommentLayoutChanged(item.id)}
@@ -3836,13 +3942,12 @@ export function ReviewCodeView({
           onSubmitComment={onSubmitComment}
           onUpdateComment={onUpdateComment}
         />
-      ) : null;
+      );
     },
     [
       agentId,
       agentLabel,
       blurComment,
-      commitDetailsFiles,
       deleteComment,
       focusCommentId,
       focusCommentRequest,
@@ -3851,11 +3956,11 @@ export function ReviewCodeView({
       isPullRequest,
       itemMetadata,
       keymap,
-      markCommitDetailsLayoutReady,
       markMarkdownPreviewLayoutReady,
       markImagePreviewLayoutReady,
       markCommentLayoutChanged,
       onAskCodex,
+      onCommentDraftChange,
       onLoadImageContent,
       onResolveThread,
       onSaveCommentEdit,
@@ -3863,7 +3968,6 @@ export function ReviewCodeView({
       onUpdateComment,
       renderComments,
       replyToThread,
-      scrollToCommitDetailsDestination,
       setMarkdownEditorRef,
       source,
     ],
@@ -3906,12 +4010,13 @@ export function ReviewCodeView({
     <CodeView
       className="code-view"
       disableWorkerPool={disableWorkerPool}
-      items={items}
+      items={codeViewItems}
       onScroll={handleScroll}
       onSelectedLinesChange={setCodeViewSelectedLines}
       options={codeViewOptions}
       ref={codeViewRef}
       renderAnnotation={renderAnnotation}
+      renderCodeViewHeader={sourceDescriptionItemId ? renderCodeViewHeader : undefined}
       renderCustomHeader={renderCustomHeader}
       selectedLines={isReadOnly ? null : selectedLines}
     />
@@ -3927,12 +4032,13 @@ export function ReviewCodeView({
       <CodeView
         className="code-view"
         disableWorkerPool={false}
-        items={items}
+        items={codeViewItems}
         onScroll={handleScroll}
         onSelectedLinesChange={setCodeViewSelectedLines}
         options={codeViewOptions}
         ref={codeViewRef}
         renderAnnotation={renderAnnotation}
+        renderCodeViewHeader={sourceDescriptionItemId ? renderCodeViewHeader : undefined}
         renderCustomHeader={renderCustomHeader}
         selectedLines={isReadOnly ? null : selectedLines}
       />

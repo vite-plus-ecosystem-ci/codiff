@@ -1,11 +1,5 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type PointerEvent as ReactPointerEvent,
-} from 'react';
+import type { FileDiffLoadedFiles } from '@pierre/diffs';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CommandBar } from './app/components/CommandBar.tsx';
 import { KeyboardShortcutsHelp } from './app/components/KeyboardShortcutsHelp.tsx';
 import {
@@ -27,12 +21,23 @@ import { CommitView } from './app/components/walkthrough/CommitView.tsx';
 import {
   NarrativeWalkthroughView,
   type WalkthroughBlockScrollTarget,
-  type WalkthroughReviewTarget,
 } from './app/components/walkthrough/NarrativeWalkthroughView.tsx';
-import { useNarrativeNavigation } from './app/components/walkthrough/useNarrativeNavigation.ts';
-import type { WalkthroughFileError } from './app/components/WalkthroughFileError.tsx';
+import { WalkthroughDiffSurface } from './app/components/walkthrough/WalkthroughDiffSurface.tsx';
+import { WalkthroughProgress } from './app/components/walkthrough/WalkthroughProgress.tsx';
+import { useAppCommands } from './app/hooks/useAppCommands.ts';
+import { useAppKeyboardShortcuts } from './app/hooks/useAppKeyboardShortcuts.ts';
+import { useAppReviewComments } from './app/hooks/useAppReviewComments.ts';
+import { useAppWalkthrough } from './app/hooks/useAppWalkthrough.ts';
+import { useDiffSearch } from './app/hooks/useDiffSearch.ts';
+import {
+  getCodeFontLineHeight,
+  normalizeCodeFontSizePreference,
+  useDocumentAppearance,
+} from './app/hooks/useDocumentAppearance.ts';
+import { useResizableSidebar } from './app/hooks/useResizableSidebar.ts';
+import { useReviewFileState } from './app/hooks/useReviewState.ts';
 import { createDefaultConfig } from './config/defaults.ts';
-import { getShortcutLabel, matchesShortcut } from './config/keymap.ts';
+import { getShortcutLabel } from './config/keymap.ts';
 import type { CodiffConfig } from './config/types.ts';
 import {
   defaultAgentSkillStatus,
@@ -43,58 +48,37 @@ import {
 } from './lib/app-constants.ts';
 import {
   type CodeViewInstance,
-  type DiffSearchResult,
   type RepositoryLoadError,
-  type ReviewComment,
   type ReviewIdentity,
   type ReviewScrollBehavior,
   type ReviewScrollTarget,
-  type SidebarMode,
   type SourceSession,
   type WalkthroughNote,
-  type WalkthroughError,
 } from './lib/app-types.ts';
-import { DEFAULT_PADDING } from './lib/code-view-options.ts';
-import { type Command, createCommandRegistry } from './lib/command-registry.ts';
-import { getDiffSearchResult } from './lib/diff-search.ts';
 import {
-  fileHasVisibleDiff,
-  getFirstVisibleSection,
-  getItemId,
   isPatchOnlyDiffSection,
   shouldLoadDiffSectionContents,
+  shouldPreloadSectionContentsForSearch,
 } from './lib/diff.ts';
-import { compactPath, fuzzyMatches, sortFiles } from './lib/files.ts';
-import { isNativeInputTarget } from './lib/keyboard.ts';
-import { buildCommitModel, buildGenericCommitModel } from './lib/narrative-walkthrough.ts';
+import { compactPath, sortFiles } from './lib/files.ts';
 import {
   consumeReloadSelection,
+  getChangedPaths,
   getReloadDeltaPaths,
   getReloadHistorySource,
+  getReloadMainMode,
   getReloadSelectionPath,
   writeReloadSelection,
 } from './lib/reload-selection.ts';
-import {
-  createReviewCommandTarget,
-  resolveReviewCommandTarget,
-  type ReviewCommandTarget,
-} from './lib/review-command-target.ts';
+import { resolveReviewCommandTarget } from './lib/review-command-target.ts';
 import {
   buildReviewCommentsMarkdown,
-  getCommentKey,
-  getReviewCommentRangeProps,
   getReviewCommentsFromState,
   getVisibleReviewComments,
 } from './lib/review-comments.ts';
-import {
-  getFileReviewIdentity,
-  isReviewIdentityViewed,
-  updateReviewIdentityCollapsed,
-  updateReviewIdentityViewed,
-} from './lib/review-identity.ts';
+import { getSelectedPathFromScroll } from './lib/review-scroll.ts';
 import {
   SIDEBAR_COLLAPSE_THRESHOLD,
-  clampSidebarWidth,
   readSidebarWidth,
   writeSidebarWidth,
 } from './lib/sidebar-width.ts';
@@ -102,6 +86,7 @@ import {
   getEmptySourceDetail,
   getEmptySourceTitle,
   getHistorySource,
+  getRefreshSource,
   getRepositoryLoadError,
   getSourceKey,
   getSourceLabel,
@@ -119,25 +104,14 @@ import type {
   CodiffPreferences,
   GitIdentity,
   HistoryEntry,
-  PullRequestReviewEvent,
   RepositoryState,
-  ReviewAssistantRequest,
   ReviewSource,
-  SharedWalkthroughSnapshot,
   TerminalHelperStatus,
-  NarrativeWalkthrough,
-  WalkthroughCommitMessageRequest,
-  WalkthroughCommitRequest,
   DiffSection,
 } from './types.ts';
 
 const emptyWalkthroughNotes = new Map<string, WalkthroughNote>();
-const emptyFiles: ReadonlyArray<ChangedFile> = [];
-const walkthroughCodeViewBottomInset = 96;
-type MainMode = 'review' | 'commit';
-const CODE_FONT_SIZE_DEFAULT = 13;
-const CODE_FONT_SIZE_MAX = 32;
-const CODE_FONT_SIZE_MIN = 10;
+const disableCodeViewWorkerPool = process.env.NODE_ENV === 'test';
 
 const getFailedSectionLoadState = (section: DiffSection): DiffSection =>
   isPatchOnlyDiffSection(section)
@@ -161,15 +135,6 @@ const getPreferencesFromConfig = ({ settings }: CodiffConfig): CodiffPreferences
   ...settings,
 });
 
-const normalizeCodeFontSizePreference = (size: number) =>
-  Number.isFinite(size)
-    ? Math.min(CODE_FONT_SIZE_MAX, Math.max(CODE_FONT_SIZE_MIN, Math.round(size)))
-    : CODE_FONT_SIZE_DEFAULT;
-
-const getCodeFontLineHeight = (size: number) => Math.round((size * 20) / 13);
-
-const ignoreWalkthroughPathScroll = () => {};
-
 const defaultPreferences = getPreferencesFromConfig(createDefaultConfig());
 
 const getCollapsedViewedPaths = (
@@ -179,6 +144,26 @@ const getCollapsedViewedPaths = (
   new Set(
     files.filter((file) => viewedFiles[file.path] === file.fingerprint).map((file) => file.path),
   );
+
+const updateWalkthroughOutdatedPathsForRefresh = (
+  current: ReadonlySet<string>,
+  changedPaths: ReadonlySet<string>,
+  files: ReadonlyArray<ChangedFile>,
+) => {
+  const filePaths = new Set(files.map((file) => file.path));
+  const next = new Set<string>();
+  for (const path of current) {
+    if (filePaths.has(path)) {
+      next.add(path);
+    }
+  }
+  for (const path of changedPaths) {
+    if (filePaths.has(path)) {
+      next.add(path);
+    }
+  }
+  return next;
+};
 
 const getReloadSourceForLaunch = (
   reloadSelection: ReturnType<typeof consumeReloadSelection>,
@@ -198,21 +183,13 @@ const getReloadSourceForLaunch = (
 };
 
 export default function App() {
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
-  const [activeDiffSearchMatchIndex, setActiveDiffSearchMatchIndex] = useState(0);
-  const [diffSearchFocusRequest, setDiffSearchFocusRequest] = useState(0);
-  const [diffSearchQuery, setDiffSearchQuery] = useState('');
-  const [diffSearchVisible, setDiffSearchVisible] = useState(false);
   const [loadError, setLoadError] = useState<RepositoryLoadError | null>(null);
-  const [focusCommentId, setFocusCommentId] = useState<string | null>(null);
-  const [focusCommentRequest, setFocusCommentRequest] = useState(0);
   const [gitIdentity, setGitIdentity] = useState<GitIdentity | null>(null);
   const [historyEntries, setHistoryEntries] = useState<ReadonlyArray<HistoryEntry>>([]);
   const [historyHasMore, setHistoryHasMore] = useState(true);
   const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE_SIZE);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historySource, setHistorySource] = useState<ReviewSource | null>(null);
-  const [itemVersionByKey, setItemVersionByKey] = useState<Record<string, number>>({});
   const [localChangesDetected, setLocalChangesDetected] = useState(false);
   const [launchOptions, setLaunchOptions] = useState<CodiffLaunchOptions>(defaultLaunchOptions);
   const [codiffConfig, setCodiffConfig] = useState<CodiffConfig>(createDefaultConfig);
@@ -220,10 +197,7 @@ export default function App() {
   const [agentSkillStatus, setAgentSkillStatus] =
     useState<AgentSkillStatus>(defaultAgentSkillStatus);
   const [preferences, setPreferences] = useState<CodiffPreferences>(defaultPreferences);
-  const [reviewComments, setReviewComments] = useState<ReadonlyArray<ReviewComment>>([]);
   const [reloadDeltaPaths, setReloadDeltaPaths] = useState<ReadonlySet<string>>(() => new Set());
-  const [pullRequestReviewSubmitting, setPullRequestReviewSubmitting] =
-    useState<PullRequestReviewEvent | null>(null);
   const [scrollTarget, setScrollTarget] = useState<ReviewScrollTarget | null>(null);
   const [fileSearchQuery, setFileSearchQuery] = useState('');
   const [historySearchQuery, setHistorySearchQuery] = useState('');
@@ -231,30 +205,14 @@ export default function App() {
   const [pendingSource, setPendingSource] = useState<ReviewSource | null>(null);
   const [planDocument, setPlanDocument] = useState<CodiffMarkdownDocument | null>(null);
   const [planLoadError, setPlanLoadError] = useState<string | null>(null);
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [loadingSectionIds, setLoadingSectionIds] = useState<ReadonlySet<string>>(() => new Set());
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
-  const [sidebarMode, setSidebarMode] = useState<SidebarMode>('tree');
-  const [sidebarWidth, setSidebarWidth] = useState<number>(() => readSidebarWidth());
   const [state, setState] = useState<RepositoryState | null>(null);
   const [terminalHelperInstalling, setTerminalHelperInstalling] = useState(false);
   const [terminalHelperStatus, setTerminalHelperStatus] = useState<TerminalHelperStatus>(
     defaultTerminalHelperStatus,
   );
-  const [viewed, setViewed] = useState<Record<string, string>>({});
-  const [narrativeWalkthrough, setNarrativeWalkthrough] = useState<NarrativeWalkthrough | null>(
-    null,
-  );
-  const [walkthroughError, setWalkthroughError] = useState<WalkthroughError | null>(null);
-  const [walkthroughFileError, setWalkthroughFileError] = useState<WalkthroughFileError | null>(
-    null,
-  );
-  const [walkthroughLoading, setWalkthroughLoading] = useState(false);
-  const [walkthroughUnread, setWalkthroughUnread] = useState(false);
-  const [walkthroughSharing, setWalkthroughSharing] = useState(false);
   const [sharePlanEnabled, setSharePlanEnabled] = useState(false);
-  const [shareWalkthroughEnabled, setShareWalkthroughEnabled] = useState(false);
-  const [mainMode, setMainMode] = useState<MainMode>('review');
   const historyRequestRef = useRef(0);
   const historySourceRef = useRef<ReviewSource | null>(null);
   const loadingSectionKeysRef = useRef<Set<string>>(new Set());
@@ -262,45 +220,155 @@ export default function App() {
   const programmaticScrollTimerRef = useRef<number | null>(null);
   const sourceSessionsRef = useRef<Map<string, SourceSession>>(new Map());
   const stateRef = useRef<RepositoryState | null>(null);
-  const activeReviewCommandTargetRef = useRef<ReviewCommandTarget | null>(null);
   const collapsedRef = useRef<Set<string>>(new Set());
+  const expandedGeneratedRef = useRef<Set<string>>(new Set());
   const preferencesRef = useRef<CodiffPreferences>(defaultPreferences);
-  const reviewCommentsRef = useRef<ReadonlyArray<ReviewComment>>([]);
   const selectedPathRef = useRef<string | null>(null);
-  const sidebarModeRef = useRef<SidebarMode>('tree');
-  const mainModeRef = useRef<MainMode>('review');
   const sourceRequestRef = useRef(0);
   const stateGenerationRef = useRef(0);
   const markdownRefreshQueueRef = useRef<Promise<void>>(Promise.resolve());
   const viewedRef = useRef<Record<string, string>>({});
-  const narrativeWalkthroughRef = useRef<NarrativeWalkthrough | null>(null);
-  const navigationResetKey = state ? `${state.root}:${getSourceKey(state.source)}` : '';
-  const narrativeNavigation = useNarrativeNavigation(
-    narrativeWalkthrough,
-    state?.files ?? emptyFiles,
-    navigationResetKey,
+  const persistViewed = useCallback((nextViewed: Record<string, string>) => {
+    const currentState = stateRef.current;
+    if (currentState && usesViewedFileState(currentState.source)) {
+      writeViewed(currentState.root, nextViewed);
+    }
+  }, []);
+  const {
+    bumpItemVersion,
+    collapsed,
+    expandedGenerated,
+    itemVersionByKey,
+    selectedPath,
+    setCollapsed,
+    setExpandedGenerated,
+    setItemVersionByKey,
+    setSelectedPath,
+    setViewed,
+    toggleCollapsed,
+    toggleViewed: toggleReviewViewed,
+    viewed,
+  } = useReviewFileState({ onViewedChange: persistViewed });
+  const toggleViewed = useCallback(
+    (file: ChangedFile, isViewed: boolean, reviewIdentity?: ReviewIdentity) => {
+      if (!stateRef.current) {
+        return;
+      }
+      if (reviewIdentity) {
+        toggleReviewViewed(file, isViewed, reviewIdentity);
+      } else {
+        toggleReviewViewed(file, isViewed);
+      }
+    },
+    [toggleReviewViewed],
   );
-  const walkthroughErrorRef = useRef<WalkthroughError | null>(null);
-  const [commandBarVisible, setCommandBarVisible] = useState(false);
-  const [commandBarCommands, setCommandBarCommands] = useState<ReadonlyArray<Command>>([]);
-  const [shortcutsHelpVisible, setShortcutsHelpVisible] = useState(false);
+  const {
+    askCodex,
+    createComment,
+    deleteComment,
+    focusCommentId,
+    focusCommentRequest,
+    hasPendingReviewComments,
+    pullRequestReviewSubmitting,
+    resetCommentFocus,
+    reviewComments,
+    reviewCommentsRef,
+    setReviewComments,
+    submitPullRequestComment,
+    submitPullRequestReview,
+    updateActiveReviewCommentDraft,
+    updateComment,
+  } = useAppReviewComments({
+    isReviewActionDisabled: isPullRequestReviewActionDisabled,
+    onCommentFileChange: bumpItemVersion,
+    stateRef,
+  });
+  const collapseSidebar = useCallback(() => {
+    setSidebarCollapsed(true);
+  }, []);
+  const { resizeSidebar, sidebarWidth } = useResizableSidebar({
+    collapseThreshold: SIDEBAR_COLLAPSE_THRESHOLD,
+    onCollapse: collapseSidebar,
+    onWidthCommit: writeSidebarWidth,
+    readWidth: readSidebarWidth,
+  });
+  const {
+    activeReviewCommandTargetRef,
+    changeSidebarMode,
+    closeCommitView,
+    commitWalkthrough,
+    enabledShareWalkthrough,
+    mainModeRef,
+    narrativeNavigation,
+    narrativeWalkthrough,
+    narrativeWalkthroughRef,
+    openCommitView,
+    plainCommitModel,
+    regenerateWalkthrough,
+    setMainMode,
+    setNarrativeWalkthrough,
+    setShareWalkthroughEnabled,
+    setSidebarMode,
+    setWalkthroughError,
+    setWalkthroughFileError,
+    setWalkthroughLoading,
+    setWalkthroughOutdatedPaths,
+    setWalkthroughUnread,
+    showNarrativeWalkthrough,
+    showPlainCommitView,
+    sidebarMode,
+    sidebarModeRef,
+    startWalkthroughLoading,
+    subscribeToCommitOutput,
+    updateActiveWalkthroughReviewTarget,
+    updateWalkthroughCommitMessage,
+    walkthroughError,
+    walkthroughErrorRef,
+    walkthroughFileError,
+    walkthroughLoading,
+    walkthroughOutdatedPaths,
+    walkthroughOutdatedPathsRef,
+    walkthroughProgress,
+    walkthroughSharing,
+    walkthroughUnread,
+  } = useAppWalkthrough({
+    preferencesRef,
+    state,
+    stateGenerationRef,
+    stateRef,
+  });
   const [hunkNavigation, setHunkNavigation] = useState<{
     direction: 1 | -1;
     request: number;
   } | null>(null);
-  const commandRegistryRef = useRef(createCommandRegistry());
+  const showWhitespace = preferences.showWhitespace;
+  const orderedFiles = useMemo(() => (state ? sortFiles(state.files) : []), [state]);
+  const {
+    activeMatch: activeDiffSearchMatch,
+    activeMatchIndex: effectiveActiveDiffSearchMatchIndex,
+    closeSearch: closeDiffSearch,
+    fileFilteredFiles,
+    focusRequest: diffSearchFocusRequest,
+    hasQuery: hasDiffSearchQuery,
+    matches: diffSearchMatches,
+    matchPathSet: diffSearchMatchPathSet,
+    moveMatch: moveDiffSearchMatch,
+    openSearch: openDiffSearch,
+    query: diffSearchQuery,
+    resetSearch: resetDiffSearch,
+    updateQuery: updateDiffSearchQuery,
+    visible: diffSearchVisible,
+    visibleFiles,
+  } = useDiffSearch({
+    files: orderedFiles,
+    fileSearchQuery,
+    showWhitespace,
+  });
 
   const navigateHunks = useCallback((direction: 1 | -1) => {
     setHunkNavigation((current) => ({
       direction,
       request: (current?.request ?? 0) + 1,
-    }));
-  }, []);
-
-  const bumpItemVersion = useCallback((key: string) => {
-    setItemVersionByKey((current) => ({
-      ...current,
-      [key]: (current[key] ?? 0) + 1,
     }));
   }, []);
 
@@ -401,11 +469,45 @@ export default function App() {
     [bumpItemVersion],
   );
 
+  // Fetches full file contents for a patch-only section so the CodeView
+  // `loadDiffFiles` option can hydrate the rendered diff in place. Unlike
+  // `loadDiffSection`, this must not touch React state: replacing the section
+  // would reset the hydrated diff object's identity.
+  const loadDiffSectionContents = useCallback(
+    async (file: ChangedFile, section: DiffSection): Promise<FileDiffLoadedFiles> => {
+      const currentState = stateRef.current;
+      if (!currentState || !supportsLazyDiffContent(currentState.source)) {
+        throw new Error(`Cannot load diff contents for '${file.path}'.`);
+      }
+
+      const loadedSection = await window.codiff.getDiffSectionContent({
+        force: true,
+        kind: section.kind,
+        path: file.path,
+        showWhitespace: preferencesRef.current.showWhitespace,
+        source: currentState.source,
+      });
+      if (!loadedSection.newFile) {
+        throw new Error(`No file contents available for '${file.path}'.`);
+      }
+
+      return {
+        newFile: loadedSection.newFile,
+        oldFile: loadedSection.oldFile ?? null,
+      };
+    },
+    [],
+  );
+
   const refreshMarkdownFile = useCallback(
     (file: ChangedFile, _section: DiffSection) => {
       const refresh = async () => {
         const currentState = stateRef.current;
-        if (!currentState || currentState.source.type !== 'working-tree') {
+        if (
+          !currentState ||
+          (currentState.source.type !== 'working-tree' &&
+            currentState.source.type !== 'branch-working-tree')
+        ) {
           return true;
         }
         const sourceRequest = sourceRequestRef.current;
@@ -427,17 +529,34 @@ export default function App() {
             return false;
           }
 
+          const changedPaths = getChangedPaths(currentState.files, orderedState.files);
           stateGenerationRef.current += 1;
           stateRef.current = orderedState;
           setState(orderedState);
           setLocalChangesDetected(false);
           setReviewComments(getReviewCommentsFromState(orderedState));
+          setWalkthroughOutdatedPaths((current) =>
+            updateWalkthroughOutdatedPathsForRefresh(current, changedPaths, orderedState.files),
+          );
+          setCollapsed((current) => {
+            const next = new Set(current);
+            for (const path of changedPaths) {
+              next.delete(path);
+            }
+            return next;
+          });
           setSelectedPath((current) =>
             current && orderedState.files.some((candidate) => candidate.path === current)
               ? current
               : (orderedState.files[0]?.path ?? null),
           );
-          bumpItemVersion(file.path);
+          if (changedPaths.size === 0) {
+            bumpItemVersion(file.path);
+          } else {
+            for (const path of changedPaths) {
+              bumpItemVersion(path);
+            }
+          }
           return true;
         } catch {
           setLocalChangesDetected(true);
@@ -452,7 +571,13 @@ export default function App() {
       );
       return result;
     },
-    [bumpItemVersion],
+    [
+      bumpItemVersion,
+      setCollapsed,
+      setReviewComments,
+      setSelectedPath,
+      setWalkthroughOutdatedPaths,
+    ],
   );
 
   const scrollPathIntoReview = useCallback((path: string, behavior: ReviewScrollBehavior) => {
@@ -472,42 +597,6 @@ export default function App() {
     }, 1200);
   }, []);
 
-  const setFileViewedState = useCallback(
-    (repositoryState: RepositoryState, file: ChangedFile, nextViewed: boolean) => {
-      setViewed((current) => {
-        if (!nextViewed) {
-          const next = { ...current };
-          delete next[file.path];
-          if (repositoryState.source.type === 'working-tree') {
-            writeViewed(repositoryState.root, next);
-          }
-          return next;
-        }
-
-        const next = {
-          ...current,
-          [file.path]: file.fingerprint,
-        };
-        if (repositoryState.source.type === 'working-tree') {
-          writeViewed(repositoryState.root, next);
-        }
-        return next;
-      });
-
-      setCollapsed((current) => {
-        const next = new Set(current);
-        if (nextViewed) {
-          next.add(file.path);
-        } else {
-          next.delete(file.path);
-        }
-        return next;
-      });
-      bumpItemVersion(file.path);
-    },
-    [bumpItemVersion],
-  );
-
   const saveCurrentSourceSession = useCallback(() => {
     const currentState = stateRef.current;
     if (!currentState) {
@@ -516,13 +605,20 @@ export default function App() {
 
     sourceSessionsRef.current.set(getSourceKey(currentState.source), {
       collapsed: new Set(collapsedRef.current),
+      expandedGenerated: new Set(expandedGeneratedRef.current),
       narrativeWalkthrough: narrativeWalkthroughRef.current,
       reviewComments: reviewCommentsRef.current,
       selectedPath: selectedPathRef.current,
       viewed: viewedRef.current,
       walkthroughError: walkthroughErrorRef.current,
+      walkthroughOutdatedPaths: walkthroughOutdatedPathsRef.current,
     });
-  }, []);
+  }, [
+    narrativeWalkthroughRef,
+    reviewCommentsRef,
+    walkthroughErrorRef,
+    walkthroughOutdatedPathsRef,
+  ]);
 
   useEffect(() => {
     let canceled = false;
@@ -577,12 +673,13 @@ export default function App() {
         ...nextState,
         files: sortFiles(nextState.files),
       };
-      const nextHistorySource =
+      const nextHistorySource: ReviewSource | null =
         getReloadHistorySource(reloadSelection, orderedState) ??
-        getHistorySource(orderedState.source);
+        getHistorySource(orderedState.source) ??
+        null;
       const history = await window.codiff.getRepositoryHistory(
         HISTORY_PAGE_SIZE,
-        nextHistorySource,
+        nextHistorySource ?? undefined,
       );
 
       if (canceled) {
@@ -603,7 +700,11 @@ export default function App() {
       setSidebarMode(
         shouldLoadNarrative ? 'walkthrough' : shouldStartInHistory ? 'history' : 'tree',
       );
-      setWalkthroughLoading(shouldLoadNarrative);
+      if (shouldLoadNarrative) {
+        startWalkthroughLoading();
+      } else {
+        setWalkthroughLoading(false);
+      }
 
       // Always consult the main process for a pre-authored walkthrough file, even
       // when the diff is empty, so it can diagnose *why* (e.g. the changes were
@@ -650,6 +751,17 @@ export default function App() {
         : {};
       const reloadSelectedPath = getReloadSelectionPath(reloadSelection, orderedState);
       const nextReloadDeltaPaths = getReloadDeltaPaths(reloadSelection, orderedState);
+      // Reopen the commit view after a reload, but only while it would still be
+      // openable (same conditions as openCommitView); e.g. once the commit
+      // lands the working tree may be empty and we fall back to the review.
+      const restoreCommitView =
+        getReloadMainMode(reloadSelection, orderedState) === 'commit' &&
+        orderedState.source.type === 'working-tree' &&
+        orderedState.files.length > 0;
+      if (restoreCommitView) {
+        setSidebarMode('tree');
+        setMainMode('commit');
+      }
 
       setHistoryEntries(history.entries);
       setHistoryHasMore(history.entries.length >= HISTORY_PAGE_SIZE);
@@ -659,10 +771,11 @@ export default function App() {
       setState(orderedState);
       setLoadError(null);
       setCollapsed(getCollapsedViewedPaths(orderedState.files, nextViewed));
+      setExpandedGenerated(new Set());
       setItemVersionByKey({});
-      setFocusCommentId(null);
-      setFocusCommentRequest(0);
+      resetCommentFocus();
       setReloadDeltaPaths(nextReloadDeltaPaths);
+      setWalkthroughOutdatedPaths(loadedNarrative ? nextReloadDeltaPaths : new Set());
       setReviewComments(getReviewCommentsFromState(orderedState));
       setViewed(nextViewed);
       const nextSelectedPath = reloadSelectedPath ?? orderedState.files[0]?.path ?? null;
@@ -688,7 +801,24 @@ export default function App() {
     return () => {
       canceled = true;
     };
-  }, [scrollPathIntoReview]);
+  }, [
+    resetCommentFocus,
+    scrollPathIntoReview,
+    setCollapsed,
+    setExpandedGenerated,
+    setItemVersionByKey,
+    setMainMode,
+    setNarrativeWalkthrough,
+    setReviewComments,
+    setSelectedPath,
+    setSidebarMode,
+    setViewed,
+    setWalkthroughError,
+    setWalkthroughFileError,
+    setWalkthroughLoading,
+    setWalkthroughOutdatedPaths,
+    startWalkthroughLoading,
+  ]);
 
   useEffect(
     () =>
@@ -745,13 +875,8 @@ export default function App() {
       return;
     }
 
-    const searchableFiles = sortFiles(state.files).filter(
-      (file) =>
-        fuzzyMatches(file.path, fileSearchQuery) &&
-        fileHasVisibleDiff(file, preferences.showWhitespace),
-    );
-    const requests = searchableFiles.flatMap((file) =>
-      file.sections.filter(shouldLoadDiffSectionContents).map((section) => ({
+    const requests = fileFilteredFiles.flatMap((file) =>
+      file.sections.filter(shouldPreloadSectionContentsForSearch).map((section) => ({
         file,
         section,
       })),
@@ -862,7 +987,7 @@ export default function App() {
     return () => {
       canceled = true;
     };
-  }, [bumpItemVersion, diffSearchQuery, fileSearchQuery, preferences.showWhitespace, state]);
+  }, [bumpItemVersion, diffSearchQuery, fileFilteredFiles, preferences.showWhitespace, state]);
 
   useEffect(() => {
     let canceled = false;
@@ -935,6 +1060,7 @@ export default function App() {
           setReviewComments(getReviewCommentsFromState(orderedState));
           setViewed(nextViewed);
           setCollapsed(getCollapsedViewedPaths(orderedState.files, nextViewed));
+          setExpandedGenerated(new Set());
           setLoadError(null);
         })
         .catch((error: unknown) => {
@@ -949,37 +1075,23 @@ export default function App() {
       canceled = true;
       removeConfigListener();
     };
-  }, []);
+  }, [
+    setCollapsed,
+    setExpandedGenerated,
+    setItemVersionByKey,
+    setReviewComments,
+    setShareWalkthroughEnabled,
+    setSelectedPath,
+    setViewed,
+  ]);
 
-  useEffect(() => {
-    const root = document.documentElement;
-    if (preferences.theme === 'system') {
-      root.removeAttribute('data-theme');
-    } else {
-      root.setAttribute('data-theme', preferences.theme);
-    }
-  }, [preferences.theme]);
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const codeFontFamily = preferences.codeFontFamily.trim();
-    const codeFontSize = normalizeCodeFontSizePreference(preferences.codeFontSize);
-
-    if (codeFontFamily) {
-      root.style.setProperty('--font-diff-mono', `${JSON.stringify(codeFontFamily)}, monospace`);
-    } else {
-      root.style.removeProperty('--font-diff-mono');
-    }
-
-    root.style.setProperty('--font-diff-size', `${codeFontSize}px`);
-    root.style.setProperty('--font-diff-line-height', `${getCodeFontLineHeight(codeFontSize)}px`);
-
-    return () => {
-      root.style.removeProperty('--font-diff-mono');
-      root.style.removeProperty('--font-diff-size');
-      root.style.removeProperty('--font-diff-line-height');
-    };
-  }, [preferences.codeFontFamily, preferences.codeFontSize]);
+  useDocumentAppearance({
+    cleanupCodeFontProperties: true,
+    clearEmptyCodeFontFamily: true,
+    codeFontFamily: preferences.codeFontFamily,
+    codeFontSize: preferences.codeFontSize,
+    theme: preferences.theme,
+  });
 
   useEffect(
     () => () => {
@@ -999,16 +1111,12 @@ export default function App() {
   }, [historySource]);
 
   useEffect(() => {
-    sidebarModeRef.current = sidebarMode;
-  }, [sidebarMode]);
-
-  useEffect(() => {
     collapsedRef.current = collapsed;
   }, [collapsed]);
 
   useEffect(() => {
-    reviewCommentsRef.current = reviewComments;
-  }, [reviewComments]);
+    expandedGeneratedRef.current = expandedGenerated;
+  }, [expandedGenerated]);
 
   useEffect(() => {
     preferencesRef.current = preferences;
@@ -1029,7 +1137,7 @@ export default function App() {
       );
     });
     return removeListener;
-  }, []);
+  }, [reviewCommentsRef]);
 
   useEffect(() => {
     void window.codiff.isWindowFullScreen().then(setIsWindowFullScreen, () => {});
@@ -1041,26 +1149,9 @@ export default function App() {
   }, [selectedPath]);
 
   useEffect(() => {
-    mainModeRef.current = mainMode;
-  }, [mainMode]);
-
-  useEffect(() => {
-    activeReviewCommandTargetRef.current = null;
-  }, [navigationResetKey]);
-
-  useEffect(() => {
     viewedRef.current = viewed;
   }, [viewed]);
 
-  useEffect(() => {
-    narrativeWalkthroughRef.current = narrativeWalkthrough;
-  }, [narrativeWalkthrough]);
-
-  useEffect(() => {
-    walkthroughErrorRef.current = walkthroughError;
-  }, [walkthroughError]);
-
-  const showWhitespace = preferences.showWhitespace;
   const showOutdated = preferences.showOutdated;
   const diffStyle = preferences.diffStyle;
   const wordWrap = preferences.wordWrap;
@@ -1068,63 +1159,6 @@ export default function App() {
     () => getVisibleReviewComments(reviewComments, showOutdated),
     [reviewComments, showOutdated],
   );
-  const orderedFiles = useMemo(() => (state ? sortFiles(state.files) : []), [state]);
-  const fileFilteredFiles = useMemo(
-    () =>
-      state
-        ? orderedFiles.filter(
-            (file) =>
-              fuzzyMatches(file.path, fileSearchQuery) && fileHasVisibleDiff(file, showWhitespace),
-          )
-        : [],
-    [fileSearchQuery, orderedFiles, showWhitespace, state],
-  );
-
-  const diffSearchResults = useMemo(
-    () =>
-      diffSearchQuery.trim()
-        ? fileFilteredFiles
-            .map((file) => getDiffSearchResult(file, showWhitespace, diffSearchQuery))
-            .filter((result): result is DiffSearchResult => result != null)
-        : [],
-    [diffSearchQuery, fileFilteredFiles, showWhitespace],
-  );
-
-  const diffSearchMatches = useMemo(
-    () => diffSearchResults.flatMap((result) => result.matches),
-    [diffSearchResults],
-  );
-
-  const diffSearchMatchPathSet = useMemo(
-    () => new Set(diffSearchResults.map((result) => result.file.path)),
-    [diffSearchResults],
-  );
-
-  const visibleFiles = useMemo(
-    () =>
-      diffSearchQuery.trim()
-        ? fileFilteredFiles.filter((file) => diffSearchMatchPathSet.has(file.path))
-        : fileFilteredFiles,
-    [diffSearchMatchPathSet, diffSearchQuery, fileFilteredFiles],
-  );
-
-  const effectiveActiveDiffSearchMatchIndex =
-    diffSearchMatches.length === 0
-      ? 0
-      : Math.min(activeDiffSearchMatchIndex, diffSearchMatches.length - 1);
-  const activeDiffSearchMatch = diffSearchMatches[effectiveActiveDiffSearchMatchIndex] ?? null;
-
-  const openDiffSearch = useCallback(() => {
-    setDiffSearchVisible(true);
-    setDiffSearchFocusRequest((current) => current + 1);
-  }, []);
-
-  const closeDiffSearch = useCallback(() => {
-    setDiffSearchVisible(false);
-    setDiffSearchQuery('');
-    setActiveDiffSearchMatchIndex(0);
-  }, []);
-
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((current) => !current);
   }, []);
@@ -1136,6 +1170,15 @@ export default function App() {
   const expandSidebar = useCallback(() => {
     setSidebarCollapsed(false);
   }, []);
+
+  const focusFileFilter = useCallback(() => {
+    expandSidebar();
+    requestAnimationFrame(() => {
+      const input = document.querySelector<HTMLInputElement>('.sidebar-search');
+      input?.focus();
+      input?.select();
+    });
+  }, [expandSidebar]);
 
   const openFile = useCallback((file: ChangedFile) => {
     // Deleted files are still shown in diffs, but there is no current file to open.
@@ -1162,7 +1205,7 @@ export default function App() {
         sidebarModeRef.current === 'walkthrough' &&
         narrativeWalkthroughRef.current != null,
     });
-  }, []);
+  }, [activeReviewCommandTargetRef, mainModeRef, narrativeWalkthroughRef, sidebarModeRef]);
 
   const openSelectedFile = useCallback(() => {
     const target = getReviewCommandTarget();
@@ -1172,124 +1215,23 @@ export default function App() {
     }
   }, [getReviewCommandTarget, openFile]);
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (matchesShortcut(event, codiffConfig.keymap, 'commandBar')) {
-        event.preventDefault();
-        setCommandBarVisible((current) => !current);
-        return;
-      }
-      if (matchesShortcut(event, codiffConfig.keymap, 'toggleSidebar')) {
-        event.preventDefault();
-        toggleSidebar();
-        return;
-      }
-      if (
-        !isNativeInputTarget(event.target) &&
-        matchesShortcut(event, codiffConfig.keymap, 'toggleWordWrap')
-      ) {
-        event.preventDefault();
-        toggleWordWrap();
-        return;
-      }
-      if (matchesShortcut(event, codiffConfig.keymap, 'diffSearch')) {
-        event.preventDefault();
-        openDiffSearch();
-        return;
-      }
-      if (
-        !isNativeInputTarget(event.target) &&
-        matchesShortcut(event, codiffConfig.keymap, 'openFile')
-      ) {
-        event.preventDefault();
-        openSelectedFile();
-        return;
-      }
-      if (!isNativeInputTarget(event.target)) {
-        if (
-          sidebarModeRef.current === 'walkthrough' &&
-          narrativeWalkthroughRef.current &&
-          (matchesShortcut(event, codiffConfig.keymap, 'nextHunk') ||
-            matchesShortcut(event, codiffConfig.keymap, 'prevHunk'))
-        ) {
-          return;
-        }
-        if (matchesShortcut(event, codiffConfig.keymap, 'nextHunk')) {
-          event.preventDefault();
-          navigateHunks(1);
-          return;
-        }
-        if (matchesShortcut(event, codiffConfig.keymap, 'prevHunk')) {
-          event.preventDefault();
-          navigateHunks(-1);
-          return;
-        }
-      }
-      if (matchesShortcut(event, codiffConfig.keymap, 'fileFilter')) {
-        if (sidebarCollapsed) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          expandSidebar();
-          requestAnimationFrame(() => {
-            const input = document.querySelector<HTMLInputElement>('.sidebar-search');
-            input?.focus();
-            input?.select();
-          });
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
-    codiffConfig.keymap,
-    expandSidebar,
+  const shouldDeferHunkNavigation = useCallback(
+    () => sidebarModeRef.current === 'walkthrough' && narrativeWalkthroughRef.current != null,
+    [narrativeWalkthroughRef, sidebarModeRef],
+  );
+  const { closeCommandBar, commandBarVisible, shortcutsHelpVisible } = useAppKeyboardShortcuts({
+    keymap: codiffConfig.keymap,
     navigateHunks,
-    openDiffSearch,
-    openSelectedFile,
+    onFocusFileFilter: focusFileFilter,
+    onOpenDiffSearch: openDiffSearch,
+    onOpenSelectedFile: openSelectedFile,
+    onToggleSidebar: toggleSidebar,
+    onToggleWordWrap: toggleWordWrap,
+    shouldDeferHunkNavigation,
     sidebarCollapsed,
-    toggleSidebar,
-    toggleWordWrap,
-  ]);
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.repeat || isNativeInputTarget(event.target)) {
-        return;
-      }
-      if (matchesShortcut(event, codiffConfig.keymap, 'shortcutsHelp')) {
-        event.preventDefault();
-        setShortcutsHelpVisible(true);
-      }
-    };
-
-    // The overlay is held open while Shift+? is pressed, so dismiss it the
-    // moment either key is released (or the window loses focus mid-hold).
-    const handleKeyUp = (event: KeyboardEvent) => {
-      if (event.key === '?' || event.key === '/' || event.key === 'Shift') {
-        setShortcutsHelpVisible(false);
-      }
-    };
-
-    const handleBlur = () => setShortcutsHelpVisible(false);
-
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-    window.addEventListener('blur', handleBlur);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-      window.removeEventListener('blur', handleBlur);
-    };
-  }, [codiffConfig.keymap]);
+  });
 
   useEffect(() => window.codiff.onFindInDiffs(openDiffSearch), [openDiffSearch]);
-
-  const updateDiffSearchQuery = useCallback((query: string) => {
-    setDiffSearchQuery(query);
-    setDiffSearchVisible(true);
-    setActiveDiffSearchMatchIndex(0);
-  }, []);
 
   const loadMoreHistory = useCallback(() => {
     if (historyLoading || !historyHasMore) {
@@ -1323,69 +1265,110 @@ export default function App() {
       });
   }, [historyHasMore, historyLimit, historyLoading, historySource]);
 
-  const moveDiffSearchMatch = useCallback(
-    (direction: 1 | -1) => {
-      setDiffSearchVisible(true);
-      setActiveDiffSearchMatchIndex((current) => {
-        const matchCount = diffSearchMatches.length;
-        if (matchCount === 0) {
-          return 0;
-        }
-
-        return (current + direction + matchCount) % matchCount;
-      });
-    },
-    [diffSearchMatches.length],
-  );
-
-  const selectPath = useCallback((path: string) => {
-    setMainMode('review');
-    setSelectedPath(path);
-  }, []);
-
   const activatePath = useCallback(
     (path: string) => {
       setMainMode('review');
       setSelectedPath(path);
       scrollPathIntoReview(path, 'smooth');
     },
-    [scrollPathIntoReview],
+    [scrollPathIntoReview, setMainMode, setSelectedPath],
   );
 
-  const reloadWindow = useCallback(() => {
-    window.location.reload();
-  }, []);
+  // Refresh the repository state in place after the working tree changed.
+  // Unlike a window reload, this keeps all review UI state (selection, scroll,
+  // search, walkthrough navigation, commit drafts, pending comments) and only
+  // re-renders the files whose fingerprints actually moved.
+  const refreshRepository = useCallback(() => {
+    const previousState = stateRef.current;
+    if (!previousState || pendingSource) {
+      return;
+    }
 
-  // Commit the files a reviewer chose from the walkthrough's staging set. The
-  // working-tree watcher surfaces a "reload to see changes" banner afterwards.
-  const commitWalkthrough = useCallback(
-    (request: WalkthroughCommitRequest) =>
-      window.codiff.createWalkthroughCommit({
-        ...request,
-        source: stateRef.current?.source ?? request.source,
-      }),
-    [],
-  );
+    const request = sourceRequestRef.current + 1;
+    sourceRequestRef.current = request;
+    const refreshSource = getRefreshSource(previousState.source);
+    const refreshHistorySource = historySourceRef.current
+      ? getRefreshSource(historySourceRef.current)
+      : undefined;
 
-  // Ask the connected agent to rewrite the commit message for the reviewer's
-  // current file selection (used when files are dropped from the staging set).
-  const updateWalkthroughCommitMessage = useCallback(
-    (request: WalkthroughCommitMessageRequest) =>
-      window.codiff.updateWalkthroughCommitMessage({
-        ...request,
-        source: stateRef.current?.source ?? request.source,
-      }),
-    [],
-  );
+    Promise.all([
+      window.codiff.getRepositoryState(refreshSource),
+      window.codiff.getRepositoryHistory(historyLimit, refreshHistorySource),
+    ])
+      .then(([nextState, history]) => {
+        if (sourceRequestRef.current !== request) {
+          return;
+        }
+
+        const orderedState = {
+          ...nextState,
+          files: sortFiles(nextState.files),
+        };
+        const changedPaths = getChangedPaths(previousState.files, orderedState.files);
+
+        stateGenerationRef.current += 1;
+        setState(orderedState);
+        setReloadDeltaPaths(changedPaths);
+        setWalkthroughOutdatedPaths((current) =>
+          updateWalkthroughOutdatedPathsForRefresh(current, changedPaths, orderedState.files),
+        );
+        for (const path of changedPaths) {
+          bumpItemVersion(path);
+        }
+        setCollapsed((current) => {
+          const next = new Set(current);
+          for (const path of changedPaths) {
+            next.delete(path);
+          }
+          return next;
+        });
+        setHistoryEntries(history.entries);
+        setHistoryHasMore(history.entries.length >= historyLimit);
+        setHistorySource(getHistorySource(orderedState.source) ?? historySourceRef.current);
+        setSelectedPath((current) =>
+          current != null && orderedState.files.some((file) => file.path === current)
+            ? current
+            : (orderedState.files[0]?.path ?? null),
+        );
+        if (
+          mainModeRef.current === 'commit' &&
+          (orderedState.source.type !== 'working-tree' || orderedState.files.length === 0)
+        ) {
+          setMainMode('review');
+        }
+        setLocalChangesDetected(false);
+      })
+      .catch(() => {
+        // Keep the current state; the banner stays up as a retry affordance.
+      });
+  }, [
+    bumpItemVersion,
+    historyLimit,
+    mainModeRef,
+    pendingSource,
+    setCollapsed,
+    setMainMode,
+    setSelectedPath,
+    setWalkthroughOutdatedPaths,
+  ]);
+
+  // ⌘R / the View menu's "Refresh Changes" item route here from the main
+  // process instead of reloading the window.
+  useEffect(() => window.codiff.onRefreshRequest(refreshRepository), [refreshRepository]);
 
   useEffect(() => {
     const writeCurrentReloadSelection = () => {
-      writeReloadSelection(stateRef.current, selectedPathRef.current, historySourceRef.current);
+      writeReloadSelection(
+        stateRef.current,
+        selectedPathRef.current,
+        historySourceRef.current,
+        mainModeRef.current,
+      );
     };
 
     window.addEventListener('beforeunload', writeCurrentReloadSelection);
     return () => window.removeEventListener('beforeunload', writeCurrentReloadSelection);
-  }, []);
+  }, [mainModeRef]);
 
   const selectSource = useCallback(
     (source: ReviewSource) => {
@@ -1401,11 +1384,10 @@ export default function App() {
       sourceRequestRef.current = request;
       setPendingSource(source);
       setLoadError(null);
-      setFocusCommentId(null);
-      setFocusCommentRequest(0);
+      resetCommentFocus();
       setReloadDeltaPaths(new Set());
-      setDiffSearchQuery('');
-      setActiveDiffSearchMatchIndex(0);
+      setWalkthroughOutdatedPaths(new Set());
+      resetDiffSearch();
       setScrollTarget(null);
       setMainMode('review');
 
@@ -1431,14 +1413,17 @@ export default function App() {
               : (orderedState.files[0]?.path ?? null);
           const nextCollapsed =
             session?.collapsed ?? getCollapsedViewedPaths(orderedState.files, nextViewed);
+          const nextExpandedGenerated = session?.expandedGenerated ?? new Set<string>();
 
           stateGenerationRef.current += 1;
           setState(orderedState);
           setHistorySource(getHistorySource(orderedState.source) ?? historySource);
           setCollapsed(new Set(nextCollapsed));
+          setExpandedGenerated(new Set(nextExpandedGenerated));
           setItemVersionByKey({});
           setReviewComments(session?.reviewComments ?? getReviewCommentsFromState(orderedState));
           setReloadDeltaPaths(new Set());
+          setWalkthroughOutdatedPaths(session?.walkthroughOutdatedPaths ?? new Set());
           setViewed(nextViewed);
           setSelectedPath(nextSelectedPath);
           setNarrativeWalkthrough(session?.narrativeWalkthrough ?? null);
@@ -1456,413 +1441,48 @@ export default function App() {
           }
         });
     },
-    [historySource, pendingSource, saveCurrentSourceSession],
+    [
+      historySource,
+      pendingSource,
+      resetCommentFocus,
+      resetDiffSearch,
+      saveCurrentSourceSession,
+      setCollapsed,
+      setExpandedGenerated,
+      setItemVersionByKey,
+      setMainMode,
+      setNarrativeWalkthrough,
+      setReviewComments,
+      setSelectedPath,
+      setViewed,
+      setWalkthroughError,
+      setWalkthroughLoading,
+      setWalkthroughOutdatedPaths,
+      setWalkthroughUnread,
+    ],
   );
 
-  const resizeSidebar = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) {
-      return;
-    }
-
-    event.preventDefault();
-
-    const handle = event.currentTarget;
-    const shell = handle.parentElement;
-    if (!shell) {
-      return;
-    }
-
-    const shellLeft = shell.getBoundingClientRect().left;
-    handle.setPointerCapture(event.pointerId);
-    handle.classList.add('dragging');
-    document.body.style.cursor = 'col-resize';
-    let collapsed = false;
-
-    const cleanup = () => {
-      handle.releasePointerCapture(event.pointerId);
-      handle.removeEventListener('pointermove', handleMove);
-      handle.removeEventListener('pointerup', handleEnd);
-      handle.removeEventListener('pointercancel', handleEnd);
-      handle.classList.remove('dragging');
-      document.body.style.cursor = '';
-    };
-
-    const handleMove = (moveEvent: PointerEvent) => {
-      const rawWidth = moveEvent.clientX - shellLeft;
-      if (rawWidth < SIDEBAR_COLLAPSE_THRESHOLD) {
-        // Collapse immediately mid-drag — no resistance, no snap on release
-        collapsed = true;
-        setSidebarCollapsed(true);
-        cleanup();
-        return;
-      }
-      setSidebarWidth(clampSidebarWidth(rawWidth));
-    };
-
-    const handleEnd = () => {
-      cleanup();
-      if (!collapsed) {
-        setSidebarWidth((width) => {
-          writeSidebarWidth(width);
-          return width;
-        });
-      }
-    };
-
-    handle.addEventListener('pointermove', handleMove);
-    handle.addEventListener('pointerup', handleEnd);
-    handle.addEventListener('pointercancel', handleEnd);
-  }, []);
-
-  const changeSidebarMode = useCallback(
-    (mode: SidebarMode) => {
-      setMainMode('review');
-      if (mode === 'tree') {
-        setSidebarMode('tree');
-        return;
-      }
-
-      if (mode === 'history') {
-        setSidebarMode('history');
-        return;
-      }
-
-      setSidebarMode('walkthrough');
-      setWalkthroughUnread(false);
-      if (narrativeWalkthrough || walkthroughError || walkthroughLoading || !state) {
-        return;
-      }
-      if (state.files.length === 0) {
-        setNarrativeWalkthrough(null);
-        setWalkthroughError(null);
-        setWalkthroughLoading(false);
-        return;
-      }
-
-      const sourceKey = getSourceKey(state.source);
-      setWalkthroughLoading(true);
-      setWalkthroughError(null);
-      window.codiff
-        .getNarrativeWalkthrough(state.source)
-        .then((result) => {
-          if (getSourceKey(stateRef.current?.source ?? state.source) !== sourceKey) {
-            return;
-          }
-
-          if (result.status === 'ready') {
-            setNarrativeWalkthrough(result.walkthrough);
-            if (sidebarModeRef.current === 'walkthrough') {
-              setSidebarMode('walkthrough');
-            } else {
-              setWalkthroughUnread(true);
-            }
-          } else {
-            setWalkthroughError(result);
-          }
-        })
-        .catch((error: unknown) => {
-          if (getSourceKey(stateRef.current?.source ?? state.source) !== sourceKey) {
-            return;
-          }
-
-          setWalkthroughError({
-            reason: error instanceof Error ? error.message : String(error),
-            status: 'unavailable',
-          });
-        })
-        .finally(() => {
-          if (getSourceKey(stateRef.current?.source ?? state.source) === sourceKey) {
-            setWalkthroughLoading(false);
-          }
-        });
-    },
-    [narrativeWalkthrough, state, walkthroughError, walkthroughLoading],
-  );
-
-  const openCommitView = useCallback(() => {
-    const currentState = stateRef.current;
-    if (
-      !currentState ||
-      currentState.source.type !== 'working-tree' ||
-      currentState.files.length === 0
-    ) {
-      return;
-    }
-    if (narrativeWalkthroughRef.current) {
-      narrativeNavigation.enterCommit();
-    }
-    setSidebarMode('tree');
-    setMainMode('commit');
-  }, [narrativeNavigation]);
-
-  const closeCommitView = useCallback(() => {
-    setSidebarMode('tree');
-    setMainMode('review');
-  }, []);
-
-  const toggleViewed = useCallback(
-    (
-      file: ChangedFile,
-      isViewed: boolean,
-      reviewIdentity: ReviewIdentity = getFileReviewIdentity(file),
-    ) => {
-      const currentState = stateRef.current;
-      if (!currentState) {
-        return;
-      }
-
-      setViewed((current) => {
-        const next = updateReviewIdentityViewed(current, reviewIdentity, isViewed);
-        if (currentState.source.type === 'working-tree') {
-          writeViewed(currentState.root, next);
-        }
-        return next;
-      });
-
-      setCollapsed((current) => updateReviewIdentityCollapsed(current, reviewIdentity, isViewed));
-      bumpItemVersion(reviewIdentity.key);
-    },
-    [bumpItemVersion],
-  );
-
-  const updateActiveWalkthroughReviewTarget = useCallback(
-    (target: WalkthroughReviewTarget | null) => {
-      const currentState = stateRef.current;
-      activeReviewCommandTargetRef.current =
-        target && currentState
-          ? createReviewCommandTarget(currentState.source, target.file, target.reviewIdentity)
-          : null;
-    },
-    [],
-  );
-
-  useEffect(() => {
-    const registry = commandRegistryRef.current;
-    const unregisterFns = [
-      registry.register({
-        execute: () => {
-          expandSidebar();
-          requestAnimationFrame(() => {
-            const input = document.querySelector<HTMLInputElement>('.sidebar-search');
-            input?.focus();
-            input?.select();
-          });
-        },
-        id: 'file-filter',
-        keymapAction: 'fileFilter',
-        title: 'Focus File Filter',
-      }),
-      registry.register({
-        execute: openDiffSearch,
-        id: 'diff-search',
-        keymapAction: 'diffSearch',
-        title: 'Find in Diffs',
-      }),
-      registry.register({
-        execute: () => changeSidebarMode('tree'),
-        id: 'sidebar-tree',
-        title: 'Show File Tree',
-      }),
-      registry.register({
-        execute: () => changeSidebarMode('history'),
-        id: 'sidebar-history',
-        title: 'Show History',
-      }),
-      registry.register({
-        execute: () => changeSidebarMode('walkthrough'),
-        id: 'sidebar-walkthrough',
-        title: 'Show Walkthrough',
-      }),
-      registry.register({
-        execute: () => {
-          const currentState = stateRef.current;
-          if (!currentState) {
-            return;
-          }
-
-          const markdown = buildReviewCommentsMarkdown(
-            currentState.files,
-            reviewCommentsRef.current,
-            preferencesRef.current.showWhitespace,
-            preferencesRef.current.reviewCommentsPrefix,
-          );
-          if (markdown) {
-            void navigator.clipboard.writeText(markdown);
-          }
-        },
-        id: 'copy-comments',
-        title: 'Copy Review Comments',
-      }),
-      registry.register({
-        execute: () => {
-          const currentState = stateRef.current;
-          if (!currentState) {
-            return;
-          }
-
-          const markdown = buildReviewCommentsMarkdown(
-            currentState.files,
-            reviewCommentsRef.current,
-            preferencesRef.current.showWhitespace,
-            preferencesRef.current.reviewCommentsPrefix,
-          );
-          if (markdown) {
-            void navigator.clipboard.writeText(markdown).then(() => {
-              window.close();
-            });
-          } else {
-            window.close();
-          }
-        },
-        id: 'copy-comments-and-close',
-        title: 'Copy Review Comments and Close',
-      }),
-      registry.register({
-        description: () => getReviewCommandTarget()?.file.path ?? null,
-        execute: () => {
-          const target = getReviewCommandTarget();
-          if (!target) {
-            return;
-          }
-
-          const isViewed = isReviewIdentityViewed(viewedRef.current, target.reviewIdentity);
-          toggleViewed(target.file, isViewed, target.reviewIdentity);
-        },
-        id: 'toggle-viewed',
-        title: 'Toggle Viewed',
-      }),
-      registry.register({
-        description: () => getReviewCommandTarget()?.file.path ?? null,
-        execute: openSelectedFile,
-        id: 'open-file',
-        keymapAction: 'openFile',
-        title: 'Open File in Editor',
-      }),
-      registry.register({
-        execute: toggleSidebar,
-        id: 'toggle-sidebar',
-        keymapAction: 'toggleSidebar',
-        title: 'Toggle Sidebar',
-      }),
-      registry.register({
-        execute: () => {
-          void window.codiff.setShowOutdated(!preferencesRef.current.showOutdated).catch(() => {});
-        },
-        id: 'toggle-outdated-comments',
-        title: 'Toggle Outdated Comments',
-      }),
-      registry.register({
-        description: () =>
-          preferencesRef.current.diffStyle === 'split' ? 'Switch to Unified' : 'Switch to Split',
-        execute: () => {
-          const nextDiffStyle = preferencesRef.current.diffStyle === 'split' ? 'unified' : 'split';
-          void window.codiff.setDiffStyle(nextDiffStyle).catch(() => {});
-        },
-        id: 'toggle-diff-layout',
-        title: 'Toggle Diff Layout',
-      }),
-      registry.register({
-        description: () =>
-          preferencesRef.current.wordWrap ? 'Disable Word Wrap' : 'Enable Word Wrap',
-        execute: toggleWordWrap,
-        id: 'toggle-word-wrap',
-        keymapAction: 'toggleWordWrap',
-        title: 'Toggle Word Wrap',
-      }),
-      registry.register({
-        execute: () => {
-          void window.codiff.increaseCodeFontSize().catch(() => {});
-        },
-        id: 'increase-code-font-size',
-        title: 'Increase Code Font Size',
-      }),
-      registry.register({
-        execute: () => {
-          void window.codiff.decreaseCodeFontSize().catch(() => {});
-        },
-        id: 'decrease-code-font-size',
-        title: 'Decrease Code Font Size',
-      }),
-      registry.register({
-        execute: () => {
-          void window.codiff.resetCodeFontSize().catch(() => {});
-        },
-        id: 'reset-code-font-size',
-        title: 'Reset Code Font Size',
-      }),
-      registry.register({
-        execute: () => {
-          void window.codiff.openConfigFile().catch(() => {});
-        },
-        id: 'open-config-file',
-        title: 'Open Config File',
-      }),
-      registry.register({
-        execute: reloadWindow,
-        id: 'reload',
-        title: 'Reload Window',
-      }),
-    ];
-    setCommandBarCommands(registry.commands);
-
-    return () => {
-      for (const unregister of unregisterFns) {
-        unregister();
-      }
-    };
-  }, [
+  const commandBarCommands = useAppCommands({
     changeSidebarMode,
-    expandSidebar,
+    focusFileFilter,
     getReviewCommandTarget,
-    openDiffSearch,
-    openSelectedFile,
-    reloadWindow,
-    setFileViewedState,
-    toggleSidebar,
-    toggleViewed,
-    toggleWordWrap,
-  ]);
-
-  const toggleCollapsed = useCallback(
-    (file: ChangedFile, isCollapsed: boolean, reviewKey = file.path) => {
-      setCollapsed((current) => {
-        const next = new Set(current);
-        if (isCollapsed) {
-          next.delete(reviewKey);
-        } else {
-          next.add(reviewKey);
-        }
-        return next;
-      });
-      bumpItemVersion(reviewKey);
-    },
-    [bumpItemVersion],
-  );
+    onOpenDiffSearch: openDiffSearch,
+    onOpenSelectedFile: openSelectedFile,
+    onRefreshRepository: refreshRepository,
+    onToggleSidebar: toggleSidebar,
+    onToggleViewed: toggleViewed,
+    onToggleWordWrap: toggleWordWrap,
+    preferencesRef,
+    reviewCommentsRef,
+    stateRef,
+    viewedRef,
+  });
 
   const updateSelectedPathFromScroll = useCallback(
     (viewer: CodeViewInstance) => {
-      if (!visibleFiles.length) {
+      const nextPath = getSelectedPathFromScroll(viewer, visibleFiles, showWhitespace);
+      if (!nextPath) {
         return;
-      }
-
-      const scrollTop = viewer.getScrollTop();
-      const activationTop = scrollTop + DEFAULT_PADDING;
-      let nextPath = visibleFiles[0]?.path ?? null;
-      let nextDistance = Number.NEGATIVE_INFINITY;
-
-      for (const file of visibleFiles) {
-        const section = getFirstVisibleSection(file, showWhitespace);
-        const itemId = section ? getItemId(section) : null;
-        const itemTop = itemId ? viewer.getTopForItem(itemId) : undefined;
-        if (itemTop == null) {
-          continue;
-        }
-
-        const distance = itemTop - activationTop;
-        if (distance <= 0 && distance > nextDistance) {
-          nextDistance = distance;
-          nextPath = file.path;
-        }
       }
 
       const programmaticScrollPath = programmaticScrollPathRef.current;
@@ -1878,283 +1498,9 @@ export default function App() {
         }
       }
 
-      if (nextPath) {
-        setSelectedPath((current) => (current === nextPath ? current : nextPath));
-      }
+      setSelectedPath((current) => (current === nextPath ? current : nextPath));
     },
-    [showWhitespace, visibleFiles],
-  );
-
-  const createComment = useCallback(
-    (comment: Omit<ReviewComment, 'body' | 'id'>) => {
-      const emptyExistingComment = reviewCommentsRef.current.find(
-        (candidate) =>
-          candidate.body.length === 0 && getCommentKey(candidate) === getCommentKey(comment),
-      );
-      if (emptyExistingComment) {
-        setFocusCommentId(emptyExistingComment.id);
-        setFocusCommentRequest((current) => current + 1);
-        return;
-      }
-
-      const emptyDraft = reviewCommentsRef.current.find(
-        (candidate) => !candidate.isReadOnly && candidate.body.length === 0,
-      );
-      if (emptyDraft) {
-        const id = crypto.randomUUID();
-        setFocusCommentId(id);
-        setFocusCommentRequest((current) => current + 1);
-        setReviewComments((current) =>
-          current.map((candidate) =>
-            candidate.id === emptyDraft.id
-              ? {
-                  ...comment,
-                  body: '',
-                  id,
-                }
-              : candidate,
-          ),
-        );
-        bumpItemVersion(emptyDraft.filePath);
-        bumpItemVersion(comment.filePath);
-        return;
-      }
-
-      const id = crypto.randomUUID();
-      setFocusCommentId(id);
-      setFocusCommentRequest((current) => current + 1);
-
-      setReviewComments((current) => [
-        ...current,
-        {
-          ...comment,
-          body: '',
-          id,
-        },
-      ]);
-      bumpItemVersion(comment.filePath);
-    },
-    [bumpItemVersion],
-  );
-
-  const updateComment = useCallback((commentId: string, body: string) => {
-    const applyCommentBody = (current: ReadonlyArray<ReviewComment>) => {
-      let changed = false;
-      const next = current.map((comment) => {
-        if (comment.id !== commentId || comment.isReadOnly || comment.body === body) {
-          return comment;
-        }
-        changed = true;
-        return { ...comment, body };
-      });
-      return changed ? next : current;
-    };
-
-    reviewCommentsRef.current = applyCommentBody(reviewCommentsRef.current);
-    setReviewComments(applyCommentBody);
-  }, []);
-
-  const deleteComment = useCallback(
-    (commentId: string) => {
-      const comment = reviewCommentsRef.current.find((candidate) => candidate.id === commentId);
-      setFocusCommentId((current) => (current === commentId ? null : current));
-      setReviewComments((current) => current.filter((candidate) => candidate.id !== commentId));
-      if (comment) {
-        bumpItemVersion(comment.filePath);
-      }
-    },
-    [bumpItemVersion],
-  );
-
-  const updateCodexReply = useCallback(
-    (commentId: string, filePath: string, codexReply: NonNullable<ReviewComment['codexReply']>) => {
-      setReviewComments((current) =>
-        current.map((comment) =>
-          comment.id === commentId
-            ? {
-                ...comment,
-                codexReply,
-              }
-            : comment,
-        ),
-      );
-      bumpItemVersion(filePath);
-    },
-    [bumpItemVersion],
-  );
-
-  const updateRemoteSubmit = useCallback(
-    (commentId: string, remoteSubmit: ReviewComment['remoteSubmit']) => {
-      setReviewComments((current) =>
-        current.map((comment) =>
-          comment.id === commentId
-            ? {
-                ...comment,
-                remoteSubmit,
-              }
-            : comment,
-        ),
-      );
-      const comment = reviewCommentsRef.current.find((candidate) => candidate.id === commentId);
-      if (comment) {
-        bumpItemVersion(comment.filePath);
-      }
-    },
-    [bumpItemVersion],
-  );
-
-  const askCodex = useCallback(
-    (commentId: string) => {
-      const currentState = stateRef.current;
-      const comment = reviewCommentsRef.current.find((candidate) => candidate.id === commentId);
-      if (
-        !currentState ||
-        !comment ||
-        comment.body.trim().length === 0 ||
-        comment.codexReply?.status === 'loading'
-      ) {
-        return;
-      }
-
-      const request: ReviewAssistantRequest = {
-        comment: {
-          body: comment.body,
-          filePath: comment.filePath,
-          lineNumber: comment.lineNumber,
-          sectionId: comment.sectionId,
-          side: comment.side,
-          ...getReviewCommentRangeProps(comment),
-        },
-        source: currentState.source,
-      };
-
-      updateCodexReply(comment.id, comment.filePath, { status: 'loading' });
-      void window.codiff
-        .askReviewAssistant(request)
-        .then((result) => {
-          updateCodexReply(
-            comment.id,
-            comment.filePath,
-            result.status === 'ready'
-              ? {
-                  body: result.reply,
-                  status: 'ready',
-                }
-              : {
-                  error: result.reason,
-                  status: 'error',
-                },
-          );
-        })
-        .catch((error: unknown) => {
-          updateCodexReply(comment.id, comment.filePath, {
-            error: error instanceof Error ? error.message : String(error),
-            status: 'error',
-          });
-        });
-    },
-    [updateCodexReply],
-  );
-
-  const submitPullRequestComment = useCallback(
-    (commentId: string) => {
-      const currentState = stateRef.current;
-      const comment = reviewCommentsRef.current.find((candidate) => candidate.id === commentId);
-      if (
-        currentState?.source.type !== 'pull-request' ||
-        !comment ||
-        comment.body.trim().length === 0 ||
-        comment.remoteSubmit?.status === 'submitting'
-      ) {
-        return;
-      }
-
-      updateRemoteSubmit(comment.id, { status: 'submitting' });
-      void window.codiff
-        .submitPullRequestComment({
-          comment: {
-            body: comment.body,
-            filePath: comment.filePath,
-            lineNumber: comment.lineNumber,
-            side: comment.side,
-            ...getReviewCommentRangeProps(comment),
-          },
-          source: currentState.source,
-        })
-        .then((submittedComment) => {
-          setFocusCommentId((current) => (current === comment.id ? null : current));
-          setReviewComments((current) =>
-            current.map((candidate) =>
-              candidate.id === comment.id
-                ? {
-                    author: submittedComment.author,
-                    body: submittedComment.body,
-                    filePath: submittedComment.filePath,
-                    id: submittedComment.id,
-                    isReadOnly: true,
-                    lineNumber: submittedComment.lineNumber,
-                    sectionId: comment.sectionId,
-                    side: submittedComment.side,
-                    ...getReviewCommentRangeProps(submittedComment),
-                    submittedAt: submittedComment.submittedAt,
-                    url: submittedComment.url,
-                  }
-                : candidate,
-            ),
-          );
-          bumpItemVersion(comment.filePath);
-        })
-        .catch((error: unknown) => {
-          updateRemoteSubmit(comment.id, {
-            error: error instanceof Error ? error.message : String(error),
-            status: 'error',
-          });
-        });
-    },
-    [bumpItemVersion, updateRemoteSubmit],
-  );
-
-  const submitPullRequestReview = useCallback(
-    (event: PullRequestReviewEvent) => {
-      const currentState = stateRef.current;
-      if (
-        currentState?.source.type !== 'pull-request' ||
-        pullRequestReviewSubmitting ||
-        isPullRequestReviewActionDisabled(currentState.source.reviewStatus, event)
-      ) {
-        return;
-      }
-
-      const pendingComments = reviewCommentsRef.current.filter(
-        (comment) => !comment.isReadOnly && comment.body.trim(),
-      );
-      const pendingCommentIds = new Set(pendingComments.map((comment) => comment.id));
-      setPullRequestReviewSubmitting(event);
-      void window.codiff
-        .submitPullRequestReview({
-          comments: pendingComments.map((comment) => ({
-            body: comment.body,
-            filePath: comment.filePath,
-            lineNumber: comment.lineNumber,
-            side: comment.side,
-            ...getReviewCommentRangeProps(comment),
-          })),
-          event,
-          source: currentState.source,
-        })
-        .then(() => {
-          setReviewComments((current) =>
-            current.filter((comment) => !pendingCommentIds.has(comment.id)),
-          );
-        })
-        .catch((error: unknown) => {
-          window.alert(error instanceof Error ? error.message : String(error));
-        })
-        .finally(() => {
-          setPullRequestReviewSubmitting(null);
-        });
-    },
-    [pullRequestReviewSubmitting],
+    [setSelectedPath, showWhitespace, visibleFiles],
   );
 
   const installTerminalHelper = useCallback(() => {
@@ -2183,56 +1529,6 @@ export default function App() {
       });
   }, []);
 
-  const shareWalkthrough = useCallback(() => {
-    const currentState = stateRef.current;
-    const currentWalkthrough = narrativeWalkthroughRef.current;
-    if (!shareWalkthroughEnabled || !currentState || !currentWalkthrough || walkthroughSharing) {
-      return;
-    }
-
-    const snapshot: SharedWalkthroughSnapshot = {
-      branch: currentState.branch,
-      codiffVersion: 'dev',
-      exportedAt: new Date().toISOString(),
-      files: currentState.files,
-      kind: 'codiff-walkthrough-share',
-      preferences: {
-        codeFontFamily: preferencesRef.current.codeFontFamily,
-        codeFontSize: preferencesRef.current.codeFontSize,
-        diffStyle: preferencesRef.current.diffStyle,
-        showWhitespace: preferencesRef.current.showWhitespace,
-        theme: preferencesRef.current.theme,
-        wordWrap: preferencesRef.current.wordWrap,
-      },
-      repository: {
-        root: currentState.root,
-        source: currentState.source,
-        title:
-          currentState.source.type === 'commit' ? currentState.commitMetadata?.subject : undefined,
-      },
-      reviewComments: currentState.reviewComments,
-      version: 1,
-      walkthrough: currentWalkthrough,
-    };
-
-    setWalkthroughSharing(true);
-    void window.codiff
-      .shareWalkthrough(snapshot)
-      .then((result) => {
-        if (result.status === 'failed') {
-          window.alert(result.reason);
-        }
-      })
-      .catch((error: unknown) => {
-        window.alert(error instanceof Error ? error.message : String(error));
-      })
-      .finally(() => {
-        setWalkthroughSharing(false);
-      });
-  }, [shareWalkthroughEnabled, walkthroughSharing]);
-
-  const enabledShareWalkthrough = shareWalkthroughEnabled ? shareWalkthrough : undefined;
-
   const activeAgentBackend = launchOptions.agentBackend ?? codiffConfig.settings.agentBackend;
   const agentLabel = getAgentLabel(activeAgentBackend);
   const agentSkillLabel = `${agentLabel} Skill`;
@@ -2251,7 +1547,7 @@ export default function App() {
     return planDocument ? (
       <PlanEditorView document={planDocument} shareEnabled={sharePlanEnabled} />
     ) : (
-      <main className="loading italic">Loading…</main>
+      <main className="loading">Loading…</main>
     );
   }
 
@@ -2283,8 +1579,16 @@ export default function App() {
 
   if (!state) {
     return (
-      <main className={`loading italic${launchOptions.walkthrough ? ' codex' : ' pulse'}`}>
-        {launchOptions.walkthrough ? 'Generating walkthrough…' : 'Thinking…'}
+      <main className={`loading${launchOptions.walkthrough ? ' codex' : ' pulse'}`}>
+        {launchOptions.walkthrough ? (
+          <WalkthroughProgress
+            phase={walkthroughProgress.phase}
+            responseLabelIndex={walkthroughProgress.responseLabelIndex}
+            stageRevision={walkthroughProgress.stageRevision}
+          />
+        ) : (
+          'Thinking…'
+        )}
       </main>
     );
   }
@@ -2294,7 +1598,6 @@ export default function App() {
     selectedOrSearchPath && visibleFiles.some((file) => file.path === selectedOrSearchPath)
       ? selectedOrSearchPath
       : (visibleFiles[0]?.path ?? null);
-  const hasDiffSearchQuery = diffSearchQuery.trim().length > 0;
   const isPullRequest = state.source.type === 'pull-request';
   const isSwitchingSource = pendingSource != null;
   const showAgentUnavailablePanel =
@@ -2311,26 +1614,40 @@ export default function App() {
     state.source.type !== 'working-tree' ? ` · ${getSourceLabel(state.source)}` : '';
   const emptySourceDetail = getEmptySourceDetail(state.source, state.root);
 
-  const showNarrativeWalkthrough = narrativeWalkthrough != null && sidebarMode === 'walkthrough';
-  const plainCommitModel = narrativeNavigation.walkthroughView
-    ? buildCommitModel(narrativeNavigation.walkthroughView, state.files)
-    : buildGenericCommitModel(state.files);
-  const showPlainCommitView =
-    mainMode === 'commit' && state.source.type === 'working-tree' && state.files.length > 0;
   const diffLineHeight = getCodeFontLineHeight(
     normalizeCodeFontSizePreference(preferences.codeFontSize),
   );
+  const commitMetadata =
+    state.source.type === 'commit' && state.commitMetadata
+      ? (() => {
+          const historyAvatarUrl = historyEntries.find(
+            (entry) => entry.ref === state.commitMetadata?.ref,
+          )?.gravatarUrl;
+          return historyAvatarUrl
+            ? {
+                ...state.commitMetadata,
+                author: {
+                  ...state.commitMetadata.author,
+                  gravatarUrl: historyAvatarUrl,
+                },
+              }
+            : state.commitMetadata;
+        })()
+      : null;
   // Props shared by the full review and the per-stop scoped diffs, so the two
   // render paths can't drift apart.
   const commonReviewProps = {
     activeSearchMatch: activeDiffSearchMatch,
     agentId: activeAgentBackend,
     agentLabel,
+    codeQualityFindings: state.codeQualityFindings,
     collapsed,
     comments: visibleReviewComments,
-    commitMetadata: state.source.type === 'commit' ? (state.commitMetadata ?? null) : null,
+    commitMetadata,
     diffLineHeight,
     diffStyle,
+    disableWorkerPool: disableCodeViewWorkerPool,
+    expandedGenerated,
     focusCommentId,
     focusCommentRequest,
     gitIdentity,
@@ -2340,10 +1657,12 @@ export default function App() {
     keymap: codiffConfig.keymap,
     loadingSectionIds,
     onAskCodex: askCodex,
+    onCommentDraftChange: updateActiveReviewCommentDraft,
     onCreateComment: createComment,
     onDeleteComment: deleteComment,
     onLoadImageContent: window.codiff.getDiffImageContent,
     onLoadSection: loadDiffSection,
+    onLoadSectionContents: loadDiffSectionContents,
     onOpenFile: openFile,
     onRefreshMarkdown: refreshMarkdownFile,
     onSaveCommentEdit: updateComment,
@@ -2358,8 +1677,13 @@ export default function App() {
     sourceDescriptionActions: isPullRequest ? (
       <PullRequestReviewButtons
         disabled={pullRequestReviewSubmitting != null}
+        hasPendingComments={hasPendingReviewComments}
         onSubmitReview={submitPullRequestReview}
         reviewStatus={state.source.type === 'pull-request' ? state.source.reviewStatus : undefined}
+        showCommentReview={
+          state.source.type === 'pull-request' &&
+          (state.source.provider === 'github' || state.source.host === 'github.com')
+        }
       />
     ) : undefined,
     theme: preferences.theme,
@@ -2372,22 +1696,13 @@ export default function App() {
     onActiveBlockChange: (blockId: string) => void,
   ) => {
     return (
-      <div className="wt-stop wt-diff-surface">
-        <ReviewCodeView
-          {...commonReviewProps}
-          blocks={blocks}
-          bottomInset={walkthroughCodeViewBottomInset}
-          commitMetadata={null}
-          files={[]}
-          forceExpandedPaths={diffSearchMatchPathSet}
-          onActiveBlockChange={onActiveBlockChange}
-          onSelectPathFromScroll={ignoreWalkthroughPathScroll}
-          scrollTarget={blockScrollTarget}
-          selectedPath={null}
-          showSourceDescription
-          walkthroughNotes={emptyWalkthroughNotes}
-        />
-      </div>
+      <WalkthroughDiffSurface
+        blocks={blocks}
+        forceExpandedPaths={diffSearchMatchPathSet}
+        onActiveBlockChange={onActiveBlockChange}
+        reviewProps={commonReviewProps}
+        scrollTarget={blockScrollTarget}
+      />
     );
   };
 
@@ -2431,8 +1746,12 @@ export default function App() {
         </div>
       ) : null}
       <RepositoryChangeBanner
-        onReload={reloadWindow}
-        visible={localChangesDetected && (pendingSource ?? state.source).type === 'working-tree'}
+        onRefresh={refreshRepository}
+        visible={
+          localChangesDetected &&
+          ((pendingSource ?? state.source).type === 'working-tree' ||
+            (pendingSource ?? state.source).type === 'branch-working-tree')
+        }
       />
       <WalkthroughOutdatedBanner
         onDismiss={() => setWalkthroughFileError(null)}
@@ -2453,7 +1772,7 @@ export default function App() {
       <CommandBar
         commands={commandBarCommands}
         keymap={codiffConfig.keymap}
-        onClose={() => setCommandBarVisible(false)}
+        onClose={closeCommandBar}
         visible={commandBarVisible}
       />
       <KeyboardShortcutsHelp keymap={codiffConfig.keymap} visible={shortcutsHelpVisible} />
@@ -2498,7 +1817,20 @@ export default function App() {
           </div>
         </div>
         <Sidebar
-          branchSource={historySource?.type === 'branch-diff' ? historySource : null}
+          branchSource={
+            historySource?.type === 'branch-diff'
+              ? historySource
+              : historySource?.type === 'branch-working-tree' &&
+                  historySource.baseRef &&
+                  historySource.headRef
+                ? {
+                    baseRef: historySource.baseRef,
+                    headRef: historySource.headRef,
+                    ref: historySource.ref,
+                    type: 'branch-diff',
+                  }
+                : null
+          }
           commitFiles={state.files}
           commitViewOpen={showPlainCommitView}
           currentSource={pendingSource ?? state.source}
@@ -2516,7 +1848,6 @@ export default function App() {
           onSearchQueryChange={
             sidebarMode === 'history' ? setHistorySearchQuery : setFileSearchQuery
           }
-          onSelectPath={selectPath}
           onSelectSource={selectSource}
           onShareWalkthrough={enabledShareWalkthrough}
           onToggleCommitView={showPlainCommitView ? closeCommitView : openCommitView}
@@ -2529,6 +1860,8 @@ export default function App() {
           viewed={viewed}
           walkthroughError={walkthroughError}
           walkthroughLoading={walkthroughLoading}
+          walkthroughOutdatedPaths={walkthroughOutdatedPaths}
+          walkthroughProgress={walkthroughProgress}
           walkthroughUnread={walkthroughUnread}
         />
       </aside>
@@ -2542,16 +1875,21 @@ export default function App() {
             draft={narrativeNavigation}
             model={plainCommitModel}
             onCommit={commitWalkthrough}
+            onCommitOutput={subscribeToCommitOutput}
             onUpdateMessage={updateWalkthroughCommitMessage}
           />
         ) : showNarrativeWalkthrough && narrativeWalkthrough ? (
           <NarrativeWalkthroughView
+            changedPaths={walkthroughOutdatedPaths}
             files={state.files}
             navigation={narrativeNavigation}
             onActiveReviewTargetChange={updateActiveWalkthroughReviewTarget}
             onCommit={commitWalkthrough}
+            onCommitOutput={subscribeToCommitOutput}
+            onRegenerateWalkthrough={regenerateWalkthrough}
             onShareWalkthrough={enabledShareWalkthrough}
             onUpdateCommitMessage={updateWalkthroughCommitMessage}
+            regenerateDisabled={walkthroughLoading}
             renderDiffBlocks={renderWalkthroughDiffBlocks}
             shareWalkthroughDisabled={walkthroughSharing}
             showWhitespace={showWhitespace}

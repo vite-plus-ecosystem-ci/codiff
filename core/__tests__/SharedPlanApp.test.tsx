@@ -6,7 +6,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { expect, test, vi } from 'vite-plus/test';
 import { PlanCommentCard } from '../app/components/PlanEditorView.tsx';
-import { SharedPlanApp } from '../SharedPlanApp.tsx';
+import { getSharedPlanDownloadContent, PlanReviewSurface } from '../SharedPlanApp.tsx';
 import type { PlanCommentThread, SharedPlanSnapshot } from '../types.ts';
 import { waitFor } from './helpers/react.tsx';
 
@@ -59,7 +59,6 @@ test('read-only comments can reveal attached targets', async () => {
         <PlanCommentCard
           active={false}
           detached={false}
-          identity={null}
           onActivate={() => {}}
           onBodyChange={() => {}}
           onDelete={() => {}}
@@ -142,6 +141,20 @@ test('shared plans render Markdown and comments read-only', async () => {
     version: 1,
   } satisfies SharedPlanSnapshot;
 
+  expect(getSharedPlanDownloadContent(snapshot)).toContain(
+    [
+      '## Comments',
+      '',
+      '### Comment 1: Heading · Ship plan sharing',
+      '',
+      '_Status: Open_',
+      '',
+      '**Reviewer (reviewer@example.com)** · 2026-06-25T00:00:00.000Z',
+      '',
+      'Do not regress walkthrough sharing.',
+    ].join('\n'),
+  );
+
   const container = document.createElement('div');
   document.body.append(container);
   let root: Root | null = null;
@@ -149,7 +162,7 @@ test('shared plans render Markdown and comments read-only', async () => {
   try {
     await act(async () => {
       root = createRoot(container);
-      root.render(<SharedPlanApp snapshot={snapshot} />);
+      root.render(<PlanReviewSurface snapshot={snapshot} />);
     });
 
     await waitFor(() => {
@@ -164,12 +177,20 @@ test('shared plans render Markdown and comments read-only', async () => {
     expect(container.querySelector('.plan-title')?.textContent).toBe('Ship plan sharing');
     expect(container.querySelector('.codiff-file-path')?.textContent).toBe('plan.md');
     expect(
+      container.querySelector('.codiff-header-toggle-static .codiff-file-path')?.textContent,
+    ).toBe('plan.md');
+    expect(container.querySelector('button[aria-label="Download plan"] svg')).not.toBeNull();
+    expect(
       [...container.querySelectorAll<HTMLElement>('[contenteditable]')].every(
         (element) => element.getAttribute('contenteditable') === 'false',
       ),
     ).toBe(true);
     expect(container.querySelector('.review-comment-delete')).toBeNull();
     expect(container.querySelector('.plan-comment-affordance')).toBeNull();
+    const target = container.querySelector('.plan-comment-target');
+    expect(target?.closest('.plan-comment-heading')).not.toBeNull();
+    expect(target?.closest('.review-comment-header')).not.toBeNull();
+    expect(container.querySelector('.plan-comment-thread-title')).toBeNull();
   } finally {
     if (root) {
       await act(async () => root?.unmount());
@@ -232,7 +253,7 @@ test('shared plans collapse resolved comments without rendering their annotation
 
   try {
     await act(async () => {
-      root.render(<SharedPlanApp snapshot={snapshot} />);
+      root.render(<PlanReviewSurface snapshot={snapshot} />);
     });
     await waitFor(() => {
       expect(container.querySelector('.plan-resolved-comments')).not.toBeNull();
@@ -304,7 +325,7 @@ test('shared plans do not render active HTML from documents or comments', async 
   try {
     await act(async () => {
       root = createRoot(container);
-      root.render(<SharedPlanApp snapshot={snapshot} />);
+      root.render(<PlanReviewSurface snapshot={snapshot} />);
     });
 
     await waitFor(() => {

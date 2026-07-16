@@ -35,7 +35,8 @@ const codiff = {
     ipcRenderer.invoke('codiff:getRepositoryHistory', limit, source),
   getRepositoryState: (source) => ipcRenderer.invoke('codiff:getRepositoryState', source),
   getTerminalHelperStatus: () => ipcRenderer.invoke('codiff:getTerminalHelperStatus'),
-  getNarrativeWalkthrough: (source) => ipcRenderer.invoke('codiff:getNarrativeWalkthrough', source),
+  getNarrativeWalkthrough: (source, options) =>
+    ipcRenderer.invoke('codiff:getNarrativeWalkthrough', source, options),
   installAgentSkill: () => ipcRenderer.invoke('codiff:installAgentSkill'),
   installTerminalHelper: () => ipcRenderer.invoke('codiff:installTerminalHelper'),
   increaseCodeFontSize: () => ipcRenderer.invoke('codiff:increaseCodeFontSize'),
@@ -81,6 +82,12 @@ const codiff = {
     ipcRenderer.on('codiff:planCloseRequested', listener);
     return () => ipcRenderer.removeListener('codiff:planCloseRequested', listener);
   },
+  onWalkthroughCommitOutput: (callback) => {
+    /** @param {Electron.IpcRendererEvent} _event @param {string} chunk */
+    const listener = (_event, chunk) => callback(String(chunk));
+    ipcRenderer.on('codiff:walkthroughCommitOutput', listener);
+    return () => ipcRenderer.removeListener('codiff:walkthroughCommitOutput', listener);
+  },
   onWindowFullScreenChanged: (callback) => {
     /** @param {Electron.IpcRendererEvent} _event @param {boolean} isFullScreen */
     const listener = (_event, isFullScreen) => callback(Boolean(isFullScreen));
@@ -92,6 +99,17 @@ const codiff = {
     const listener = (_event, change) => callback(change);
     ipcRenderer.on('codiff:repositoryChanged', listener);
     return () => ipcRenderer.removeListener('codiff:repositoryChanged', listener);
+  },
+  onWalkthroughProgress: (callback) => {
+    /** @param {Electron.IpcRendererEvent} _event @param {import('../core/types.ts').WalkthroughProgressEvent} progress */
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on('codiff:walkthroughProgress', listener);
+    return () => ipcRenderer.removeListener('codiff:walkthroughProgress', listener);
+  },
+  onRefreshRequest: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('codiff:refreshRequest', listener);
+    return () => ipcRenderer.removeListener('codiff:refreshRequest', listener);
   },
   openConfigFile: () => ipcRenderer.invoke('codiff:openConfigFile'),
   openFile: (path) => ipcRenderer.invoke('codiff:openFile', path),

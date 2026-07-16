@@ -1,4 +1,10 @@
-import { parseDiffFromFile, parsePatchFiles, type FileDiffMetadata } from '@pierre/diffs';
+import {
+  hydratePartialDiff,
+  parseDiffFromFile,
+  parsePatchFiles,
+  type FileDiffLoadedFiles,
+  type FileDiffMetadata,
+} from '@pierre/diffs';
 import type { ChangedFile, DiffSection } from '../types.ts';
 import type { DiffLineCount } from './app-types.ts';
 
@@ -6,8 +12,7 @@ export const getItemId = (section: DiffSection) => `diff:${section.id}`;
 
 export const isMarkdownFilePath = (path: string) => /\.md$/i.test(path);
 
-export const isImageFilePath = (path: string) =>
-  /\.(?:apng|avif|bmp|gif|ico|jpe?g|png|webp)$/i.test(path);
+const isImageFilePath = (path: string) => /\.(?:apng|avif|bmp|gif|ico|jpe?g|png|webp)$/i.test(path);
 
 export const canRenderImagePreview = (path: string, section: DiffSection) =>
   isImageFilePath(path) &&
@@ -21,8 +26,66 @@ export const isPatchOnlyDiffSection = (section: DiffSection) =>
   section.newFile == null;
 
 export const shouldLoadDiffSectionContents = (section: DiffSection) =>
-  section.summary?.canLoad !== false &&
-  (section.loadState === 'deferred' || isPatchOnlyDiffSection(section));
+  section.summary?.canLoad !== false && section.loadState === 'deferred';
+
+// Diff search needs full context lines in app state, so it also preloads
+// patch-only sections through the eager (state-replacing) flow.
+export const shouldPreloadSectionContentsForSearch = (section: DiffSection) =>
+  shouldLoadDiffSectionContents(section) ||
+  (section.summary?.canLoad !== false && isPatchOnlyDiffSection(section));
+
+// Full file contents fetched lazily for patch-only sections via the CodeView
+// `loadDiffFiles` option. Kept outside React state so the library's in-place
+// hydration of the rendered diff is not reset by re-renders. Keyed without the
+// whitespace flag so re-parses after a whitespace toggle reuse the contents.
+const getLoadedContentsKey = (file: ChangedFile, section: DiffSection) =>
+  `${file.fingerprint}:${section.id}:${getSectionCacheIdentity(section)}`;
+
+const loadedSectionContents = new Map<string, FileDiffLoadedFiles>();
+const pendingSectionLoads = new Map<string, Promise<FileDiffLoadedFiles>>();
+
+const fileDiffSectionLookup = new WeakMap<
+  FileDiffMetadata,
+  { file: ChangedFile; section: DiffSection }
+>();
+
+export const getSectionForFileDiff = (fileDiff: FileDiffMetadata) =>
+  fileDiffSectionLookup.get(fileDiff);
+
+const getLoadedSectionContents = (file: ChangedFile, section: DiffSection) =>
+  loadedSectionContents.get(getLoadedContentsKey(file, section));
+
+export const loadSectionContents = (
+  file: ChangedFile,
+  section: DiffSection,
+  load: (file: ChangedFile, section: DiffSection) => Promise<FileDiffLoadedFiles>,
+): Promise<FileDiffLoadedFiles> => {
+  const key = getLoadedContentsKey(file, section);
+  const loaded = loadedSectionContents.get(key);
+  if (loaded) {
+    return Promise.resolve(loaded);
+  }
+
+  const pending = pendingSectionLoads.get(key);
+  if (pending) {
+    return pending;
+  }
+
+  const promise = load(file, section)
+    .then((files) => {
+      // CodeView hydrates the cached partial object in place once these
+      // contents reach it, so cache hits keep returning the hydrated diff.
+      // The hydrated re-parse branch in `parseSectionDiffWithOptions` covers
+      // re-parses under a different cache key (e.g. a whitespace toggle).
+      loadedSectionContents.set(key, files);
+      return files;
+    })
+    .finally(() => {
+      pendingSectionLoads.delete(key);
+    });
+  pendingSectionLoads.set(key, promise);
+  return promise;
+};
 
 const joinDiffLines = (lines: ReadonlyArray<string>) =>
   lines.some((line) => line.includes('\n')) ? lines.join('') : lines.join('\n');
@@ -73,10 +136,11 @@ export const getMarkdownPreviewContents = (
     return null;
   }
 
-  if (section.newFile) {
+  const newFile = section.newFile ?? getLoadedSectionContents(file, section)?.newFile;
+  if (newFile) {
     return {
       addedLines: getAddedLineNumbers(file, fileDiff),
-      contents: section.newFile.contents,
+      contents: newFile.contents,
     };
   }
 
@@ -154,7 +218,7 @@ export const getTotalDiffLineCount = (lineCounts: Iterable<DiffLineCount>): Diff
 
 export const formatLineCountNumber = (value: number) => value.toLocaleString('en-US');
 
-export const formatCompactLineCountNumber = (value: number) => {
+const formatCompactLineCountNumber = (value: number) => {
   if (value < 1000) {
     return String(value);
   }
@@ -173,7 +237,7 @@ export const formatCompactLineCountNumber = (value: number) => {
 export const formatTreeLineCount = ({ additions, deletions }: DiffLineCount) =>
   `+${formatCompactLineCountNumber(additions)} -${formatCompactLineCountNumber(deletions)}`;
 
-export const pluralizeLine = (count: number) => (count === 1 ? 'line' : 'lines');
+const pluralizeLine = (count: number) => (count === 1 ? 'line' : 'lines');
 
 export const getDiffLineCountTitle = ({ additions, deletions }: DiffLineCount) =>
   `${formatLineCountNumber(additions)} added ${pluralizeLine(
@@ -279,12 +343,41 @@ export const parseSectionDiffWithOptions = (
     fileDiff = createEmptyFileDiff(file, section);
   } else {
     const parsedFileDiff = parsePatchFiles(section.patch)[0]?.files[0];
-    fileDiff = parsedFileDiff
-      ? {
+    if (parsedFileDiff) {
+      const loaded = parsedFileDiff.isPartial ? getLoadedSectionContents(file, section) : undefined;
+      let hydrated: FileDiffMetadata | null = null;
+      if (loaded) {
+        try {
+          // A fresh parse under a new cache key (e.g. a whitespace toggle)
+          // starts partial again even though contents were already fetched.
+          // Hydrate it with the library's own routine so the hunk geometry
+          // matches what CodeView produced when it hydrated the previous
+          // object in place after a `loadDiffFiles` expansion.
+          hydrated = hydratePartialDiff('merge', parsedFileDiff, loaded);
+        } catch {
+          hydrated = null;
+        }
+      }
+
+      if (hydrated) {
+        fileDiff = hydrated;
+      } else {
+        fileDiff = {
           ...parsedFileDiff,
           cacheKey,
+        };
+        // CodeView hydrates this object in place when the user expands
+        // unchanged context, so the cache key must derive from section
+        // identity and keep returning the same object. Binary/summary
+        // placeholders are intentionally never registered; they must not be
+        // hydrated.
+        if (section.summary?.canLoad !== false) {
+          fileDiffSectionLookup.set(fileDiff, { file, section });
         }
-      : createBinaryFileDiff(file, section);
+      }
+    } else {
+      fileDiff = createBinaryFileDiff(file, section);
+    }
   }
 
   parsedDiffCache.set(cacheKey, fileDiff);

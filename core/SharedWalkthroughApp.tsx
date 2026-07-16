@@ -1,23 +1,11 @@
-import { MarkdownEditor, type MarkdownEditorHandle } from '@nkzw/mdx-editor';
-import useRelativeTime from '@nkzw/use-relative-time';
-import { ChatCircleIcon as ChatCircle } from '@phosphor-icons/react/ChatCircle';
-import type { FileTreeRowDecorationRenderer } from '@pierre/trees';
-import { FileTree, useFileTree } from '@pierre/trees/react';
 import { ExternalLink } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ReviewFileTree } from './app/components/FileTree.tsx';
 import {
-  Suspense,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent,
-  type PointerEvent as ReactPointerEvent,
-  type ReactNode,
-} from 'react';
-import { Gravatar } from './app/components/Gravatar.tsx';
+  MergeRequestCommentsView,
+  SidebarGeneralCommentList,
+  type ReviewCommenting,
+} from './app/components/merge-request/GeneralComments.tsx';
 import {
   isTerminalPullRequestMergeState,
   isPullRequestReviewActionDisabled,
@@ -25,90 +13,71 @@ import {
   PullRequestMergeStatusBadge,
   PullRequestReviewButtons,
 } from './app/components/Panels.tsx';
-import { ReadOnlyMarkdownView } from './app/components/ReadOnlyMarkdownView.tsx';
 import {
   PullRequestSourceDescription,
   ReviewCodeView,
   type ReviewDiffBlock,
 } from './app/components/ReviewCodeView.tsx';
+import { DiffLineCountBadge } from './app/components/Sidebar.tsx';
 import { NarrativeSidebar } from './app/components/walkthrough/NarrativeSidebar.tsx';
 import {
   NarrativeWalkthroughView,
   type WalkthroughBlockScrollTarget,
 } from './app/components/walkthrough/NarrativeWalkthroughView.tsx';
 import { useNarrativeNavigation } from './app/components/walkthrough/useNarrativeNavigation.ts';
+import { WalkthroughDiffSurface } from './app/components/walkthrough/WalkthroughDiffSurface.tsx';
+import { WalkthroughProgress } from './app/components/walkthrough/WalkthroughProgress.tsx';
+import {
+  getCodeFontLineHeight,
+  normalizeCodeFontSizePreference,
+  useDocumentAppearance,
+} from './app/hooks/useDocumentAppearance.ts';
+import { useResizableSidebar } from './app/hooks/useResizableSidebar.ts';
+import { useReviewCommentDrafts } from './app/hooks/useReviewCommentDrafts.ts';
+import { useReviewFileState } from './app/hooks/useReviewState.ts';
 import { createDefaultConfig } from './config/defaults.ts';
-import { matchesShortcut } from './config/keymap.ts';
-import type { CodiffKeymap } from './config/types.ts';
 import { getAgentLabel } from './lib/app-constants.ts';
-import type {
-  CodeViewInstance,
-  ReviewComment,
-  ReviewIdentity,
-  ReviewScrollTarget,
-} from './lib/app-types.ts';
-import { DEFAULT_PADDING } from './lib/code-view-options.ts';
+import type { CodeViewInstance, ReviewComment, ReviewScrollTarget } from './lib/app-types.ts';
 import {
   fileHasVisibleDiff,
-  formatTreeLineCount,
   getDiffLineCount,
-  getDiffLineCountTitle,
-  getFirstVisibleSection,
-  getItemId,
+  getTotalDiffLineCount,
   isMarkdownFilePath,
 } from './lib/diff.ts';
-import { compactPath, fileTreeSort, fuzzyMatches, sortFiles, statusForTree } from './lib/files.ts';
+import { compactPath, fuzzyMatches, sortFiles } from './lib/files.ts';
 import { isNativeInputTarget } from './lib/keyboard.ts';
-import { isGeneratedWalkthroughPath } from './lib/narrative-walkthrough-diff.js';
+import { isGeneratedWalkthroughFile } from './lib/narrative-walkthrough-diff.js';
 import {
-  getCommentKey,
-  getReviewCommentRangeProps,
+  getPendingPullRequestReviewComments,
   getReviewCommentsFromState,
+  toPullRequestReviewComment,
 } from './lib/review-comments.ts';
-import {
-  updateReviewIdentityCollapsed,
-  updateReviewIdentityViewed,
-} from './lib/review-identity.ts';
-import {
-  SIDEBAR_DEFAULT_WIDTH,
-  clampSidebarWidth,
-  readSidebarWidth,
-  writeSidebarWidth,
-} from './lib/sidebar-width.ts';
+import { getSelectedPathFromScroll } from './lib/review-scroll.ts';
+import { SIDEBAR_DEFAULT_WIDTH, readSidebarWidth, writeSidebarWidth } from './lib/sidebar-width.ts';
 import { getSourceLabel, getSourceKey } from './lib/source.ts';
 import type {
-  ChangedFile,
-  CodiffPreferences,
   GitIdentity,
-  NarrativeWalkthrough,
   PullRequestMergeOptions,
   PullRequestGeneralComment,
   PullRequestGeneralCommentThread,
   PullRequestExistingReviewComment,
   PullRequestReviewComment,
   PullRequestReviewEvent,
-  ReviewAuthor,
   RepositoryState,
   SharedWalkthroughSnapshot,
   WalkthroughCommitMessageResult,
   WalkthroughCommitResult,
 } from './types.ts';
 
+export {
+  ReadOnlyGeneralCommentCard,
+  type ReviewCommenting,
+} from './app/components/merge-request/GeneralComments.tsx';
+
 const emptyReviewComments: ReadonlyArray<ReviewComment> = [];
 const emptyGeneralCommentThreads: ReadonlyArray<PullRequestGeneralCommentThread> = [];
 const emptyPaths = new Set<string>();
 const emptyWalkthroughNotes = new Map();
-const walkthroughCodeViewBottomInset = 96;
-const CODE_FONT_SIZE_DEFAULT = 13;
-const defaultSharedPreferences: SharedWalkthroughSnapshot['preferences'] = {
-  codeFontFamily: 'Fira Code',
-  codeFontSize: CODE_FONT_SIZE_DEFAULT,
-  diffStyle: 'split',
-  showWhitespace: false,
-  theme: 'system',
-  wordWrap: false,
-};
-
 const readSharedSidebarWidth = () =>
   typeof localStorage === 'undefined' ? SIDEBAR_DEFAULT_WIDTH : readSidebarWidth();
 
@@ -118,53 +87,8 @@ const writeSharedSidebarWidth = (width: number) => {
   }
 };
 
-export type MergeRequestWalkthroughStatus = 'failed' | 'generating' | 'idle' | 'ready';
-export type MergeRequestReviewMode = 'comments' | 'tree' | 'walkthrough';
-
-export type MergeRequestReviewAppProps = {
-  externalUrl: string;
-  gitIdentity?: GitIdentity | null;
-  initialMode?: MergeRequestReviewMode;
-  onCancelAutoMerge?: () => Promise<void> | void;
-  onClosePullRequest?: () => Promise<void> | void;
-  onGenerateWalkthrough: () => Promise<void> | void;
-  onHome: () => void;
-  onMergePullRequest?: (
-    options: PullRequestMergeOptions & { autoMerge: boolean },
-  ) => Promise<void> | void;
-  onModeChange?: (mode: MergeRequestReviewMode) => void;
-  onResolveDiscussion?: (discussionId: string, resolved: boolean) => Promise<void>;
-  onSubmitComment: (comment: PullRequestReviewComment) => Promise<PullRequestExistingReviewComment>;
-  onSubmitGeneralComment: (body: string) => Promise<void>;
-  onSubmitReview: (
-    event: PullRequestReviewEvent,
-    comments: ReadonlyArray<PullRequestReviewComment>,
-  ) => Promise<void>;
-  onUpdateComment: (commentId: string, body: string) => Promise<void>;
-  onUpdateDescription?: (body: string) => Promise<void> | void;
-  onUpdateGeneralComment: (commentId: string, body: string) => Promise<void>;
-  onUpdateTitle?: (title: string) => Promise<void> | void;
-  onUploadDescriptionAsset?: (file: File) => Promise<string> | string;
-  preferences?: Partial<
-    Pick<
-      CodiffPreferences,
-      'codeFontFamily' | 'codeFontSize' | 'diffStyle' | 'showWhitespace' | 'theme' | 'wordWrap'
-    >
-  >;
-  settingsBar?: ReactNode;
-  sourceDescriptionFooterAside?: ReactNode;
-  sourceDescriptionFooterAsideKey?: string;
-  state: RepositoryState;
-  title: string;
-  walkthrough: NarrativeWalkthrough | null;
-  walkthroughError?: string | null;
-  walkthroughStatus: MergeRequestWalkthroughStatus;
-};
-
-const getCodeFontLineHeight = (size: number) => Math.round((size * 20) / 13);
-
-const normalizeCodeFontSizePreference = (size: number) =>
-  Number.isFinite(size) ? Math.min(32, Math.max(10, Math.round(size))) : CODE_FONT_SIZE_DEFAULT;
+export type ReviewWalkthroughStatus = 'failed' | 'generating' | 'idle' | 'ready';
+export type ReviewMode = 'comments' | 'tree' | 'walkthrough';
 
 const getSnapshotReviewComments = (
   snapshot: SharedWalkthroughSnapshot,
@@ -186,525 +110,6 @@ const getSnapshotReviewComments = (
 
 const noop = () => {};
 
-const getAuthorDisplayName = (author: ReviewAuthor) => author.name || author.login;
-const getGeneralCommentElementId = (commentId: string) => `general-comment:${commentId}`;
-
-const scrollCommentIntoContainerView = (container: HTMLElement, element: HTMLElement) => {
-  const containerRect = container.getBoundingClientRect();
-  const elementRect = element.getBoundingClientRect();
-  const top =
-    container.scrollTop +
-    elementRect.top -
-    containerRect.top -
-    Math.max(0, (container.clientHeight - elementRect.height) / 2);
-
-  container.scrollTo({
-    behavior: 'smooth',
-    top,
-  });
-};
-const plainTextCommentPattern =
-  /<!--[\s\S]*?-->|<\/?(?:details|summary)\b[^>]*>|```[\s\S]*?```|`([^`]+)`|\[([^\]]+)\]\([^)]+\)|[*_~>#]+/g;
-
-const getCommentPreview = (body: string) => {
-  const preview = body
-    .replaceAll(
-      plainTextCommentPattern,
-      (_, inlineCode: string | undefined, linkText: string | undefined) =>
-        inlineCode ?? linkText ?? ' ',
-    )
-    .replaceAll(/\s+/g, ' ')
-    .trim();
-  return preview || 'Comment';
-};
-
-const formatSubmittedAt = (value: string) => {
-  const time = Date.parse(value);
-  return Number.isFinite(time) ? new Date(time).toLocaleString() : value;
-};
-
-function RelativeSubmittedAtTime({
-  submittedAt,
-  timestamp,
-}: {
-  submittedAt: string;
-  timestamp: number;
-}) {
-  const relativeTime = useRelativeTime(timestamp);
-  return (
-    <time dateTime={submittedAt} title={formatSubmittedAt(submittedAt)}>
-      {relativeTime}
-    </time>
-  );
-}
-
-function SubmittedAtTime({ submittedAt }: { submittedAt: string }) {
-  const timestamp = Date.parse(submittedAt);
-  if (!Number.isFinite(timestamp)) {
-    return (
-      <time dateTime={submittedAt} title={submittedAt}>
-        {submittedAt}
-      </time>
-    );
-  }
-  return <RelativeSubmittedAtTime submittedAt={submittedAt} timestamp={timestamp} />;
-}
-
-export function ReadOnlyGeneralCommentCard({
-  className = '',
-  comment,
-  focused = false,
-}: {
-  className?: string;
-  comment: PullRequestGeneralComment;
-  focused?: boolean;
-}) {
-  const displayName = getAuthorDisplayName(comment.author);
-  const classes = ['review-comment', 'general-comment-card', focused ? 'focused' : '', className]
-    .filter(Boolean)
-    .join(' ');
-
-  return (
-    <article className={classes} id={getGeneralCommentElementId(comment.id)}>
-      <Gravatar fallback={displayName} size="medium" url={comment.author.avatarUrl} />
-      <div className="review-comment-body source-description-body">
-        <div className="review-comment-header read-only general-comment-header">
-          <strong title={`@${comment.author.login}`}>{displayName}</strong>
-          {comment.submittedAt ? <SubmittedAtTime submittedAt={comment.submittedAt} /> : null}
-        </div>
-        <ReadOnlyMarkdownView
-          ariaLabel={`Comment by ${displayName}`}
-          className="review-comment-markdown-editor general-comment-markdown-editor"
-          contentClassName="review-comment-input read-only general-comment-input"
-          fallback={<div className="review-comment-input read-only" />}
-          value={comment.body}
-          variant="embedded"
-        />
-      </div>
-    </article>
-  );
-}
-
-function GeneralCommentCard({
-  comment,
-  editDraft,
-  editError,
-  editing,
-  editSubmitting,
-  focused,
-  keymap,
-  onCancelEdit,
-  onChangeEditDraft,
-  onSaveEdit,
-  onStartEdit,
-}: {
-  comment: PullRequestGeneralComment;
-  editDraft: string;
-  editError: string | null;
-  editing: boolean;
-  editSubmitting: boolean;
-  focused: boolean;
-  keymap: CodiffKeymap;
-  onCancelEdit: () => void;
-  onChangeEditDraft: (draft: string) => void;
-  onSaveEdit: () => void;
-  onStartEdit: (comment: PullRequestGeneralComment) => void;
-}) {
-  const displayName = getAuthorDisplayName(comment.author);
-  const canSaveEdit = editing && !editSubmitting && Boolean(editDraft.trim());
-  const editorRef = useRef<MarkdownEditorHandle | null>(null);
-  const handleEditKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLDivElement>) => {
-      if (!matchesShortcut(event, keymap, 'submitComment') || !canSaveEdit) {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-      onSaveEdit();
-    },
-    [canSaveEdit, keymap, onSaveEdit],
-  );
-  const setEditorRef = useCallback(
-    (editor: MarkdownEditorHandle | null) => {
-      editorRef.current = editor;
-      if (editor && editing) {
-        requestAnimationFrame(() => {
-          editor.focus({ defaultSelection: 'rootEnd', preventScroll: true });
-        });
-      }
-    },
-    [editing],
-  );
-
-  useEffect(() => {
-    if (!editing) {
-      return;
-    }
-
-    requestAnimationFrame(() => {
-      editorRef.current?.focus({ defaultSelection: 'rootEnd', preventScroll: true });
-    });
-  }, [editing]);
-
-  return (
-    <article
-      className={`review-comment general-comment-card${focused ? ' focused' : ''}`}
-      id={getGeneralCommentElementId(comment.id)}
-    >
-      <Gravatar fallback={displayName} size="medium" url={comment.author.avatarUrl} />
-      <div className="review-comment-body source-description-body">
-        <div
-          className={`review-comment-header read-only general-comment-header${
-            comment.canEdit || editing ? ' with-comment-action' : ''
-          }`}
-        >
-          <strong title={`@${comment.author.login}`}>{displayName}</strong>
-          {comment.submittedAt ? <SubmittedAtTime submittedAt={comment.submittedAt} /> : null}
-          {editing ? (
-            <span className="general-comment-edit-actions">
-              <button
-                className="review-comment-action"
-                disabled={editSubmitting}
-                onClick={onCancelEdit}
-                type="button"
-              >
-                Cancel
-              </button>
-              <button
-                className="review-comment-action"
-                disabled={!canSaveEdit}
-                onClick={onSaveEdit}
-                type="button"
-              >
-                {editSubmitting ? 'Saving' : 'Save'}
-              </button>
-            </span>
-          ) : comment.canEdit ? (
-            <button
-              className="review-comment-action"
-              onClick={() => onStartEdit(comment)}
-              type="button"
-            >
-              Edit
-            </button>
-          ) : null}
-        </div>
-        {editing ? (
-          <>
-            <Suspense fallback={<div className="review-comment-input" />}>
-              <MarkdownEditor
-                ariaLabel={`Edit comment by ${displayName}`}
-                className="review-comment-markdown-editor general-comment-markdown-editor"
-                colorScheme="inherit"
-                contentClassName="review-comment-input general-comment-input"
-                density="compact"
-                onChange={onChangeEditDraft}
-                onKeyDown={handleEditKeyDown}
-                readOnly={editSubmitting}
-                ref={setEditorRef}
-                spellCheck
-                value={editDraft}
-                variant="embedded"
-              />
-            </Suspense>
-            {editError ? <div className="review-comment-error">{editError}</div> : null}
-          </>
-        ) : (
-          <ReadOnlyMarkdownView
-            ariaLabel={`Comment by ${displayName}`}
-            className="review-comment-markdown-editor general-comment-markdown-editor"
-            contentClassName="review-comment-input read-only general-comment-input"
-            fallback={<div className="review-comment-input read-only" />}
-            value={comment.body}
-            variant="embedded"
-          />
-        )}
-      </div>
-    </article>
-  );
-}
-
-function GeneralCommentThreadCard({
-  editDraft,
-  editError,
-  editingCommentId,
-  editSubmitting,
-  focusedCommentId,
-  keymap,
-  onCancelEdit,
-  onChangeEditDraft,
-  onSaveEdit,
-  onStartEdit,
-  thread,
-}: {
-  editDraft: string;
-  editError: string | null;
-  editingCommentId: string | null;
-  editSubmitting: boolean;
-  focusedCommentId: string | null;
-  keymap: CodiffKeymap;
-  onCancelEdit: () => void;
-  onChangeEditDraft: (draft: string) => void;
-  onSaveEdit: () => void;
-  onStartEdit: (comment: PullRequestGeneralComment) => void;
-  thread: PullRequestGeneralCommentThread;
-}) {
-  return (
-    <section className="general-comment-thread">
-      {thread.comments.map((comment) => (
-        <GeneralCommentCard
-          comment={comment}
-          editDraft={editDraft}
-          editError={editingCommentId === comment.id ? editError : null}
-          editing={editingCommentId === comment.id}
-          editSubmitting={editSubmitting && editingCommentId === comment.id}
-          focused={comment.id === focusedCommentId}
-          key={comment.id}
-          keymap={keymap}
-          onCancelEdit={onCancelEdit}
-          onChangeEditDraft={onChangeEditDraft}
-          onSaveEdit={onSaveEdit}
-          onStartEdit={onStartEdit}
-        />
-      ))}
-    </section>
-  );
-}
-
-function SidebarGeneralCommentList({
-  comments,
-  focusedCommentId,
-  onActivateComment,
-}: {
-  comments: ReadonlyArray<PullRequestGeneralComment>;
-  focusedCommentId: string | null;
-  onActivateComment: (commentId: string) => void;
-}) {
-  if (comments.length === 0) {
-    return (
-      <div className="sidebar-comments-empty">
-        <strong>No comments yet</strong>
-        <span>Start the discussion in the main panel.</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="history-list sidebar-comment-list">
-      {comments.map((comment, index) => {
-        const displayName = getAuthorDisplayName(comment.author);
-        const selected = comment.id === focusedCommentId;
-        return (
-          <button
-            aria-current={selected ? 'true' : undefined}
-            className={`history-entry sidebar-comment-entry with-metadata${selected ? ' selected' : ''}`}
-            key={comment.id}
-            onClick={() => onActivateComment(comment.id)}
-            title={comment.body}
-            type="button"
-          >
-            <span className="history-entry-ref">#{index + 1}</span>
-            <span className="history-entry-subject">{getCommentPreview(comment.body)}</span>
-            <span className="history-entry-meta">
-              <span className="history-entry-author">
-                <Gravatar fallback={displayName} size="small" url={comment.author.avatarUrl} />
-                <span>{displayName}</span>
-              </span>
-              {comment.submittedAt ? <SubmittedAtTime submittedAt={comment.submittedAt} /> : null}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function GeneralCommentComposer({
-  disabled,
-  draft,
-  error,
-  gitIdentity,
-  keymap,
-  onChangeDraft,
-  onSubmit,
-  submitting,
-}: {
-  disabled: boolean;
-  draft: string;
-  error: string | null;
-  gitIdentity: GitIdentity | null;
-  keymap: CodiffKeymap;
-  onChangeDraft: (draft: string) => void;
-  onSubmit: () => void;
-  submitting: boolean;
-}) {
-  const canSubmit = !disabled && !submitting && Boolean(draft.trim());
-  const handleKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLDivElement>) => {
-      if (!matchesShortcut(event, keymap, 'submitComment') || !canSubmit) {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-      onSubmit();
-    },
-    [canSubmit, keymap, onSubmit],
-  );
-  return (
-    <section className="review-comment-thread general-comment-composer">
-      <div className="review-comment">
-        <Gravatar
-          fallback={gitIdentity?.name || gitIdentity?.email || 'You'}
-          size="medium"
-          url={gitIdentity?.gravatarUrl}
-        />
-        <div className="review-comment-body">
-          <div className="review-comment-header general-comment-header general-comment-composer-header">
-            <strong>{gitIdentity?.name || gitIdentity?.email || 'You'}</strong>
-            <button
-              className="review-comment-action"
-              disabled={!canSubmit}
-              onClick={onSubmit}
-              title={
-                canSubmit ? 'Submit merge request comment' : 'Write a comment before commenting'
-              }
-              type="button"
-            >
-              <ChatCircle aria-hidden className="review-comment-action-icon" size={14} />
-              {submitting ? 'Sending' : 'Comment'}
-            </button>
-          </div>
-          <Suspense fallback={<div className="review-comment-input" />}>
-            <MarkdownEditor
-              ariaLabel="Add merge request comment"
-              className="review-comment-markdown-editor"
-              colorScheme="inherit"
-              contentClassName="review-comment-input"
-              density="compact"
-              onChange={onChangeDraft}
-              onKeyDown={handleKeyDown}
-              placeholder="Write a comment…"
-              readOnly={disabled || submitting}
-              spellCheck
-              value={draft}
-              variant="embedded"
-            />
-          </Suspense>
-          {error ? <div className="review-comment-error">{error}</div> : null}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function MergeRequestCommentsView({
-  draft,
-  editDraft,
-  editError,
-  editingCommentId,
-  editSubmitting,
-  error,
-  focusedCommentId,
-  focusedCommentRequest,
-  gitIdentity,
-  interactive,
-  keymap,
-  onCancelEdit,
-  onChangeDraft,
-  onChangeEditDraft,
-  onSaveEdit,
-  onStartEdit,
-  onSubmit,
-  sourceDescription,
-  submitting,
-  threads,
-}: {
-  draft: string;
-  editDraft: string;
-  editError: string | null;
-  editingCommentId: string | null;
-  editSubmitting: boolean;
-  error: string | null;
-  focusedCommentId: string | null;
-  focusedCommentRequest: number;
-  gitIdentity: GitIdentity | null;
-  interactive: boolean;
-  keymap: CodiffKeymap;
-  onCancelEdit: () => void;
-  onChangeDraft: (draft: string) => void;
-  onChangeEditDraft: (draft: string) => void;
-  onSaveEdit: () => void;
-  onStartEdit: (comment: PullRequestGeneralComment) => void;
-  onSubmit: () => void;
-  sourceDescription?: ReactNode;
-  submitting: boolean;
-  threads: ReadonlyArray<PullRequestGeneralCommentThread>;
-}) {
-  const commentsRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (focusedCommentId == null) {
-      return;
-    }
-
-    const container = commentsRef.current;
-    const element = document.getElementById(getGeneralCommentElementId(focusedCommentId));
-    if (!container || !element) {
-      return;
-    }
-
-    scrollCommentIntoContainerView(container, element);
-  }, [focusedCommentId, focusedCommentRequest]);
-
-  return (
-    <div className="merge-request-comments-view" ref={commentsRef}>
-      {sourceDescription ? (
-        <div className="merge-request-comments-source-description">{sourceDescription}</div>
-      ) : null}
-      {threads.length > 0 ? (
-        <div className="general-comment-list">
-          {threads.map((thread) => (
-            <GeneralCommentThreadCard
-              editDraft={editDraft}
-              editError={editError}
-              editingCommentId={editingCommentId}
-              editSubmitting={editSubmitting}
-              focusedCommentId={focusedCommentId}
-              key={thread.id}
-              keymap={keymap}
-              onCancelEdit={onCancelEdit}
-              onChangeEditDraft={onChangeEditDraft}
-              onSaveEdit={onSaveEdit}
-              onStartEdit={onStartEdit}
-              thread={thread}
-            />
-          ))}
-        </div>
-      ) : (
-        <div className="empty-state">
-          <div className="empty-panel squircle">
-            <strong>No comments yet</strong>
-            <span>Add a merge request comment to start the discussion.</span>
-          </div>
-        </div>
-      )}
-      {interactive ? (
-        <GeneralCommentComposer
-          disabled={!interactive}
-          draft={draft}
-          error={error}
-          gitIdentity={gitIdentity}
-          keymap={keymap}
-          onChangeDraft={onChangeDraft}
-          onSubmit={onSubmit}
-          submitting={submitting}
-        />
-      ) : null}
-    </div>
-  );
-}
-
 const disabledCommit = async (): Promise<WalkthroughCommitResult> => ({
   reason: 'Shared walkthroughs are read-only.',
   status: 'failed',
@@ -715,138 +120,11 @@ const disabledCommitMessage = async (): Promise<WalkthroughCommitMessageResult> 
   status: 'unavailable',
 });
 
-function SharedFileTree({
-  files,
-  onActivatePath,
-  selectedPath,
-  showWhitespace,
-}: {
-  files: ReadonlyArray<ChangedFile>;
-  onActivatePath: (path: string) => void;
-  selectedPath: string | null;
-  showWhitespace: boolean;
-}) {
-  const paths = useMemo(() => files.map((file) => file.path), [files]);
-  const filePathSet = useMemo(() => new Set(paths), [paths]);
-  const lineCountsByPath = useMemo(
-    () => new Map(files.map((file) => [file.path, getDiffLineCount(file, showWhitespace)])),
-    [files, showWhitespace],
-  );
-  const lineCountsByPathRef = useRef(lineCountsByPath);
-  const renderTreeRowDecoration = useCallback<FileTreeRowDecorationRenderer>(({ item }) => {
-    const lineCount = lineCountsByPathRef.current.get(item.path);
-    return lineCount?.countable
-      ? {
-          text: formatTreeLineCount(lineCount),
-          title: getDiffLineCountTitle(lineCount),
-        }
-      : null;
-  }, []);
-  const status = useMemo(
-    () =>
-      files.map((file) => ({
-        path: file.path,
-        status: statusForTree[file.status],
-      })),
-    [files],
-  );
-  const { model } = useFileTree({
-    flattenEmptyDirectories: true,
-    gitStatus: status,
-    initialExpansion: 'open',
-    initialSelectedPaths: selectedPath ? [selectedPath] : [],
-    itemHeight: 30,
-    paths,
-    renderRowDecoration: renderTreeRowDecoration,
-    sort: fileTreeSort,
-    unsafeCSS: `
-      :host {
-        --trees-bg-override: transparent;
-        --trees-bg-muted-override: var(--hover-wash);
-        --trees-border-color-override: var(--sidebar-border);
-        --trees-fg-muted-override: var(--muted);
-        --trees-fg-override: var(--sidebar-text);
-        --trees-focus-ring-color-override: var(--tree-selection-focus);
-        --trees-padding-inline-override: 4px;
-        --trees-search-bg-override: rgb(127 127 127 / 0.1);
-        --trees-search-fg-override: var(--sidebar-text);
-        --trees-selected-bg-override: color-mix(in srgb, var(--tree-selection-bg) 46%, transparent);
-        --trees-selected-fg-override: var(--sidebar-text);
-        --trees-selected-focused-border-color-override: color-mix(in srgb, var(--tree-selection-focus) 42%, transparent);
-        --truncate-marker-background-color: transparent;
-        color-scheme: var(--codiff-tree-color-scheme, light dark);
-        color: var(--sidebar-text);
-        font: 13px/1.35 var(--font-sans);
-      }
-
-      button[data-type='item'] {
-        background-color: transparent;
-        border-radius: 14px;
-        corner-shape: squircle;
-      }
-
-      [data-item-section='decoration'] {
-        color: var(--muted);
-        font: 600 10px/1 var(--font-mono);
-        letter-spacing: 0;
-      }
-    `,
-  });
-
-  useLayoutEffect(() => {
-    lineCountsByPathRef.current = lineCountsByPath;
-    if (model.getFileTreeContainer()) {
-      model.render({});
-    }
-  }, [lineCountsByPath, model]);
-
-  useEffect(() => {
-    model.resetPaths(paths);
-  }, [model, paths]);
-
-  useEffect(() => {
-    model.setGitStatus(status);
-  }, [model, status]);
-
-  useEffect(() => {
-    if (!selectedPath) {
-      return;
-    }
-
-    for (const path of model.getSelectedPaths()) {
-      model.getItem(path)?.deselect();
-    }
-    model.getItem(selectedPath)?.select();
-  }, [model, selectedPath]);
-
-  const handleTreeClick = useCallback(
-    (event: MouseEvent<HTMLElement>) => {
-      for (const target of event.nativeEvent.composedPath()) {
-        if (!('getAttribute' in target) || typeof target.getAttribute !== 'function') {
-          continue;
-        }
-
-        const path = target.getAttribute('data-item-path');
-        if (path && filePathSet.has(path)) {
-          onActivatePath(path);
-          return;
-        }
-      }
-    },
-    [filePathSet, onActivatePath],
-  );
-
-  return (
-    <div className="file-tree-shell">
-      <FileTree className="file-tree" model={model} onClick={handleTreeClick} />
-    </div>
-  );
-}
-
-type ReviewSurfaceProps = {
+export type ReviewSurfaceProps = {
+  commenting?: ReviewCommenting;
   externalUrl?: string;
   gitIdentity?: GitIdentity | null;
-  initialMode?: MergeRequestReviewMode;
+  initialMode?: ReviewMode;
   interactive?: {
     onCancelAutoMerge?: () => Promise<void> | void;
     onClosePullRequest?: () => Promise<void> | void;
@@ -863,6 +141,7 @@ type ReviewSurfaceProps = {
     onSubmitReview: (
       event: PullRequestReviewEvent,
       comments: ReadonlyArray<PullRequestReviewComment>,
+      body?: string,
     ) => Promise<void>;
     onUpdateComment: (commentId: string, body: string) => Promise<void>;
     onUpdateDescription?: (body: string) => Promise<void> | void;
@@ -870,28 +149,39 @@ type ReviewSurfaceProps = {
     onUpdateTitle?: (title: string) => Promise<void> | void;
     onUploadDescriptionAsset?: (file: File) => Promise<string> | string;
     walkthroughError?: string | null;
-    walkthroughStatus: MergeRequestWalkthroughStatus;
+    walkthroughStatus: ReviewWalkthroughStatus;
   };
-  onModeChange?: (mode: MergeRequestReviewMode) => void;
+  onModeChange?: (mode: ReviewMode) => void;
+  providerLabel?: string;
   settingsBar?: ReactNode;
+  signInLabel?: string;
   snapshot: SharedWalkthroughSnapshot;
   sourceDescriptionFooterAside?: ReactNode;
-  sourceDescriptionFooterAsideKey?: string;
   title?: string;
 };
 
-function ReviewSurface({
+export function ReviewSurface({
+  commenting,
   externalUrl,
   gitIdentity = null,
   initialMode,
   interactive,
   onModeChange,
+  providerLabel = 'provider',
   settingsBar,
+  signInLabel = 'Sign in to comment',
   snapshot,
   sourceDescriptionFooterAside,
-  sourceDescriptionFooterAsideKey,
   title,
 }: ReviewSurfaceProps) {
+  const canComment = commenting?.canComment ?? Boolean(interactive);
+  const submitReviewComment = commenting?.onSubmitComment ?? interactive?.onSubmitComment;
+  const submitGeneralDiscussion =
+    commenting?.onSubmitGeneralComment ?? interactive?.onSubmitGeneralComment;
+  const updateReviewComment = commenting?.onUpdateComment ?? interactive?.onUpdateComment;
+  const updateGeneralDiscussion =
+    commenting?.onUpdateGeneralComment ?? interactive?.onUpdateGeneralComment;
+  const resolveDiscussion = commenting?.onResolveDiscussion ?? interactive?.onResolveDiscussion;
   const sharedWalkthrough = useMemo(
     () => ({
       ...snapshot.walkthrough,
@@ -905,20 +195,30 @@ function ReviewSurface({
     `${snapshot.repository.root}:${getSourceKey(snapshot.repository.source)}`,
   );
   const keymap = useMemo(() => createDefaultConfig().keymap, []);
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [fileSearchQuery, setFileSearchQuery] = useState('');
-  const [itemVersionByKey, setItemVersionByKey] = useState<Record<string, number>>({});
-  const [selectedPath, setSelectedPath] = useState<string | null>(
-    () => snapshot.files[0]?.path ?? null,
-  );
-  const [sidebarWidth, setSidebarWidth] = useState(readSharedSidebarWidth);
-  const [uncontrolledSidebarMode, setUncontrolledSidebarMode] = useState<MergeRequestReviewMode>(
+  const [uncontrolledSidebarMode, setUncontrolledSidebarMode] = useState<ReviewMode>(
     () => initialMode ?? (interactive ? 'tree' : 'walkthrough'),
   );
   const isSidebarModeControlled = Boolean(initialMode && onModeChange);
   const sidebarMode = isSidebarModeControlled ? initialMode : uncontrolledSidebarMode;
   const [treeScrollTarget, setTreeScrollTarget] = useState<ReviewScrollTarget | null>(null);
-  const [viewed, setViewed] = useState<Record<string, string>>({});
+  const {
+    bumpItemVersion,
+    collapsed,
+    expandedGenerated,
+    itemVersionByKey,
+    selectedPath,
+    setSelectedPath,
+    toggleCollapsed,
+    toggleViewed,
+    viewed,
+  } = useReviewFileState({
+    initialSelectedPath: snapshot.files[0]?.path ?? null,
+  });
+  const { resizeSidebar, sidebarWidth } = useResizableSidebar({
+    onWidthCommit: writeSharedSidebarWidth,
+    readWidth: readSharedSidebarWidth,
+  });
   const snapshotReviewComments = useMemo(() => getSnapshotReviewComments(snapshot), [snapshot]);
   const [editedReviewCommentBodies, setEditedReviewCommentBodies] = useState<
     Readonly<Record<string, string>>
@@ -939,7 +239,23 @@ function ReviewSurface({
     () => [...visibleSnapshotReviewComments, ...localReviewComments],
     [localReviewComments, visibleSnapshotReviewComments],
   );
-  const reviewCommentsRef = useRef(reviewComments);
+  const {
+    activeReviewCommentDraftRef,
+    activeReviewCommentDraftState,
+    clearCommentFocus,
+    createComment,
+    deleteComment: deleteLocalComment,
+    focusCommentId,
+    focusCommentRequest,
+    reviewCommentsRef,
+    updateActiveReviewCommentDraft,
+    updateComment,
+  } = useReviewCommentDrafts({
+    canCreateComment: canComment,
+    comments: reviewComments,
+    onCommentFileChange: bumpItemVersion,
+    setComments: setLocalReviewComments,
+  });
   const generalCommentThreads = snapshot.repository.generalComments ?? emptyGeneralCommentThreads;
   const generalComments = useMemo(
     () =>
@@ -958,8 +274,6 @@ function ReviewSurface({
   const [focusedGeneralCommentId, setFocusedGeneralCommentId] = useState<string | null>(null);
   const [generalCommentScrollRequest, setGeneralCommentScrollRequest] = useState(0);
   const [generalCommentSubmitting, setGeneralCommentSubmitting] = useState(false);
-  const [focusCommentId, setFocusCommentId] = useState<string | null>(null);
-  const [focusCommentRequest, setFocusCommentRequest] = useState(0);
   const [pullRequestReviewSubmitting, setPullRequestReviewSubmitting] =
     useState<PullRequestReviewEvent | null>(null);
   const [pullRequestCloseSubmitting, setPullRequestCloseSubmitting] = useState(false);
@@ -968,10 +282,6 @@ function ReviewSurface({
   const walkthroughRequestPendingRef = useRef(false);
   const [walkthroughRequestId, setWalkthroughRequestId] = useState(0);
   const interactiveRef = useRef(interactive);
-
-  useEffect(() => {
-    reviewCommentsRef.current = reviewComments;
-  }, [reviewComments]);
 
   const visibleFiles = useMemo(
     () =>
@@ -982,14 +292,20 @@ function ReviewSurface({
       ),
     [fileSearchQuery, snapshot.files, snapshot.preferences.showWhitespace],
   );
+  const totalLineCount = useMemo(
+    () =>
+      getTotalDiffLineCount(
+        visibleFiles.map((file) => getDiffLineCount(file, snapshot.preferences.showWhitespace)),
+      ),
+    [snapshot.preferences.showWhitespace, visibleFiles],
+  );
+  const showTotalLineCount = sidebarMode !== 'comments' && totalLineCount.countable;
   const visibleSelectedPath =
     selectedPath && visibleFiles.some((file) => file.path === selectedPath)
       ? selectedPath
       : (visibleFiles[0]?.path ?? null);
   const initialMarkdownPreviewSectionIds = useMemo(() => {
-    const nonGeneratedFiles = snapshot.files.filter(
-      (file) => !isGeneratedWalkthroughPath(file.path),
-    );
+    const nonGeneratedFiles = snapshot.files.filter((file) => !isGeneratedWalkthroughFile(file));
     if (
       nonGeneratedFiles.length === 0 ||
       !nonGeneratedFiles.every((file) => isMarkdownFilePath(file.path))
@@ -1004,89 +320,20 @@ function ReviewSurface({
     );
   }, [snapshot.files]);
 
-  useEffect(() => {
-    const root = document.documentElement;
-    if (snapshot.preferences.theme === 'system') {
-      root.removeAttribute('data-theme');
-    } else {
-      root.setAttribute('data-theme', snapshot.preferences.theme);
-    }
-  }, [snapshot.preferences.theme]);
+  useDocumentAppearance({
+    codeFontFamily: snapshot.preferences.codeFontFamily,
+    codeFontSize: snapshot.preferences.codeFontSize,
+    theme: snapshot.preferences.theme,
+  });
 
-  useEffect(() => {
-    const root = document.documentElement;
-    const codeFontFamily = snapshot.preferences.codeFontFamily.trim();
-    const codeFontSize = normalizeCodeFontSizePreference(snapshot.preferences.codeFontSize);
-
-    if (codeFontFamily) {
-      root.style.setProperty('--font-diff-mono', `${JSON.stringify(codeFontFamily)}, monospace`);
-    }
-
-    root.style.setProperty('--font-diff-size', `${codeFontSize}px`);
-    root.style.setProperty('--font-diff-line-height', `${getCodeFontLineHeight(codeFontSize)}px`);
-  }, [snapshot.preferences.codeFontFamily, snapshot.preferences.codeFontSize]);
-
-  const bumpItemVersion = useCallback((key: string) => {
-    setItemVersionByKey((current) => ({
-      ...current,
-      [key]: (current[key] ?? 0) + 1,
-    }));
-  }, []);
   const changeSidebarMode = useCallback(
-    (mode: MergeRequestReviewMode) => {
+    (mode: ReviewMode) => {
       setUncontrolledSidebarMode(mode);
       onModeChange?.(mode);
     },
     [onModeChange],
   );
 
-  const createComment = useCallback(
-    (comment: Omit<ReviewComment, 'body' | 'id'>) => {
-      if (!interactive) {
-        return;
-      }
-
-      const emptyExistingComment = reviewCommentsRef.current.find(
-        (candidate) =>
-          candidate.body.length === 0 && getCommentKey(candidate) === getCommentKey(comment),
-      );
-      if (emptyExistingComment) {
-        setFocusCommentId(emptyExistingComment.id);
-        setFocusCommentRequest((current) => current + 1);
-        return;
-      }
-
-      const emptyDraft = reviewCommentsRef.current.find(
-        (candidate) => !candidate.isReadOnly && candidate.body.length === 0,
-      );
-      if (emptyDraft) {
-        const id = crypto.randomUUID();
-        setFocusCommentId(id);
-        setFocusCommentRequest((current) => current + 1);
-        setLocalReviewComments((current) =>
-          current.map((candidate) =>
-            candidate.id === emptyDraft.id
-              ? {
-                  ...comment,
-                  body: '',
-                  id,
-                }
-              : candidate,
-          ),
-        );
-        bumpItemVersion(emptyDraft.filePath);
-        bumpItemVersion(comment.filePath);
-        return;
-      }
-
-      const id = crypto.randomUUID();
-      setFocusCommentId(id);
-      setFocusCommentRequest((current) => current + 1);
-      setLocalReviewComments((current) => [...current, { ...comment, body: '', id }]);
-      bumpItemVersion(comment.filePath);
-    },
-    [bumpItemVersion, interactive],
-  );
   const activateGeneralComment = useCallback(
     (commentId: string) => {
       changeSidebarMode('comments');
@@ -1118,45 +365,39 @@ function ReviewSurface({
     },
     [activateGeneralComment, focusedGeneralCommentId, generalComments],
   );
-  const updateComment = useCallback((commentId: string, body: string) => {
-    setLocalReviewComments((current) =>
-      current.map((comment) =>
-        comment.id === commentId && !comment.isReadOnly ? { ...comment, body } : comment,
-      ),
-    );
-  }, []);
   const updateExistingReviewComment = useCallback(
     async (commentId: string, body: string) => {
-      if (!interactive) {
+      if (!updateReviewComment) {
         return;
       }
       const comment = reviewCommentsRef.current.find((candidate) => candidate.id === commentId);
-      await interactive.onUpdateComment(commentId, body);
+      await updateReviewComment(commentId, body);
       setEditedReviewCommentBodies((current) => ({ ...current, [commentId]: body }));
       if (comment) {
         bumpItemVersion(comment.filePath);
       }
     },
-    [bumpItemVersion, interactive],
+    [bumpItemVersion, reviewCommentsRef, updateReviewComment],
   );
   const deleteComment = useCallback(
     (commentId: string) => {
       const comment = reviewCommentsRef.current.find((candidate) => candidate.id === commentId);
-      setFocusCommentId((current) => (current === commentId ? null : current));
-      setLocalReviewComments((current) =>
-        current.filter((candidate) => candidate.id !== commentId),
-      );
-      if (comment) {
-        bumpItemVersion(comment.filePath);
+      if (comment?.isReadOnly && comment.canDelete && commenting?.onDeleteComment) {
+        updateActiveReviewCommentDraft(null);
+        void commenting.onDeleteComment(commentId).catch((error: unknown) => {
+          window.alert(error instanceof Error ? error.message : String(error));
+        });
+        return;
       }
+      deleteLocalComment(commentId);
     },
-    [bumpItemVersion],
+    [commenting, deleteLocalComment, reviewCommentsRef, updateActiveReviewCommentDraft],
   );
   const submitComment = useCallback(
     (commentId: string) => {
       const comment = reviewCommentsRef.current.find((candidate) => candidate.id === commentId);
       if (
-        !interactive ||
+        !submitReviewComment ||
         !comment ||
         comment.isReadOnly ||
         !comment.body.trim() ||
@@ -1165,6 +406,7 @@ function ReviewSurface({
         return;
       }
 
+      updateActiveReviewCommentDraft(null);
       setLocalReviewComments((current) =>
         current.map((candidate) =>
           candidate.id === commentId
@@ -1172,17 +414,9 @@ function ReviewSurface({
             : candidate,
         ),
       );
-      void interactive
-        .onSubmitComment({
-          body: comment.body,
-          filePath: comment.filePath,
-          lineNumber: comment.lineNumber,
-          side: comment.side,
-          ...getReviewCommentRangeProps(comment),
-          ...(comment.threadId ? { threadId: comment.threadId } : {}),
-        })
+      void submitReviewComment(toPullRequestReviewComment(comment))
         .then(() => {
-          setFocusCommentId((current) => (current === commentId ? null : current));
+          clearCommentFocus(commentId);
           setLocalReviewComments((current) =>
             current.filter((candidate) => candidate.id !== commentId),
           );
@@ -1205,10 +439,16 @@ function ReviewSurface({
           bumpItemVersion(comment.filePath);
         });
     },
-    [bumpItemVersion, interactive],
+    [
+      bumpItemVersion,
+      clearCommentFocus,
+      reviewCommentsRef,
+      submitReviewComment,
+      updateActiveReviewCommentDraft,
+    ],
   );
   const submitReview = useCallback(
-    (event: PullRequestReviewEvent) => {
+    (event: PullRequestReviewEvent, body?: string) => {
       const source = snapshot.repository.source;
       if (
         !interactive ||
@@ -1219,33 +459,40 @@ function ReviewSurface({
         return;
       }
 
-      const pendingComments = reviewCommentsRef.current.filter(
-        (comment) => !comment.isReadOnly && !comment.threadId && comment.body.trim(),
+      const pendingComments = getPendingPullRequestReviewComments(
+        reviewCommentsRef.current,
+        activeReviewCommentDraftRef.current,
       );
+      if (event === 'COMMENT' && pendingComments.length === 0 && !body?.trim()) {
+        return;
+      }
       const pendingIds = new Set(pendingComments.map((comment) => comment.id));
       setPullRequestReviewSubmitting(event);
-      void interactive
-        .onSubmitReview(
-          event,
-          pendingComments.map((comment) => ({
-            body: comment.body,
-            filePath: comment.filePath,
-            lineNumber: comment.lineNumber,
-            side: comment.side,
-            ...getReviewCommentRangeProps(comment),
-          })),
-        )
+      const formattedComments = pendingComments.map(toPullRequestReviewComment);
+      const submission = body
+        ? interactive.onSubmitReview(event, formattedComments, body)
+        : interactive.onSubmitReview(event, formattedComments);
+      return submission
         .then(() => {
+          updateActiveReviewCommentDraft(null);
           setLocalReviewComments((current) =>
             current.filter((comment) => !pendingIds.has(comment.id)),
           );
         })
         .catch((error: unknown) => {
           window.alert(error instanceof Error ? error.message : String(error));
+          throw error;
         })
         .finally(() => setPullRequestReviewSubmitting(null));
     },
-    [interactive, pullRequestReviewSubmitting, snapshot.repository.source],
+    [
+      interactive,
+      pullRequestReviewSubmitting,
+      snapshot.repository.source,
+      activeReviewCommentDraftRef,
+      reviewCommentsRef,
+      updateActiveReviewCommentDraft,
+    ],
   );
   const closePullRequest = useCallback(() => {
     const source = snapshot.repository.source;
@@ -1366,19 +613,19 @@ function ReviewSurface({
   }, [generalComments.length, navigateGeneralComment, sidebarMode]);
   const submitGeneralComment = useCallback(() => {
     const body = generalCommentDraft.trim();
-    if (!interactive || !body || generalCommentSubmitting) {
+    if (!submitGeneralDiscussion || !body || generalCommentSubmitting) {
       return;
     }
 
     setGeneralCommentError(null);
     setGeneralCommentSubmitting(true);
-    void Promise.resolve(interactive.onSubmitGeneralComment(body))
+    void Promise.resolve(submitGeneralDiscussion(body))
       .then(() => setGeneralCommentDraft(''))
       .catch((error: unknown) => {
         setGeneralCommentError(error instanceof Error ? error.message : String(error));
       })
       .finally(() => setGeneralCommentSubmitting(false));
-  }, [generalCommentDraft, generalCommentSubmitting, interactive]);
+  }, [generalCommentDraft, generalCommentSubmitting, submitGeneralDiscussion]);
   const startEditGeneralComment = useCallback((comment: PullRequestGeneralComment) => {
     if (!comment.canEdit) {
       return;
@@ -1400,13 +647,13 @@ function ReviewSurface({
   const saveGeneralCommentEdit = useCallback(() => {
     const commentId = editingGeneralCommentId;
     const body = generalCommentEditDraft.trim();
-    if (!interactive || !commentId || !body || generalCommentEditSubmitting) {
+    if (!updateGeneralDiscussion || !commentId || !body || generalCommentEditSubmitting) {
       return;
     }
 
     setGeneralCommentEditError(null);
     setGeneralCommentEditSubmitting(true);
-    void Promise.resolve(interactive.onUpdateGeneralComment(commentId, body))
+    void Promise.resolve(updateGeneralDiscussion(commentId, body))
       .then(() => {
         setEditingGeneralCommentId(null);
         setGeneralCommentEditDraft('');
@@ -1415,111 +662,36 @@ function ReviewSurface({
         setGeneralCommentEditError(error instanceof Error ? error.message : String(error));
       })
       .finally(() => setGeneralCommentEditSubmitting(false));
-  }, [editingGeneralCommentId, generalCommentEditDraft, generalCommentEditSubmitting, interactive]);
-  const resizeSidebar = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) {
-      return;
-    }
-
-    event.preventDefault();
-
-    const handle = event.currentTarget;
-    const shell = handle.parentElement;
-    if (!shell) {
-      return;
-    }
-
-    const shellLeft = shell.getBoundingClientRect().left;
-    handle.setPointerCapture(event.pointerId);
-    handle.classList.add('dragging');
-    document.body.style.cursor = 'col-resize';
-
-    const cleanup = () => {
-      handle.releasePointerCapture(event.pointerId);
-      handle.removeEventListener('pointermove', handleMove);
-      handle.removeEventListener('pointerup', handleEnd);
-      handle.removeEventListener('pointercancel', handleEnd);
-      handle.classList.remove('dragging');
-      document.body.style.cursor = '';
-    };
-
-    const handleMove = (moveEvent: PointerEvent) => {
-      setSidebarWidth(clampSidebarWidth(moveEvent.clientX - shellLeft));
-    };
-
-    const handleEnd = () => {
-      cleanup();
-      setSidebarWidth((width) => {
-        writeSharedSidebarWidth(width);
-        return width;
-      });
-    };
-
-    handle.addEventListener('pointermove', handleMove);
-    handle.addEventListener('pointerup', handleEnd);
-    handle.addEventListener('pointercancel', handleEnd);
-  }, []);
-
-  const toggleCollapsed = useCallback(
-    (_file: ChangedFile, isCollapsed: boolean, reviewKey: string) => {
-      setCollapsed((current) => {
-        const next = new Set(current);
-        if (isCollapsed) {
-          next.delete(reviewKey);
-        } else {
-          next.add(reviewKey);
-        }
-        return next;
-      });
-      bumpItemVersion(reviewKey);
+  }, [
+    editingGeneralCommentId,
+    generalCommentEditDraft,
+    generalCommentEditSubmitting,
+    updateGeneralDiscussion,
+  ]);
+  const activateTreePath = useCallback(
+    (path: string) => {
+      setSelectedPath(path);
+      setTreeScrollTarget((current) => ({
+        behavior: 'smooth',
+        path,
+        request: (current?.request ?? 0) + 1,
+      }));
     },
-    [bumpItemVersion],
+    [setSelectedPath],
   );
-  const toggleViewed = useCallback(
-    (_file: ChangedFile, isViewed: boolean, reviewIdentity: ReviewIdentity) => {
-      setViewed((current) => updateReviewIdentityViewed(current, reviewIdentity, isViewed));
-      setCollapsed((current) => updateReviewIdentityCollapsed(current, reviewIdentity, isViewed));
-      bumpItemVersion(reviewIdentity.key);
-    },
-    [bumpItemVersion],
-  );
-  const activateTreePath = useCallback((path: string) => {
-    setSelectedPath(path);
-    setTreeScrollTarget((current) => ({
-      behavior: 'smooth',
-      path,
-      request: (current?.request ?? 0) + 1,
-    }));
-  }, []);
   const updateSelectedPathFromScroll = useCallback(
     (viewer: CodeViewInstance) => {
-      if (visibleFiles.length === 0) {
-        return;
-      }
-
-      const activationTop = viewer.getScrollTop() + DEFAULT_PADDING;
-      let nextPath = visibleFiles[0]?.path ?? null;
-      let nextDistance = Number.NEGATIVE_INFINITY;
-
-      for (const file of visibleFiles) {
-        const section = getFirstVisibleSection(file, snapshot.preferences.showWhitespace);
-        const itemTop = section ? viewer.getTopForItem(getItemId(section)) : undefined;
-        if (itemTop == null) {
-          continue;
-        }
-
-        const distance = itemTop - activationTop;
-        if (distance <= 0 && distance > nextDistance) {
-          nextDistance = distance;
-          nextPath = file.path;
-        }
-      }
+      const nextPath = getSelectedPathFromScroll(
+        viewer,
+        visibleFiles,
+        snapshot.preferences.showWhitespace,
+      );
 
       if (nextPath) {
         setSelectedPath((current) => (current === nextPath ? current : nextPath));
       }
     },
-    [snapshot.preferences.showWhitespace, visibleFiles],
+    [setSelectedPath, snapshot.preferences.showWhitespace, visibleFiles],
   );
 
   const diffLineHeight = getCodeFontLineHeight(
@@ -1529,26 +701,29 @@ function ReviewSurface({
     activeSearchMatch: null,
     agentId: snapshot.walkthrough.agent,
     agentLabel: getAgentLabel(snapshot.walkthrough.agent),
+    codeQualityFindings: snapshot.codeQualityFindings,
     collapsed,
     comments: reviewComments,
     commitMetadata: null,
     diffLineHeight,
     diffStyle: snapshot.preferences.diffStyle,
     disableWorkerPool: true,
+    expandedGenerated,
     focusCommentId,
     focusCommentRequest,
     gitIdentity,
     hunkNavigation: null,
     initialMarkdownPreviewSectionIds,
     isPullRequest: snapshot.repository.source.type === 'pull-request',
-    isReadOnly: !interactive,
+    isReadOnly: !canComment,
     itemVersionByKey,
     keymap,
     loadingSectionIds: new Set<string>(),
+    onCommentDraftChange: updateActiveReviewCommentDraft,
     onCreateComment: createComment,
     onDeleteComment: deleteComment,
     onLoadSection: noop,
-    onResolveThread: interactive?.onResolveDiscussion ?? noop,
+    onResolveThread: resolveDiscussion ?? noop,
     onSaveCommentEdit: updateExistingReviewComment,
     onSelectPathFromScroll: noop,
     onSubmitComment: submitComment,
@@ -1578,9 +753,14 @@ function ReviewSurface({
     interactive && source.type === 'pull-request' ? (
       <PullRequestReviewButtons
         disabled={pullRequestReviewSubmitting != null || pullRequestCloseSubmitting}
+        hasPendingComments={
+          getPendingPullRequestReviewComments(localReviewComments, activeReviewCommentDraftState)
+            .length > 0
+        }
         onClosePullRequest={closePullRequest}
         onSubmitReview={submitReview}
         reviewStatus={source.reviewStatus}
+        showCommentReview={source.provider === 'github' || source.host === 'github.com'}
       >
         {sourceMergeStatusBadge}
       </PullRequestReviewButtons>
@@ -1608,28 +788,6 @@ function ReviewSurface({
     ) : (
       (sourceDescriptionFooterMain ?? sourceDescriptionFooterAside)
     );
-  const sourceDescriptionFooterKey =
-    interactive && sourceMergeState && !isTerminalMergeState
-      ? [
-          'merge',
-          pullRequestMergeSubmitting ? 'submitting' : 'idle',
-          sourceMergeState.sha,
-          String(sourceMergeState.autoMergeEnabled),
-          String(sourceMergeState.canCancelAutoMerge),
-          String(sourceMergeState.canMerge),
-          String(sourceMergeState.canSetAutoMerge),
-          sourceMergeState.status,
-          sourceMergeState.statusLabel,
-          String(sourceMergeState.options.removeSourceBranch),
-          String(sourceMergeState.options.squash),
-          ...sourceMergeState.checks.map(
-            (check) => `${check.status}:${check.label}:${check.detail ?? ''}:${check.url ?? ''}`,
-          ),
-          sourceDescriptionFooterAsideKey ? `aside:${sourceDescriptionFooterAsideKey}` : '',
-        ].join('|')
-      : sourceDescriptionFooter
-        ? (sourceDescriptionFooterAsideKey ?? 'custom')
-        : '';
   const sourceDescription =
     source.type === 'pull-request' ? (
       <PullRequestSourceDescription
@@ -1649,24 +807,15 @@ function ReviewSurface({
     onActiveBlockChange: (blockId: string) => void,
   ) => {
     return (
-      <div className="wt-stop wt-diff-surface">
-        <ReviewCodeView
-          {...commonReviewProps}
-          allowViewedToggle
-          blocks={blocks}
-          bottomInset={walkthroughCodeViewBottomInset}
-          files={[]}
-          forceExpandedPaths={new Set()}
-          onActiveBlockChange={onActiveBlockChange}
-          scrollTarget={blockScrollTarget}
-          selectedPath={null}
-          showSourceDescription
-          sourceDescriptionActions={sourceDescriptionActions}
-          sourceDescriptionFooter={sourceDescriptionFooter}
-          sourceDescriptionFooterKey={sourceDescriptionFooterKey}
-          walkthroughNotes={emptyWalkthroughNotes}
-        />
-      </div>
+      <WalkthroughDiffSurface
+        allowViewedToggle
+        blocks={blocks}
+        onActiveBlockChange={onActiveBlockChange}
+        reviewProps={commonReviewProps}
+        scrollTarget={blockScrollTarget}
+        sourceDescriptionActions={sourceDescriptionActions}
+        sourceDescriptionFooter={sourceDescriptionFooter}
+      />
     );
   };
 
@@ -1679,6 +828,17 @@ function ReviewSurface({
     walkthroughRequestPending && interactive?.walkthroughStatus !== 'ready'
       ? 'generating'
       : interactive?.walkthroughStatus;
+  const [walkthroughProgressRevision, setWalkthroughProgressRevision] = useState(0);
+  const previousWalkthroughStatusRef = useRef(walkthroughStatus);
+  useEffect(() => {
+    if (
+      walkthroughStatus === 'generating' &&
+      previousWalkthroughStatusRef.current !== 'generating'
+    ) {
+      setWalkthroughProgressRevision((current) => current + 1);
+    }
+    previousWalkthroughStatusRef.current = walkthroughStatus;
+  }, [walkthroughStatus]);
   const walkthroughReady = !interactive || walkthroughStatus === 'ready';
   const walkthroughFailed = walkthroughStatus === 'failed';
   const walkthroughStatusTitle = walkthroughFailed
@@ -1726,12 +886,12 @@ function ReviewSurface({
             </div>
             {externalUrl ? (
               <a
-                aria-label="Open merge request in GitLab"
+                aria-label={`Open merge request in ${providerLabel}`}
                 className="merge-request-nav-button"
                 href={externalUrl}
                 rel="noreferrer"
                 target="_blank"
-                title="Open merge request in GitLab"
+                title={`Open merge request in ${providerLabel}`}
               >
                 <ExternalLink aria-hidden size={16} />
               </a>
@@ -1766,7 +926,7 @@ function ReviewSurface({
           >
             Walkthrough
           </button>
-          {interactive || generalCommentCount > 0 ? (
+          {commenting || interactive || generalCommentCount > 0 ? (
             <button
               aria-label={
                 generalCommentCount > 0 ? `Comments (${generalCommentCount})` : 'Comments'
@@ -1791,7 +951,7 @@ function ReviewSurface({
           ) : null}
         </div>
         {sidebarMode === 'tree' ? (
-          <SharedFileTree
+          <ReviewFileTree
             files={visibleFiles}
             onActivatePath={activateTreePath}
             selectedPath={visibleSelectedPath}
@@ -1817,17 +977,38 @@ function ReviewSurface({
               className={`sidebar-walkthrough-status${walkthroughFailed ? '' : ' codex'}`}
               title={walkthroughStatusDescription ?? undefined}
             >
-              <strong>{walkthroughStatusTitle}</strong>
+              {walkthroughFailed ? (
+                <strong>{walkthroughStatusTitle}</strong>
+              ) : (
+                <WalkthroughProgress
+                  phase={null}
+                  responseLabelIndex={0}
+                  stageRevision={walkthroughProgressRevision}
+                />
+              )}
               {walkthroughStatusDescription ? <span>{walkthroughStatusDescription}</span> : null}
             </div>
           </div>
         )}
-        {settingsBar ? <div className="sidebar-settings-bar">{settingsBar}</div> : null}
+        {settingsBar || showTotalLineCount ? (
+          <div className="sidebar-settings-bar">
+            {settingsBar}
+            {showTotalLineCount ? (
+              <DiffLineCountBadge
+                ariaLabelPrefix="Total change"
+                className="sidebar-total-line-count sidebar-settings-line-count"
+                lineCount={totalLineCount}
+              />
+            ) : null}
+          </div>
+        ) : null}
       </aside>
       <div aria-hidden className="sidebar-resizer" onPointerDown={resizeSidebar} />
       <main className="review codiff-web-review">
         {sidebarMode === 'comments' ? (
           <MergeRequestCommentsView
+            canComment={canComment}
+            commenting={commenting}
             draft={generalCommentDraft}
             editDraft={generalCommentEditDraft}
             editError={generalCommentEditError}
@@ -1837,7 +1018,6 @@ function ReviewSurface({
             focusedCommentId={focusedGeneralCommentId}
             focusedCommentRequest={generalCommentScrollRequest}
             gitIdentity={gitIdentity}
-            interactive={Boolean(interactive)}
             keymap={keymap}
             onCancelEdit={cancelEditGeneralComment}
             onChangeDraft={setGeneralCommentDraft}
@@ -1845,6 +1025,7 @@ function ReviewSurface({
             onSaveEdit={saveGeneralCommentEdit}
             onStartEdit={startEditGeneralComment}
             onSubmit={submitGeneralComment}
+            signInLabel={signInLabel}
             sourceDescription={sourceDescription}
             submitting={generalCommentSubmitting}
             threads={generalCommentThreads}
@@ -1868,7 +1049,6 @@ function ReviewSurface({
               selectedPath={visibleSelectedPath}
               sourceDescriptionActions={sourceDescriptionActions}
               sourceDescriptionFooter={sourceDescriptionFooter}
-              sourceDescriptionFooterKey={sourceDescriptionFooterKey}
               walkthroughNotes={emptyWalkthroughNotes}
             />
           )
@@ -1897,127 +1077,15 @@ function ReviewSurface({
             </div>
           </div>
         ) : (
-          <div className="loading codex italic">Generating walkthrough…</div>
+          <div className="loading codex">
+            <WalkthroughProgress
+              phase={null}
+              responseLabelIndex={0}
+              stageRevision={walkthroughProgressRevision}
+            />
+          </div>
         )}
       </main>
     </div>
-  );
-}
-
-export function SharedWalkthroughApp({
-  settingsBar,
-  snapshot,
-}: {
-  settingsBar?: ReactNode;
-  snapshot: SharedWalkthroughSnapshot;
-}) {
-  return <ReviewSurface settingsBar={settingsBar} snapshot={snapshot} />;
-}
-
-export function MergeRequestReviewApp({
-  externalUrl,
-  gitIdentity,
-  initialMode,
-  onCancelAutoMerge,
-  onClosePullRequest,
-  onGenerateWalkthrough,
-  onHome,
-  onMergePullRequest,
-  onModeChange,
-  onResolveDiscussion,
-  onSubmitComment,
-  onSubmitGeneralComment,
-  onSubmitReview,
-  onUpdateComment,
-  onUpdateDescription,
-  onUpdateGeneralComment,
-  onUpdateTitle,
-  onUploadDescriptionAsset,
-  preferences,
-  settingsBar,
-  sourceDescriptionFooterAside,
-  sourceDescriptionFooterAsideKey,
-  state,
-  title,
-  walkthrough,
-  walkthroughError,
-  walkthroughStatus,
-}: MergeRequestReviewAppProps) {
-  const placeholderWalkthrough = useMemo<NarrativeWalkthrough>(
-    () => ({
-      agent: 'codex',
-      chapters: [],
-      focus: 'Generate a walkthrough to review this merge request in narrative order.',
-      generatedAt: new Date(state.generatedAt).toISOString(),
-      kind: 'narrative',
-      repo: {
-        branch: state.branch,
-        root: state.root,
-      },
-      source: state.source,
-      support: [],
-      title,
-      version: 4,
-    }),
-    [state.branch, state.generatedAt, state.root, state.source, title],
-  );
-  const resolvedPreferences = useMemo(
-    () => ({
-      ...defaultSharedPreferences,
-      ...preferences,
-    }),
-    [preferences],
-  );
-  const snapshot = useMemo<SharedWalkthroughSnapshot>(
-    () => ({
-      branch: state.branch,
-      codiffVersion: 'web',
-      exportedAt: new Date(state.generatedAt).toISOString(),
-      files: state.files,
-      kind: 'codiff-walkthrough-share',
-      preferences: resolvedPreferences,
-      repository: {
-        generalComments: state.generalComments,
-        root: state.root,
-        source: state.source,
-        title,
-      },
-      reviewComments: state.reviewComments,
-      version: 1,
-      walkthrough: walkthrough ?? placeholderWalkthrough,
-    }),
-    [placeholderWalkthrough, resolvedPreferences, state, title, walkthrough],
-  );
-
-  return (
-    <ReviewSurface
-      externalUrl={externalUrl}
-      gitIdentity={gitIdentity}
-      initialMode={initialMode}
-      interactive={{
-        onCancelAutoMerge,
-        onClosePullRequest,
-        onGenerateWalkthrough,
-        onHome,
-        onMergePullRequest,
-        onResolveDiscussion,
-        onSubmitComment,
-        onSubmitGeneralComment,
-        onSubmitReview,
-        onUpdateComment,
-        onUpdateDescription,
-        onUpdateGeneralComment,
-        onUpdateTitle,
-        onUploadDescriptionAsset,
-        walkthroughError,
-        walkthroughStatus,
-      }}
-      onModeChange={onModeChange}
-      settingsBar={settingsBar}
-      snapshot={snapshot}
-      sourceDescriptionFooterAside={sourceDescriptionFooterAside}
-      sourceDescriptionFooterAsideKey={sourceDescriptionFooterAsideKey}
-      title={title}
-    />
   );
 }

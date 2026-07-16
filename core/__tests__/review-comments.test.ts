@@ -1,6 +1,12 @@
 import { expect, test } from 'vite-plus/test';
 import type { ReviewComment } from '../lib/app-types.ts';
-import { getReviewCommentsFromState, getVisibleReviewComments } from '../lib/review-comments.ts';
+import {
+  findReusableReviewCommentDraft,
+  getPendingPullRequestReviewComments,
+  getReviewCommentsFromState,
+  getVisibleReviewComments,
+  toPullRequestReviewComment,
+} from '../lib/review-comments.ts';
 import type { RepositoryState } from '../types.ts';
 
 const createReviewComment = (overrides: Partial<ReviewComment>): ReviewComment => ({
@@ -66,6 +72,97 @@ test('getReviewCommentsFromState carries the outdated flag through to review com
   expect(comments.find((comment) => comment.id === 'github:2')?.isOutdated).toBeUndefined();
 });
 
+test('getPendingPullRequestReviewComments includes an unflushed active draft', () => {
+  const comments = [
+    createReviewComment({ body: '', id: 'draft' }),
+    createReviewComment({ body: 'Already flushed.', id: 'ready', lineNumber: 6 }),
+  ];
+
+  expect(
+    getPendingPullRequestReviewComments(comments, {
+      ...comments[0],
+      body: 'Still focused.',
+    }).map((comment) => [comment.id, comment.body]),
+  ).toEqual([
+    ['draft', 'Still focused.'],
+    ['ready', 'Already flushed.'],
+  ]);
+});
+
+test('getPendingPullRequestReviewComments replaces a stale flushed draft', () => {
+  const comments = [createReviewComment({ body: 'Old text.', id: 'draft' })];
+
+  expect(
+    getPendingPullRequestReviewComments(comments, {
+      ...comments[0],
+      body: 'New text.',
+    }).map((comment) => comment.body),
+  ).toEqual(['New text.']);
+});
+
+test('getPendingPullRequestReviewComments respects an emptied active draft', () => {
+  const comments = [createReviewComment({ body: 'Old text.', id: 'draft' })];
+
+  expect(
+    getPendingPullRequestReviewComments(comments, {
+      body: '   ',
+      id: comments[0].id,
+    }),
+  ).toEqual([]);
+});
+
+test('getPendingPullRequestReviewComments ignores drafts outside the current review', () => {
+  expect(
+    getPendingPullRequestReviewComments([], {
+      body: 'Stale text.',
+      id: 'stale-draft',
+    }),
+  ).toEqual([]);
+});
+
+test('getPendingPullRequestReviewComments excludes comments being submitted individually', () => {
+  const comment = createReviewComment({ body: 'Already submitting.', id: 'draft' });
+
+  expect(
+    getPendingPullRequestReviewComments([{ ...comment, remoteSubmit: { status: 'submitting' } }]),
+  ).toEqual([]);
+});
+
+test('findReusableReviewCommentDraft preserves an active draft with unflushed content', () => {
+  const activeDraft = createReviewComment({ body: '', id: 'active' });
+  const reusableDraft = createReviewComment({ body: '', id: 'reusable', lineNumber: 6 });
+
+  expect(
+    findReusableReviewCommentDraft([activeDraft, reusableDraft], {
+      body: 'Still typing.',
+      id: activeDraft.id,
+    }),
+  ).toBe(reusableDraft);
+});
+
+test('findReusableReviewCommentDraft returns no draft when the only empty draft has content', () => {
+  const activeDraft = createReviewComment({ body: '', id: 'active' });
+
+  expect(
+    findReusableReviewCommentDraft([activeDraft], {
+      body: 'Still typing.',
+      id: activeDraft.id,
+    }),
+  ).toBeUndefined();
+});
+
+test('findReusableReviewCommentDraft skips read-only drafts and reuses whitespace-only drafts', () => {
+  const readOnlyDraft = createReviewComment({ body: '', id: 'readonly', isReadOnly: true });
+  const activeDraft = createReviewComment({ body: '', id: 'active' });
+
+  expect(
+    findReusableReviewCommentDraft([readOnlyDraft, activeDraft], {
+      body: '   ',
+      id: activeDraft.id,
+    }),
+  ).toBe(activeDraft);
+});
+
 test('getReviewCommentsFromState carries GitLab discussion metadata through to review comments', () => {
   const state = createPullRequestState();
   state.reviewComments = [
@@ -102,6 +199,30 @@ test('getReviewCommentsFromState carries GitLab discussion metadata through to r
   });
 });
 
+test('getReviewCommentsFromState preserves file-level GitLab anchors', () => {
+  const state = createPullRequestState();
+  state.reviewComments = [
+    {
+      anchor: 'file',
+      author: { login: 'reviewer' },
+      body: 'Review the file as a whole.',
+      filePath: 'src/a.ts',
+      id: 'gitlab:file',
+    },
+  ];
+
+  expect(getReviewCommentsFromState(state)).toEqual([
+    expect.objectContaining({
+      anchor: 'file',
+      body: 'Review the file as a whole.',
+      filePath: 'src/a.ts',
+      id: 'gitlab:file',
+      isReadOnly: true,
+      sectionId: 'src/a.ts:pull-request:1',
+    }),
+  ]);
+});
+
 test('getVisibleReviewComments hides outdated comments unless they are shown', () => {
   const comments = [
     createReviewComment({ id: 'github:1', isOutdated: true }),
@@ -121,4 +242,23 @@ test('getVisibleReviewComments keeps user-authored comments that are never outda
   const comments = [createReviewComment({ id: 'draft', isReadOnly: false })];
 
   expect(getVisibleReviewComments(comments, false)).toHaveLength(1);
+});
+
+test('serializes file-level thread replies without inventing line metadata', () => {
+  expect(
+    toPullRequestReviewComment(
+      createReviewComment({
+        anchor: 'file',
+        body: 'Reply in the existing discussion.',
+        lineNumber: undefined,
+        side: undefined,
+        threadId: 'discussion-1',
+      }),
+    ),
+  ).toEqual({
+    anchor: 'file',
+    body: 'Reply in the existing discussion.',
+    filePath: 'src/a.ts',
+    threadId: 'discussion-1',
+  });
 });

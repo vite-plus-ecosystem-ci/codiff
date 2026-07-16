@@ -5,7 +5,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { expect, test } from 'vite-plus/test';
-import { SharedWalkthroughApp } from '../SharedWalkthroughApp.tsx';
+import { ReviewSurface } from '../SharedWalkthroughApp.tsx';
 import type { NarrativeWalkthrough, SharedWalkthroughSnapshot } from '../types.ts';
 import { createChangedFile } from './helpers/fixtures.ts';
 import { waitFor } from './helpers/react.tsx';
@@ -126,7 +126,7 @@ test('shared walkthroughs switch between walkthrough and tree review modes', asy
   try {
     await act(async () => {
       root = createRoot(container);
-      root.render(<SharedWalkthroughApp snapshot={snapshot} />);
+      root.render(<ReviewSurface snapshot={snapshot} />);
     });
 
     await waitFor(() => {
@@ -207,7 +207,10 @@ test('shared walkthroughs switch between walkthrough and tree review modes', asy
 
 test('shared walkthroughs initially preview Markdown when other files are generated', async () => {
   const file = createMarkdownFile();
-  const generatedFile = createChangedFile('src/__generated__/api.ts');
+  const generatedFile = {
+    ...createChangedFile('src/api.ts'),
+    generated: true,
+  };
   const source = { type: 'working-tree' } as const;
   const walkthrough = {
     agent: 'codex',
@@ -250,7 +253,7 @@ test('shared walkthroughs initially preview Markdown when other files are genera
   try {
     await act(async () => {
       root = createRoot(container);
-      root.render(<SharedWalkthroughApp snapshot={snapshot} />);
+      root.render(<ReviewSurface snapshot={snapshot} />);
     });
 
     const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');

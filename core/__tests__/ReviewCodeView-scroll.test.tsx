@@ -10,13 +10,11 @@ import {
   updateReviewIdentityCollapsed,
   updateReviewIdentityViewed,
 } from '../lib/review-identity.ts';
-import type { ChangedFile, ReviewSource } from '../types.ts';
+import type { ChangedFile, PullRequestCodeQualityFinding, ReviewSource } from '../types.ts';
 import { createChangedFile, createChangedFileWithPatch } from './helpers/fixtures.ts';
 import { renderReact, setInputValue, waitFor } from './helpers/react.tsx';
 import {
   codeViewMock,
-  commitMetadata,
-  commitSource,
   resetCodeViewMock,
   ReviewCodeViewHarness,
   type ReviewDiffBlock,
@@ -24,6 +22,9 @@ import {
 
 const markdownEditorMock = vi.hoisted(() => ({
   flush: vi.fn<() => Promise<boolean>>(async () => true),
+  heightByAriaLabel: new Map<string, number>(),
+  heightReportLimit: Number.POSITIVE_INFINITY,
+  heightReports: 0,
 }));
 
 vi.mock('../app/components/MarkdownDocumentEditor.tsx', async () => {
@@ -71,8 +72,14 @@ vi.mock('@nkzw/mdx-editor', async () => {
         focus: () => inputRef.current?.focus(),
       }));
       React.useEffect(() => {
-        onHeightChange?.(100);
-      }, [onHeightChange]);
+        if (
+          onHeightChange &&
+          markdownEditorMock.heightReports < markdownEditorMock.heightReportLimit
+        ) {
+          markdownEditorMock.heightReports += 1;
+          onHeightChange(markdownEditorMock.heightByAriaLabel.get(props.ariaLabel ?? '') ?? 100);
+        }
+      }, [onHeightChange, props.ariaLabel]);
       return (
         <textarea
           aria-label={props.ariaLabel}
@@ -98,6 +105,9 @@ beforeEach(() => {
   resetCodeViewMock();
   markdownEditorMock.flush.mockClear();
   markdownEditorMock.flush.mockResolvedValue(true);
+  markdownEditorMock.heightByAriaLabel.clear();
+  markdownEditorMock.heightReportLimit = Number.POSITIVE_INFINITY;
+  markdownEditorMock.heightReports = 0;
 });
 
 const getCodeViewItemVersion = (id: string) =>
@@ -126,6 +136,72 @@ const createLoadedMarkdownFile = (contents: string, fingerprint: string) => {
     })),
   };
 };
+
+test('generated files are collapsed by default and can be explicitly expanded per review', async () => {
+  const file = createChangedFile('src/__generated__/api.ts');
+  const reviewKey = 'walkthrough:generated-api';
+  const blocks: ReadonlyArray<ReviewDiffBlock> = [
+    {
+      file,
+      id: reviewKey,
+      reviewIdentity: {
+        fingerprint: file.fingerprint,
+        key: reviewKey,
+      },
+    },
+  ];
+  const view = await renderReact(<ReviewCodeViewHarness blocks={blocks} files={[]} />);
+
+  try {
+    await waitFor(() => {
+      expect(
+        view.container.querySelector('[aria-label="Expand file"]')?.getAttribute('aria-expanded'),
+      ).toBe('false');
+      expect(view.container.querySelector('.codiff-generated-badge')?.textContent).toBe(
+        'Generated',
+      );
+    });
+
+    await view.rerender(
+      <ReviewCodeViewHarness
+        blocks={blocks}
+        expandedGenerated={new Set([reviewKey])}
+        files={[]}
+        itemVersionByKey={{ [reviewKey]: 1 }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        view.container.querySelector('[aria-label="Collapse file"]')?.getAttribute('aria-expanded'),
+      ).toBe('true');
+      expect(view.container.querySelector('.codiff-generated-badge')?.textContent).toBe(
+        'Generated',
+      );
+    });
+  } finally {
+    await view.cleanup();
+  }
+});
+
+test('explicit generated metadata can keep generated-looking paths expanded', async () => {
+  const file = {
+    ...createChangedFile('src/__generated__/api.ts'),
+    generated: false,
+  };
+  const view = await renderReact(<ReviewCodeViewHarness files={[file]} />);
+
+  try {
+    await waitFor(() => {
+      expect(
+        view.container.querySelector('[aria-label="Collapse file"]')?.getAttribute('aria-expanded'),
+      ).toBe('true');
+      expect(view.container.querySelector('.codiff-generated-badge')).toBeNull();
+    });
+  } finally {
+    await view.cleanup();
+  }
+});
 
 test('switching edited Markdown back to a diff flushes and refreshes it first', async () => {
   const order: Array<string> = [];
@@ -168,6 +244,7 @@ test('switching edited Markdown back to a diff flushes and refreshes it first', 
       ({ textContent }) => textContent === 'View as Diff',
     );
     expect(diffButton).not.toBeUndefined();
+    expect(diffButton?.classList.contains('codiff-button')).toBe(true);
 
     await act(async () => {
       diffButton?.click();
@@ -179,6 +256,151 @@ test('switching edited Markdown back to a diff flushes and refreshes it first', 
     });
     expect(order).toEqual(['flush', 'refresh']);
     expect(JSON.stringify(codeViewMock.lastItems)).toContain('# Saved');
+  } finally {
+    if (root) {
+      await act(async () => root?.unmount());
+    }
+    container.remove();
+  }
+});
+
+test('combined branch Markdown edits only the final working-tree section', async () => {
+  const order: Array<string> = [];
+  const createCombinedFile = (contents: string, fingerprint: string) => {
+    const file = createLoadedMarkdownFile(contents, fingerprint);
+    const section = file.sections[0]!;
+    return {
+      ...file,
+      sections: [
+        {
+          ...section,
+          id: 'plan.md:commit',
+          kind: 'commit' as const,
+          newFile: {
+            contents: '# Committed\n',
+            name: file.path,
+          },
+          patch: 'diff --git a/plan.md b/plan.md\n@@ -1 +1 @@\n-# Original\n+# Committed\n',
+        },
+        {
+          ...section,
+          id: 'plan.md:unstaged',
+          kind: 'unstaged' as const,
+          oldFile: {
+            contents: '# Committed\n',
+            name: file.path,
+          },
+        },
+      ],
+    } satisfies ChangedFile;
+  };
+  const initialFile = createCombinedFile('# Edited\n', 'plan.md:combined-initial');
+  const refreshedFile = createCombinedFile('# Saved\n', 'plan.md:combined-refreshed');
+  const combinedSource = {
+    baseRef: 'base123',
+    headRef: 'head123',
+    ref: 'main',
+    type: 'branch-working-tree',
+  } satisfies ReviewSource;
+
+  markdownEditorMock.flush.mockImplementation(async () => {
+    order.push('flush');
+    return true;
+  });
+
+  function Harness() {
+    const [file, setFile] = useState(initialFile);
+    return (
+      <ReviewCodeViewHarness
+        files={[file]}
+        onRefreshMarkdown={async () => {
+          order.push('refresh');
+          setFile(refreshedFile);
+          return true;
+        }}
+        source={combinedSource}
+      />
+    );
+  }
+
+  const container = document.createElement('div');
+  document.body.append(container);
+  let root: Root | null = null;
+
+  try {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<Harness />);
+    });
+
+    expect(container.querySelector('[aria-label="Edit plan.md"]')).not.toBeNull();
+    const diffButton = [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+      ({ textContent }) => textContent === 'View as Diff',
+    );
+    expect(diffButton).not.toBeUndefined();
+
+    await act(async () => {
+      diffButton?.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('[aria-label="Edit plan.md"]')).toBeNull();
+    });
+    expect(order).toEqual(['flush', 'refresh']);
+    expect(JSON.stringify(codeViewMock.lastItems)).toContain('# Saved');
+  } finally {
+    if (root) {
+      await act(async () => root?.unmount());
+    }
+    container.remove();
+  }
+});
+
+test('combined branch-only Markdown sections remain read-only', async () => {
+  const loadedFile = createLoadedMarkdownFile('# Committed\n', 'plan.md:commit-only');
+  const file = {
+    ...loadedFile,
+    sections: loadedFile.sections.map((section) => ({
+      ...section,
+      id: 'plan.md:commit',
+      kind: 'commit' as const,
+    })),
+  } satisfies ChangedFile;
+  const container = document.createElement('div');
+  document.body.append(container);
+  let root: Root | null = null;
+
+  try {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(
+        <ReviewCodeViewHarness
+          files={[file]}
+          source={{
+            baseRef: 'base123',
+            headRef: 'head123',
+            ref: 'main',
+            type: 'branch-working-tree',
+          }}
+        />,
+      );
+    });
+
+    expect(container.querySelector('[aria-label="Edit plan.md"]')).toBeNull();
+    const markdownButton = [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+      ({ textContent }) => textContent === 'View as Markdown',
+    );
+    expect(markdownButton).not.toBeUndefined();
+
+    await act(async () => {
+      markdownButton?.click();
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('[aria-label="Preview plan.md"]')).not.toBeNull();
+    });
+    expect(container.querySelector('[aria-label="Edit plan.md"]')).toBeNull();
   } finally {
     if (root) {
       await act(async () => root?.unmount());
@@ -682,7 +904,7 @@ test('read-only walkthroughs can opt into the viewed control', async () => {
 
     const viewedButton = container.querySelector<HTMLButtonElement>('.codiff-viewed-button');
     expect(viewedButton).not.toBeNull();
-    expect(container.querySelector('.codiff-open-button')).toBeNull();
+    expect(container.querySelector('.codiff-button')).toBeNull();
 
     await act(async () => {
       viewedButton?.click();
@@ -764,63 +986,6 @@ test('scroll targets issue one command per request even before render visibility
     });
 
     expect(codeViewMock.scrollTo).toHaveBeenCalledTimes(1);
-  } finally {
-    if (root) {
-      await act(async () => root?.unmount());
-    }
-    container.remove();
-  }
-});
-
-test('commit metadata file rows scroll to the matching diff', async () => {
-  const container = document.createElement('div');
-  document.body.append(container);
-  let root: Root | null = null;
-
-  try {
-    await act(async () => {
-      root = createRoot(container);
-      root.render(
-        <ReviewCodeViewHarness
-          commitMetadata={commitMetadata}
-          files={[createChangedFile('src/first.ts'), createChangedFile('src/second.ts')]}
-          source={commitSource}
-        />,
-      );
-    });
-
-    const fileButtons = [...container.querySelectorAll<HTMLButtonElement>('.commit-details-file')];
-    const fileButton = fileButtons.find((button) => button.textContent?.includes('src/second.ts'));
-    if (!fileButton) {
-      throw new Error('Expected commit metadata file button.');
-    }
-    const hiddenFileButton = fileButtons.find((button) =>
-      button.textContent?.includes('src/hidden.ts'),
-    );
-    if (!hiddenFileButton) {
-      throw new Error('Expected hidden commit metadata file button.');
-    }
-
-    expect(hiddenFileButton.disabled).toBe(true);
-    expect(hiddenFileButton.title).toContain('hidden by current filters');
-
-    await act(async () => {
-      hiddenFileButton.click();
-    });
-
-    expect(codeViewMock.scrollTo).not.toHaveBeenCalled();
-
-    await act(async () => {
-      fileButton.click();
-    });
-
-    expect(codeViewMock.scrollTo).toHaveBeenCalledWith(
-      expect.objectContaining({
-        behavior: 'smooth',
-        id: 'diff:src/second.ts:unstaged',
-        type: 'item',
-      }),
-    );
   } finally {
     if (root) {
       await act(async () => root?.unmount());
@@ -948,29 +1113,58 @@ test('read-only markdown previews trigger CodeView layout remeasurement after he
 
   try {
     const markdownItemId = `diff:${markdownSectionId}`;
-    const sourceItemId = 'source-description:github:https://github.com/nkzw-tech/codiff/pull/12';
     const initialMarkdownVersion = getCodeViewItemVersion(markdownItemId);
-    const initialSourceVersion = getCodeViewItemVersion(sourceItemId);
 
     const markdownPreview = app.container.querySelector<HTMLElement>(
       '[aria-label="Preview plan.md"]',
     );
+    // The source description renders in CodeView's header region, where height
+    // changes are observed by the viewer directly instead of item versions.
     const sourceDescription = app.container.querySelector<HTMLElement>(
-      '[aria-label="Preview source description"]',
+      '[data-diffs-code-view-header] [aria-label="Preview source description"]',
     );
 
     expect(markdownPreview).not.toBeNull();
     expect(sourceDescription).not.toBeNull();
+    expect(
+      sourceDescription
+        ?.closest('[data-diffs-code-view-header]')
+        ?.closest('[slot="header-custom"]'),
+    ).toBeNull();
 
     await act(async () => {
       markdownPreview?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-      sourceDescription?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
     });
 
     await waitFor(() => {
       expect(getCodeViewItemVersion(markdownItemId)).not.toBe(initialMarkdownVersion);
-      expect(getCodeViewItemVersion(sourceItemId)).not.toBe(initialSourceVersion);
     });
+  } finally {
+    await app.cleanup();
+  }
+});
+
+test('source description remains visible when a review has no diff items', async () => {
+  const source = {
+    description: 'No file changes are needed.',
+    number: 13,
+    provider: 'github',
+    title: 'Empty pull request',
+    type: 'pull-request',
+    url: 'https://github.com/nkzw-tech/codiff/pull/13',
+  } satisfies ReviewSource;
+  const app = await renderReact(<ReviewCodeViewHarness files={[]} isReadOnly source={source} />);
+
+  try {
+    const sourceDescription = app.container.querySelector(
+      '[data-diffs-code-view-header] [aria-label="Preview source description"]',
+    );
+    expect(sourceDescription).not.toBeNull();
+    expect(
+      sourceDescription
+        ?.closest('[data-diffs-code-view-header]')
+        ?.closest('[slot="header-custom"]'),
+    ).toBeNull();
   } finally {
     await app.cleanup();
   }
@@ -1053,6 +1247,7 @@ test('review comment typing stays local until a comment action commits it', asyn
     side: 'additions',
   } satisfies ReviewComment;
   const onAskCodex = vi.fn();
+  const onCommentDraftChange = vi.fn();
   const onUpdateComment = vi.fn();
   const container = document.createElement('div');
   document.body.append(container);
@@ -1067,6 +1262,7 @@ test('review comment typing stays local until a comment action commits it', asyn
           diffStyle="unified"
           files={[file]}
           onAskCodex={onAskCodex}
+          onCommentDraftChange={onCommentDraftChange}
           onUpdateComment={onUpdateComment}
         />,
       );
@@ -1080,6 +1276,9 @@ test('review comment typing stays local until a comment action commits it', asyn
     await setInputValue(textarea, 'Please check this.');
 
     expect(onUpdateComment).not.toHaveBeenCalled();
+    expect(onCommentDraftChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ body: 'Please check this.', id: 'comment-1' }),
+    );
 
     const askButton = [...container.querySelectorAll<HTMLButtonElement>('button')].find(
       (button) => button.textContent === 'Ask',
@@ -1099,6 +1298,260 @@ test('review comment typing stays local until a comment action commits it', asyn
       await act(async () => root?.unmount());
     }
     container.remove();
+  }
+});
+
+test('a Codex reply does not repeatedly invalidate the diff item layout', async () => {
+  const file = createChangedFile('src/comment.ts');
+  const comment = {
+    body: 'Please explain this change.',
+    filePath: file.path,
+    id: 'comment-1',
+    lineNumber: 1,
+    sectionId: 'src/comment.ts:unstaged',
+    side: 'additions',
+  } satisfies ReviewComment;
+  markdownEditorMock.heightByAriaLabel.set('Comment on src/comment.ts New line 1', 100);
+  markdownEditorMock.heightByAriaLabel.set('Codex reply', 320);
+  markdownEditorMock.heightReportLimit = 6;
+  const view = await renderReact(<ReviewCodeViewHarness comments={[comment]} files={[file]} />);
+
+  try {
+    const renderCountBeforeReply = codeViewMock.renderCount;
+
+    await view.rerender(
+      <ReviewCodeViewHarness
+        comments={[
+          {
+            ...comment,
+            codexReply: {
+              body: 'This reply is tall enough to use a different markdown measurement.',
+              status: 'ready',
+            },
+          },
+        ]}
+        files={[file]}
+      />,
+    );
+
+    expect(view.container.querySelector('[aria-label="Codex reply"]')).not.toBeNull();
+    expect(codeViewMock.renderCount).toBe(renderCountBeforeReply + 1);
+  } finally {
+    await view.cleanup();
+  }
+});
+
+test('failed pull request comments keep their draft and can be retried', async () => {
+  const file = createChangedFile('src/comment.ts');
+  const comment = {
+    body: 'Keep this comment.',
+    filePath: file.path,
+    id: 'comment-1',
+    lineNumber: 1,
+    remoteSubmit: {
+      error:
+        'You already have a pending GitHub review on this pull request. Submit or discard it on GitHub, then retry. Your comment draft is still here.',
+      status: 'error' as const,
+    },
+    sectionId: 'src/comment.ts:unstaged',
+    side: 'additions' as const,
+  } satisfies ReviewComment;
+  const onSubmitComment = vi.fn();
+  const onUpdateComment = vi.fn();
+  const view = await renderReact(
+    <ReviewCodeViewHarness
+      comments={[comment]}
+      files={[file]}
+      isPullRequest
+      onSubmitComment={onSubmitComment}
+      onUpdateComment={onUpdateComment}
+    />,
+  );
+
+  try {
+    const textarea = view.container.querySelector<HTMLTextAreaElement>('.review-comment-input');
+    expect(textarea?.value).toBe('Keep this comment.');
+    expect(view.container.querySelector('.review-comment-error')?.textContent).toBe(
+      comment.remoteSubmit.error,
+    );
+
+    const commentButton = [...view.container.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent === 'Comment',
+    );
+    if (!commentButton) {
+      throw new Error('Expected Comment button.');
+    }
+
+    await act(async () => {
+      commentButton.click();
+    });
+
+    expect(onUpdateComment).not.toHaveBeenCalled();
+    expect(onSubmitComment).toHaveBeenCalledWith(comment.id);
+    expect(textarea?.value).toBe(comment.body);
+  } finally {
+    await view.cleanup();
+  }
+});
+
+test('file comments can be created for GitLab merge requests but not GitHub pull requests', async () => {
+  const file = createChangedFile('src/comment.ts');
+  const onCreateComment = vi.fn();
+  const gitLabSource = {
+    provider: 'gitlab',
+    type: 'pull-request',
+    url: 'https://gitlab.example.com/group/project/-/merge_requests/1',
+  } satisfies ReviewSource;
+  const gitHubSource = {
+    provider: 'github',
+    type: 'pull-request',
+    url: 'https://github.com/example/project/pull/1',
+  } satisfies ReviewSource;
+  const view = await renderReact(
+    <ReviewCodeViewHarness
+      files={[file]}
+      isPullRequest
+      onCreateComment={onCreateComment}
+      source={gitLabSource}
+    />,
+  );
+
+  try {
+    const fileCommentButton = view.container.querySelector<HTMLButtonElement>(
+      '.codiff-file-comment-button',
+    );
+    expect(fileCommentButton).not.toBeNull();
+    expect(fileCommentButton?.classList.contains('codiff-button')).toBe(true);
+
+    await act(async () => fileCommentButton?.click());
+    expect(onCreateComment).toHaveBeenCalledWith({
+      anchor: 'file',
+      filePath: 'src/comment.ts',
+      sectionId: 'src/comment.ts:unstaged',
+    });
+
+    await view.rerender(
+      <ReviewCodeViewHarness
+        files={[file]}
+        isPullRequest
+        onCreateComment={onCreateComment}
+        source={gitHubSource}
+      />,
+    );
+    expect(view.container.querySelector('.codiff-file-comment-button')).toBeNull();
+  } finally {
+    await view.cleanup();
+  }
+});
+
+test('file-level review comments render as measured file annotations', async () => {
+  const file = createChangedFile('src/comment.ts');
+  const view = await renderReact(
+    <ReviewCodeViewHarness
+      comments={[
+        {
+          anchor: 'file',
+          author: { login: 'reviewer' },
+          body: 'Review this file as a whole.',
+          filePath: file.path,
+          id: 'gitlab:file',
+          isReadOnly: true,
+          sectionId: 'src/comment.ts:unstaged',
+        },
+      ]}
+      files={[file]}
+      isPullRequest
+      source={{
+        provider: 'gitlab',
+        type: 'pull-request',
+        url: 'https://gitlab.example.com/group/project/-/merge_requests/1',
+      }}
+    />,
+  );
+
+  try {
+    const fileComments = view.container.querySelector('.review-comment-thread');
+    expect(fileComments?.textContent).toContain('Review this file as a whole.');
+    expect(fileComments?.closest('.codiff-file-header')).toBeNull();
+    const item = codeViewMock.lastItems.find(
+      (candidate) => candidate.id === 'diff:src/comment.ts:unstaged',
+    ) as
+      | {
+          annotations?: ReadonlyArray<{
+            lineNumber: number;
+            metadata: { commentIds?: ReadonlyArray<string>; type: string };
+          }>;
+        }
+      | undefined;
+    expect(item?.annotations).toContainEqual({
+      lineNumber: 0,
+      metadata: {
+        commentIds: ['gitlab:file'],
+        type: 'review-comment',
+      },
+      side: 'additions',
+    });
+  } finally {
+    await view.cleanup();
+  }
+});
+
+test('code quality findings render as additions annotations', async () => {
+  const file = createChangedFile('src/app.ts');
+  const finding = {
+    description: 'Avoid an unconditional storage lookup.',
+    engineName: 'eslint',
+    filePath: file.path,
+    fingerprint: 'code-quality-1',
+    lineNumber: 1,
+    severity: 'major',
+    status: 'new',
+  } satisfies PullRequestCodeQualityFinding;
+  const view = await renderReact(
+    <ReviewCodeViewHarness
+      codeQualityFindings={[
+        finding,
+        { ...finding, fingerprint: 'resolved', status: 'resolved' },
+        { ...finding, filePath: 'src/other.ts', fingerprint: 'other-file' },
+        { ...finding, fingerprint: 'hidden-line', lineNumber: 99 },
+      ]}
+      files={[file]}
+    />,
+  );
+
+  try {
+    const renderedFinding = view.container.querySelector<HTMLElement>('.code-quality-finding');
+    expect(renderedFinding?.dataset.severity).toBe('major');
+    expect(renderedFinding?.dataset.status).toBe('new');
+    expect(renderedFinding?.textContent).toContain('Code Quality');
+    expect(renderedFinding?.textContent).toContain('Major');
+    expect(renderedFinding?.textContent).toContain('New');
+    expect(renderedFinding?.textContent).toContain(finding.description);
+    expect(renderedFinding?.textContent).toContain('eslint');
+
+    const item = codeViewMock.lastItems.find(
+      (candidate) => candidate.id === 'diff:src/app.ts:unstaged',
+    ) as
+      | {
+          annotations?: ReadonlyArray<{
+            lineNumber: number;
+            metadata: { finding?: PullRequestCodeQualityFinding; type: string };
+            side: string;
+          }>;
+        }
+      | undefined;
+    expect(item?.annotations?.filter(({ metadata }) => metadata.type === 'code-quality')).toEqual([
+      {
+        lineNumber: 1,
+        metadata: {
+          finding,
+          type: 'code-quality',
+        },
+        side: 'additions',
+      },
+    ]);
+  } finally {
+    await view.cleanup();
   }
 });
 
@@ -1129,7 +1582,7 @@ test('Enter on a focused review control is not converted into a hunk comment', a
       render(1);
     });
 
-    const openButton = container.querySelector<HTMLButtonElement>('.codiff-open-button');
+    const openButton = container.querySelector<HTMLButtonElement>('.codiff-button');
     if (!openButton) {
       throw new Error('Expected the open file button.');
     }

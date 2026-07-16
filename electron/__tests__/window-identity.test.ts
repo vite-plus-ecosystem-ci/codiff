@@ -5,9 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { expect, test } from 'vite-plus/test';
+import { getGitTestEnvironment, removeGitTestDirectory } from '../../core/__tests__/helpers/git.ts';
 
 const require = createRequire(import.meta.url);
-const { findMatchingWindowIdentity, getWindowIdentity, parseGitHubPullRequestUrl } =
+const { findMatchingWindowIdentity, getWindowIdentity, getWindowIdentityForRepositoryState } =
   require('../window-identity.cjs') as {
     findMatchingWindowIdentity: (
       identity: { key: string } | null,
@@ -34,25 +35,28 @@ const { findMatchingWindowIdentity, getWindowIdentity, parseGitHubPullRequestUrl
         planResultFile?: string;
       },
     ) => { key: string; repositoryRoot: string; sourceKey: string } | null;
-    parseGitHubPullRequestUrl: (value: string) => {
-      number: number;
-      owner: string;
-      repo: string;
-    } | null;
+    getWindowIdentityForRepositoryState: (state: {
+      root: string;
+      source:
+        | { type: 'working-tree' }
+        | { ref: string; type: 'commit' }
+        | { baseRef: string; headRef: string; ref: string; type: 'branch-diff' };
+    }) => { key: string; repositoryRoot: string; sourceKey: string } | null;
   };
 
 const execFileAsync = promisify(execFile);
 
 const git = async (repo: string, args: ReadonlyArray<string>) => {
-  const result = await execFileAsync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+  const result = await execFileAsync('git', ['-C', repo, ...args], {
+    encoding: 'utf8',
+    env: getGitTestEnvironment(),
+  });
   return result.stdout.trim();
 };
 
 const createRepository = async () => {
   const repositoryPath = await mkdtemp(join(tmpdir(), 'codiff-window-identity-'));
   await git(repositoryPath, ['init']);
-  await git(repositoryPath, ['config', 'user.email', 'codiff@example.com']);
-  await git(repositoryPath, ['config', 'user.name', 'Codiff Test']);
   await git(repositoryPath, ['commit', '--allow-empty', '-m', 'initial']);
   return repositoryPath;
 };
@@ -85,7 +89,7 @@ test.sequential('plan window identities do not invoke Git outside repositories',
     expect(await readFile(gitMarker, 'utf8').catch(() => null)).toBeNull();
   } finally {
     process.env.PATH = previousPath;
-    await rm(directory, { force: true, recursive: true });
+    await removeGitTestDirectory(directory);
   }
 });
 
@@ -98,7 +102,7 @@ test('window identities match working-tree launches inside the same repository',
 
     expect(getWindowIdentity(nestedPath)?.key).toBe(getWindowIdentity(repositoryPath)?.key);
   } finally {
-    await rm(repositoryPath, { force: true, recursive: true });
+    await removeGitTestDirectory(repositoryPath);
   }
 });
 
@@ -123,7 +127,36 @@ test('window identities resolve commit refs to the same commit sha', async () =>
       })?.key,
     );
   } finally {
-    await rm(repositoryPath, { force: true, recursive: true });
+    await removeGitTestDirectory(repositoryPath);
+  }
+});
+
+test.sequential('resolved repository states build identities without invoking Git', async () => {
+  const repositoryPath = await createRepository();
+  const fakeBin = await mkdtemp(join(tmpdir(), 'codiff-resolved-window-identity-'));
+  const gitMarker = join(fakeBin, 'git-invoked');
+  const previousPath = process.env.PATH;
+
+  try {
+    const head = await git(repositoryPath, ['rev-parse', 'HEAD']);
+    await writeFile(join(fakeBin, 'git'), `#!/bin/sh\nprintf invoked > "${gitMarker}"\nexit 99\n`);
+    await chmod(join(fakeBin, 'git'), 0o755);
+    process.env.PATH = `${fakeBin}:${previousPath ?? ''}`;
+
+    expect(
+      getWindowIdentityForRepositoryState({
+        root: repositoryPath,
+        source: { ref: head, type: 'commit' },
+      }),
+    ).toMatchObject({
+      repositoryRoot: await realpath(repositoryPath),
+      sourceKey: `commit:${head}`,
+    });
+    expect(await readFile(gitMarker, 'utf8').catch(() => null)).toBeNull();
+  } finally {
+    process.env.PATH = previousPath;
+    await removeGitTestDirectory(fakeBin);
+    await removeGitTestDirectory(repositoryPath);
   }
 });
 
@@ -149,7 +182,7 @@ test('implicit walkthrough identities use HEAD only when the working tree is cle
       })?.sourceKey,
     ).toBe('working-tree');
   } finally {
-    await rm(repositoryPath, { force: true, recursive: true });
+    await removeGitTestDirectory(repositoryPath);
   }
 });
 
@@ -175,7 +208,7 @@ test('window identities distinguish branch history launches', async () => {
       })?.sourceKey,
     ).toBe(`branch-diff:feature:${head}:${nextHead}`);
   } finally {
-    await rm(repositoryPath, { force: true, recursive: true });
+    await removeGitTestDirectory(repositoryPath);
   }
 });
 
@@ -210,7 +243,7 @@ test('window identities normalize GitHub pull request sources', async () => {
       })?.key,
     );
   } finally {
-    await rm(repositoryPath, { force: true, recursive: true });
+    await removeGitTestDirectory(repositoryPath);
   }
 });
 
@@ -227,7 +260,7 @@ test('window identities normalize GitLab merge request sources', async () => {
       })?.sourceKey,
     ).toBe('pull-request:gitlab:gitlab.example.com/group/subgroup/project#8');
   } finally {
-    await rm(repositoryPath, { force: true, recursive: true });
+    await removeGitTestDirectory(repositoryPath);
   }
 });
 
@@ -250,13 +283,4 @@ test('window identity matching requires exact identity matches', () => {
   expect(findMatchingWindowIdentity(null, new Map([[1, { key: 'repo-a\0working-tree' }]]))).toBe(
     null,
   );
-});
-
-test('parseGitHubPullRequestUrl rejects non pull request URLs', () => {
-  expect(parseGitHubPullRequestUrl('https://github.com/nkzw-tech/codiff/pull/8')).toEqual({
-    number: 8,
-    owner: 'nkzw-tech',
-    repo: 'codiff',
-  });
-  expect(parseGitHubPullRequestUrl('https://github.com/nkzw-tech/codiff/issues/8')).toBeNull();
 });

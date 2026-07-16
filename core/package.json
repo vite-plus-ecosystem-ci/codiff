@@ -1,25 +1,68 @@
 {
   "name": "@nkzw/codiff-core",
-  "version": "0.0.0",
-  "private": true,
+  "version": "1.8.1",
+  "description": "A fast diff viewer.",
+  "license": "MIT",
+  "author": {
+    "name": "Christoph Nakazawa",
+    "email": "christoph.pojer@gmail.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nkzw-tech/codiff.git",
+    "directory": "core"
+  },
+  "files": [
+    "dist"
+  ],
   "type": "module",
-  "types": "./index.ts",
+  "sideEffects": [
+    "./App.css",
+    "./dist/*.css"
+  ],
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./index.ts",
-      "default": "./index.ts"
+      "types": "./dist/index.d.ts",
+      "@nkzw/source": "./index.ts",
+      "default": "./dist/index.mjs"
     },
-    "./narrative-walkthrough-diff": "./lib/narrative-walkthrough-diff.js",
-    "./types": "./types.ts",
-    "./styles.css": "./App.css"
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "@nkzw/source": "./react.ts",
+      "default": "./dist/react.mjs"
+    },
+    "./share": {
+      "types": "./dist/share.d.ts",
+      "@nkzw/source": "./share.ts",
+      "default": "./dist/share.mjs"
+    },
+    "./styles.css": {
+      "types": "./dist/styles.css.d.ts",
+      "@nkzw/source": "./App.css",
+      "default": "./dist/style.css"
+    },
+    "./walkthrough": {
+      "types": "./dist/lib/narrative-walkthrough-diff.d.ts",
+      "@nkzw/source": "./lib/narrative-walkthrough-diff.js",
+      "default": "./dist/lib/narrative-walkthrough-diff.mjs"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && vp pack -d dist --target=node24 index.ts react.ts share.ts lib/narrative-walkthrough-diff.js App.css && vp exec tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@nkzw/mdx-editor": "0.1.5",
+    "@nkzw/mdx-editor": "^0.2.2",
     "@nkzw/use-relative-time": "^1.2.3",
     "@phosphor-icons/react": "^2.1.10",
-    "@pierre/diffs": "1.2.12",
+    "@pierre/diffs": "1.3.0-beta.9",
     "@pierre/trees": "1.0.0-beta.5",
-    "lucide-react": "^1.22.0"
+    "@radix-ui/react-slot": "^1.3.0",
+    "class-variance-authority": "^0.7.1",
+    "ghostty-web": "^0.4.0",
+    "lucide-react": "^1.24.0",
+    "valibot": "^1.4.2"
   },
   "peerDependencies": {
     "react": "^19.2.0",

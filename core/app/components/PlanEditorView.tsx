@@ -26,7 +26,8 @@ import type {
   PlanHandoffStatus,
   PlanReview,
 } from '../../types.ts';
-import { Gravatar } from './Gravatar.tsx';
+import { Avatar } from './Avatar.tsx';
+import { Button } from './Button.tsx';
 import {
   MarkdownDocumentEditor,
   type MarkdownDocumentEditorHandle,
@@ -49,6 +50,7 @@ const getAuthor = (identity: GitIdentity | null): PlanCommentAuthor => {
   return {
     ...(identity?.email ? { email: identity.email } : {}),
     ...(identity?.gravatarUrl ? { avatarUrl: identity.gravatarUrl } : {}),
+    ...(identity?.username ? { username: identity.username } : {}),
     id: identity?.email || 'local-user',
     name,
   };
@@ -97,7 +99,6 @@ const getPlanCommentTargetLabel = (thread: PlanCommentThread) => {
 export function PlanCommentCard({
   active,
   detached,
-  identity,
   onActivate,
   onBodyChange,
   onDelete,
@@ -110,7 +111,6 @@ export function PlanCommentCard({
 }: {
   active: boolean;
   detached: boolean;
-  identity: GitIdentity | null;
   onActivate: () => void;
   onBodyChange: (body: string) => void;
   onDelete: () => void;
@@ -124,6 +124,7 @@ export function PlanCommentCard({
   const editorRef = useRef<MarkdownEditorHandle>(null);
   const body = getThreadBody(thread);
   const author = thread.createdBy;
+  const displayName = author.name || 'Unknown author';
   const resolved = thread.status === 'resolved';
   const resolutionLabel =
     thread.resolution?.reason === 'agent-handled'
@@ -147,15 +148,11 @@ export function PlanCommentCard({
       onPointerDown={onActivate}
     >
       <div className="review-comment">
-        <Gravatar
-          fallback={author.name || identity?.name || identity?.email || 'You'}
-          size="medium"
-          url={author.avatarUrl || identity?.gravatarUrl}
-        />
+        <Avatar name={displayName} size="medium" url={author.avatarUrl} />
         <div className="review-comment-body">
           <div className="review-comment-header plan-comment-header">
             <div className="plan-comment-heading">
-              <strong>{author.name}</strong>
+              <strong>{displayName}</strong>
               {resolved ? <span className="plan-comment-status">{resolutionLabel}</span> : null}
               <button
                 aria-label={`Show comment target: ${getPlanCommentTargetLabel(thread)}`}
@@ -218,9 +215,8 @@ export function PlanCommentCard({
   );
 }
 
-export function PlanCommentRail({
+function PlanCommentRail({
   activeThreadId,
-  identity,
   layoutPass,
   layouts,
   onActivate,
@@ -235,7 +231,6 @@ export function PlanCommentRail({
   workspace,
 }: {
   activeThreadId: string | null;
-  identity: GitIdentity | null;
   layoutPass: number;
   layouts: ReadonlyArray<MarkdownAnnotationLayout>;
   onActivate: (thread: PlanCommentThread) => void;
@@ -350,7 +345,6 @@ export function PlanCommentRail({
               <PlanCommentCard
                 active={activeThreadId === thread.id}
                 detached={layout?.detached ?? true}
-                identity={identity}
                 onActivate={() => onActivate(thread)}
                 onBodyChange={(body) => onBodyChange(thread.id, body)}
                 onDelete={() => onDelete(thread.id)}
@@ -372,7 +366,6 @@ export function PlanCommentRail({
                 <PlanCommentCard
                   active={activeThreadId === thread.id}
                   detached
-                  identity={identity}
                   key={thread.id}
                   onActivate={() => onActivate(thread)}
                   onBodyChange={(body) => onBodyChange(thread.id, body)}
@@ -842,7 +835,7 @@ export function PlanEditorView({
   }, []);
 
   if (!review) {
-    return <main className="loading italic">Loading…</main>;
+    return <main className="loading">Loading…</main>;
   }
 
   return (
@@ -898,25 +891,27 @@ export function PlanEditorView({
                 </div>
                 <div className="plan-actions">
                   {shareEnabled ? (
-                    <button
-                      className="codiff-open-button plan-share-button"
+                    <Button
+                      action={sharePlan}
+                      className="plan-share-button"
                       disabled={completing || sharing}
-                      onClick={() => void sharePlan()}
+                      pendingPlaceholder="Sharing…"
                       title="Share plan"
                       type="button"
                     >
                       <ShareNetwork aria-hidden size={13} />
                       {sharing ? 'Sharing…' : shareCopied ? 'Copied' : 'Share'}
-                    </button>
+                    </Button>
                   ) : null}
-                  <button
-                    className="codiff-open-button plan-done-button"
+                  <Button
+                    action={() => completePlan('done')}
+                    className="plan-done-button"
                     disabled={completing || sharing}
-                    onClick={() => void completePlan('done')}
+                    pendingPlaceholder="Saving…"
                     type="button"
                   >
                     {completing ? 'Saving…' : 'Done'}
-                  </button>
+                  </Button>
                 </div>
               </div>
               <MarkdownDocumentEditor
@@ -950,7 +945,6 @@ export function PlanEditorView({
           {review.threads.length > 0 ? (
             <PlanCommentRail
               activeThreadId={activeThreadId}
-              identity={identity}
               layoutPass={layoutPass}
               layouts={effectiveLayouts}
               onActivate={activateThread}

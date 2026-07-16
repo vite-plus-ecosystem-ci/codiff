@@ -1,33 +1,33 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { expect, test } from 'vite-plus/test';
+import { getGitTestEnvironment, removeGitTestDirectory } from '../../core/__tests__/helpers/git.ts';
 
 const require = createRequire(import.meta.url);
-const { collectWalkthroughPaths, diagnoseWalkthroughMismatch } =
-  require('../walkthrough-diagnosis.cjs') as {
-    collectWalkthroughPaths: (input: unknown) => Array<string>;
-    diagnoseWalkthroughMismatch: (params: {
-      hasFiles: boolean;
-      input: unknown;
-      repositoryRoot: string;
-    }) => Promise<string | null>;
-  };
+const { diagnoseWalkthroughMismatch } = require('../walkthrough-diagnosis.cjs') as {
+  diagnoseWalkthroughMismatch: (params: {
+    hasFiles: boolean;
+    input: unknown;
+    repositoryRoot: string;
+  }) => Promise<string | null>;
+};
 
 const execFileAsync = promisify(execFile);
 
 const git = async (repo: string, args: ReadonlyArray<string>) => {
-  await execFileAsync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+  await execFileAsync('git', ['-C', repo, ...args], {
+    encoding: 'utf8',
+    env: getGitTestEnvironment(),
+  });
 };
 
 const makeRepo = async () => {
   const repo = await mkdtemp(join(tmpdir(), 'codiff-diagnosis-'));
   await git(repo, ['init']);
-  await git(repo, ['config', 'user.email', 'codiff@example.com']);
-  await git(repo, ['config', 'user.name', 'Codiff Test']);
   return repo;
 };
 
@@ -42,38 +42,6 @@ const v4WalkthroughFor = (path: string, extra: Record<string, unknown> = {}) => 
   chapters: [{ stops: [{ hunkIds: [`${path}:staged:h1`] }] }],
   version: 4,
   ...extra,
-});
-
-test('collects anchor and support paths from a walkthrough', () => {
-  const paths = collectWalkthroughPaths({
-    chapters: [{ stops: [{ anchors: [{ oldPath: 'old.ts', path: 'src/a.ts' }] }] }],
-    support: [{ files: [{ path: 'src/b.ts' }] }],
-  });
-  expect([...paths].sort()).toEqual(['old.ts', 'src/a.ts', 'src/b.ts']);
-});
-
-test('collects v4 hunk ids and normalized hunk paths from a walkthrough', () => {
-  const paths = collectWalkthroughPaths({
-    chapters: [
-      {
-        stops: [
-          {
-            hunkIds: ['src/a.ts:staged:h1', 'src/path:with:colon.ts:unstaged:h2'],
-            hunks: [{ oldPath: 'src/old.ts', path: 'src/normalized.ts' }],
-          },
-        ],
-      },
-    ],
-    support: [{ hunkIds: ['src/b.ts:staged:h1'] }],
-    version: 4,
-  });
-  expect([...paths].sort()).toEqual([
-    'src/a.ts',
-    'src/b.ts',
-    'src/normalized.ts',
-    'src/old.ts',
-    'src/path:with:colon.ts',
-  ]);
 });
 
 test('reports changes committed after the walkthrough was authored', async () => {
@@ -93,7 +61,7 @@ test('reports changes committed after the walkthrough was authored', async () =>
     expect(reason).toContain('committed since the walkthrough was authored');
     expect(reason).toContain('Add the feature');
   } finally {
-    await rm(repo, { force: true, recursive: true });
+    await removeGitTestDirectory(repo);
   }
 });
 
@@ -113,7 +81,7 @@ test('reports v4 hunk-id changes committed after the walkthrough was authored', 
     expect(reason).toContain('committed since the walkthrough was authored');
     expect(reason).toContain('Add the v4 feature');
   } finally {
-    await rm(repo, { force: true, recursive: true });
+    await removeGitTestDirectory(repo);
   }
 });
 
@@ -134,7 +102,7 @@ test('treats a commit that predates authoring as reverted, not committed', async
     expect(reason).toContain('reverted');
     expect(reason).not.toContain('committed since');
   } finally {
-    await rm(repo, { force: true, recursive: true });
+    await removeGitTestDirectory(repo);
   }
 });
 
@@ -151,7 +119,7 @@ test('reports never-committed paths as reverted or discarded', async () => {
 
     expect(reason).toContain('reverted or discarded');
   } finally {
-    await rm(repo, { force: true, recursive: true });
+    await removeGitTestDirectory(repo);
   }
 });
 
@@ -166,6 +134,6 @@ test('defers to the caller when the diff still has files', async () => {
       }),
     ).toBeNull();
   } finally {
-    await rm(repo, { force: true, recursive: true });
+    await removeGitTestDirectory(repo);
   }
 });
