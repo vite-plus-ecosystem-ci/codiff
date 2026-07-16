@@ -1,4 +1,5 @@
-import { Thinking } from '@nkzw/codiff-core/react';
+import { Button, Thinking } from '@nkzw/codiff-core/react';
+import { GithubLogoIcon as GithubLogo } from '@phosphor-icons/react/GithubLogo';
 import { useRouter } from '@void/react';
 import { Suspense } from 'react';
 import Header from './Header.tsx';
@@ -159,9 +160,10 @@ export default function App() {
   }
   if (router.path === '/stats' || router.path === '/stats/') {
     return (
-      <Suspense fallback={<PageThinking />}>
+      <div className="codiff-web-shell">
+        <Header />
         <StatsPage />
-      </Suspense>
+      </div>
     );
   }
 
@@ -172,19 +174,16 @@ export default function App() {
 
       <footer className="codiff-web-footer">
         <div className="codiff-web-footer-inner">
-          <a
-            aria-label="Open Nakazawa Tech"
-            className="codiff-web-footer-brand"
-            href="https://nakazawa.tech"
-            rel="noreferrer"
-            target="_blank"
-          >
-            <NakazawaTechLogo />
-          </a>
-          <div className="codiff-web-footer-copy">
-            <p className="codiff-web-footer-tagline">
-              <strong>Codiff</strong>: <em>Effective code reviews locally and on the web.</em>
-            </p>
+          <div className="codiff-web-footer-credit">
+            <a
+              aria-label="Open Nakazawa Tech"
+              className="codiff-web-footer-brand"
+              href="https://nakazawa.tech"
+              rel="noreferrer"
+              target="_blank"
+            >
+              <NakazawaTechLogo />
+            </a>
             <p>
               Created by{' '}
               <a href="https://nakazawa.tech" rel="noreferrer" target="_blank">
@@ -200,6 +199,12 @@ export default function App() {
               </a>
             </p>
           </div>
+          <Button asChild className="codiff-web-footer-github" size="sm" variant="outline">
+            <a href="https://github.com/cpojer/codiff" rel="noreferrer" target="_blank">
+              <GithubLogo aria-hidden size={18} weight="regular" />
+              Star on GitHub
+            </a>
+          </Button>
         </div>
       </footer>
     </div>

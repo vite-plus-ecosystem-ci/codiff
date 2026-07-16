@@ -135,8 +135,7 @@ body {
   font-size: 20px;
 }
 
-.codiff-connect-status p,
-.codiff-public-stats header p {
+.codiff-connect-status p {
   color: var(--sidebar-text);
 }
 
@@ -157,56 +156,179 @@ body {
   padding: 24px;
 }
 
-.codiff-public-stats {
-  display: grid;
-  gap: 28px;
+.codiff-web-stats {
+  max-width: 1040px;
+  padding-bottom: 56px;
+  padding-top: 52px;
 }
 
-.codiff-public-stats header h1 {
-  font-size: 32px;
-  font-weight: 700;
+.codiff-web-stats-title {
+  margin-bottom: 28px;
 }
 
-.codiff-public-stats-totals {
+.codiff-web-stats-title h1 {
+  color: var(--text);
+  font-size: clamp(32px, 5vw, 52px);
+  letter-spacing: 0;
+  line-height: 1;
+  margin: 0;
+}
+
+.codiff-web-stats-totals {
   display: grid;
-  gap: 12px;
+  gap: 16px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 16px;
 }
 
-.codiff-public-stats-totals section,
-.codiff-public-stats-days article {
+.codiff-web-stats-totals section,
+.codiff-web-stats-chart-card {
   background: var(--file-bg);
   border: 1px solid var(--file-border);
-  border-radius: 8px;
-  display: grid;
+  border-radius: 26px;
+}
+
+.codiff-web-stats-totals section {
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+}
+
+.codiff-web-stats-totals strong {
+  color: var(--text);
+  font-size: clamp(32px, 6vw, 54px);
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.codiff-web-stats-totals span {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+  margin-top: 9px;
+}
+
+.codiff-web-stats-chart-card {
+  overflow: hidden;
+  padding: 22px 24px 14px;
+}
+
+.codiff-web-stats-chart-card > header {
+  align-items: flex-start;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.codiff-web-stats-chart-card h2 {
+  color: var(--text);
+  font-size: 16px;
+  margin: 0;
+}
+
+.codiff-web-stats-legend {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  gap: 14px;
+  justify-content: flex-end;
+}
+
+.codiff-web-stats-legend span {
+  align-items: center;
+  display: inline-flex;
   gap: 6px;
-  padding: 20px;
 }
 
-.codiff-public-stats-totals strong {
-  font-size: 30px;
+.codiff-web-stats-legend span::before {
+  background: var(--stats-plans, #6c63ff);
+  border-radius: 50%;
+  content: '';
+  height: 8px;
+  width: 8px;
 }
 
-.codiff-public-stats-totals span,
-.codiff-public-stats-days span {
-  color: var(--sidebar-text);
+.codiff-web-stats-legend span[data-series='walkthroughs']::before {
+  background: var(--stats-walkthroughs, #28a57a);
 }
 
-.codiff-public-stats-days {
-  display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(7, minmax(110px, 1fr));
+.codiff-web-stats-chart-scroll {
   overflow-x: auto;
 }
 
-.codiff-public-stats-days article {
-  min-width: 110px;
+.codiff-web-stats-chart {
+  display: block;
+  min-width: 620px;
+  width: 100%;
 }
 
-.codiff-public-stats-days time {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 700;
+.codiff-web-stats-grid-line {
+  stroke: var(--file-border);
+  stroke-width: 1;
+}
+
+.codiff-web-stats-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.codiff-web-stats-line-plans {
+  stroke: var(--stats-plans, #6c63ff);
+}
+
+.codiff-web-stats-line-walkthroughs {
+  stroke: var(--stats-walkthroughs, #28a57a);
+}
+
+.codiff-web-stats-point {
+  stroke: var(--file-bg);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.codiff-web-stats-point-plans {
+  fill: var(--stats-plans, #6c63ff);
+}
+
+.codiff-web-stats-point-walkthroughs {
+  fill: var(--stats-walkthroughs, #28a57a);
+}
+
+.codiff-web-stats-axis-label {
+  fill: var(--muted);
+  font: 11px var(--font-sans);
+}
+
+.codiff-web-stats-loading {
+  animation: codiff-dashboard-pulse 1.4s ease-in-out infinite alternate;
+  background: var(--file-bg);
+  border: 1px solid var(--file-border);
+  border-radius: 26px;
+  height: 420px;
+}
+
+@keyframes codiff-dashboard-pulse {
+  from {
+    opacity: 0.48;
+  }
+
+  to {
+    opacity: 0.85;
+  }
+}
+
+.codiff-web-stats-error {
+  background: var(--file-bg);
+  border: 1px solid var(--file-border);
+  border-radius: 26px;
+  color: var(--muted);
+  padding: 28px;
 }
 
 .codiff-web-shell {
@@ -233,6 +355,7 @@ body {
 .codiff-web-header-inner {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 16px;
   height: 58px;
   justify-content: space-between;
@@ -554,10 +677,22 @@ body {
 .codiff-web-footer-inner {
   align-items: center;
   display: flex;
-  gap: 20px;
+  gap: 16px;
   justify-content: space-between;
   margin: 0 auto;
   max-width: 1120px;
+}
+
+.codiff-web-footer-credit {
+  align-items: center;
+  display: flex;
+  flex: 1 1 420px;
+  gap: 10px;
+  min-width: 0;
+}
+
+.codiff-web-footer-github {
+  flex: 0 0 auto;
 }
 
 .codiff-web-footer-brand {
@@ -589,24 +724,11 @@ body {
   width: 42px;
 }
 
-.codiff-web-footer-copy {
-  display: grid;
-  gap: 3px;
-}
-
 .codiff-web-footer p {
   font-size: 13px;
   line-height: 1.6;
   margin: 0;
-  text-align: right;
-}
-
-.codiff-web-footer-tagline strong {
-  color: var(--text);
-}
-
-.codiff-web-footer-tagline em {
-  font-style: italic;
+  text-align: left;
 }
 
 .codiff-web-footer p a {
@@ -658,13 +780,34 @@ body {
     display: none;
   }
 
-  .codiff-web-footer-inner {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 14px;
+  .codiff-web-stats {
+    padding-top: 36px;
   }
 
-  .codiff-web-footer p {
-    text-align: left;
+  .codiff-web-stats-totals {
+    grid-template-columns: 1fr;
+  }
+
+  .codiff-web-stats-chart-card {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .codiff-web-stats-chart-card > header {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .codiff-web-stats-legend {
+    justify-content: flex-start;
+  }
+
+  .codiff-web-footer-credit {
+    align-items: flex-start;
+    flex-basis: 100%;
+  }
+
+  .codiff-web-footer-github {
+    margin-left: auto;
   }
 }

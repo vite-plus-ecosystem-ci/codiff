@@ -32,9 +32,7 @@ vi.mock('./sharing/PlanPage.tsx', () => ({
   },
 }));
 vi.mock('./sharing/StatsPage.tsx', () => ({
-  default: () => {
-    throw suspendedPage;
-  },
+  default: () => <main className="codiff-web-stats">Stats</main>,
 }));
 vi.mock('./sharing/WalkthroughPage.tsx', () => ({
   default: () => {
@@ -76,7 +74,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-test.each(['/p/shared-plan', '/w/shared-walkthrough', '/connect/share-code', '/stats'])(
+test.each(['/p/shared-plan', '/w/shared-walkthrough', '/connect/share-code'])(
   'uses the shared Thinking state while loading %s',
   async (path) => {
     router.path = path;
@@ -90,6 +88,17 @@ test.each(['/p/shared-plan', '/w/shared-walkthrough', '/connect/share-code', '/s
     expect(loading?.parentElement?.className).toBe('codiff-web-page-thinking');
   },
 );
+
+test('renders stats inside the standard public shell and header', async () => {
+  router.path = '/stats';
+  auth.useSession.mockReturnValue({ data: null, isPending: false });
+
+  await act(async () => root.render(<App />));
+
+  expect(container.querySelector('.codiff-web-shell')).not.toBeNull();
+  expect(container.querySelector('.codiff-web-header')).not.toBeNull();
+  expect(container.querySelector('.codiff-web-stats')?.textContent).toBe('Stats');
+});
 
 test('shows the aligned public guide and starts GitHub sign-in from the header', async () => {
   auth.useSession.mockReturnValue({ data: null, isPending: false });
@@ -109,9 +118,16 @@ test('shows the aligned public guide and starts GitHub sign-in from the header',
       (button) => button.textContent === 'Continue with GitHub',
     ),
   ).toBe(true);
-  expect(container.querySelector('.codiff-web-footer-tagline')?.textContent).toContain(
-    'Effective code reviews locally and on the web.',
+  const footerCredit = container.querySelector('.codiff-web-footer-credit');
+  expect(footerCredit?.textContent).toContain(
+    'Created by Nakazawa Tech • Tokens sponsored by Cloudflare & OpenAI',
   );
+  expect(footerCredit?.querySelector('.codiff-web-footer-brand')).not.toBeNull();
+  expect(container.querySelector('.codiff-web-footer-tagline')).toBeNull();
+  const githubLink = container.querySelector<HTMLAnchorElement>('.codiff-web-footer-github');
+  expect(githubLink?.href).toBe('https://github.com/cpojer/codiff');
+  expect(githubLink?.target).toBe('_blank');
+  expect(githubLink?.textContent).toBe('Star on GitHub');
 
   await click(container.querySelector('button')!);
 
