@@ -207,7 +207,7 @@ BEGIN
   ON CONFLICT (`userId`, `date`) DO UPDATE SET
     `planCount` = `planCount` + 1
   WHERE `planCount` < 50 AND (`planCount` + `walkthroughCount`) < 100;
-  SELECT CASE WHEN changes() = 0 THEN RAISE(ABORT, 'share-quota-exceeded') END;
+  SELECT RAISE(ABORT, 'share-quota-exceeded') WHERE changes() = 0;
 END;
 
 CREATE TRIGGER `Walkthrough_share_quota`
@@ -219,5 +219,5 @@ BEGIN
   ON CONFLICT (`userId`, `date`) DO UPDATE SET
     `walkthroughCount` = `walkthroughCount` + 1
   WHERE `walkthroughCount` < 50 AND (`planCount` + `walkthroughCount`) < 100;
-  SELECT CASE WHEN changes() = 0 THEN RAISE(ABORT, 'share-quota-exceeded') END;
+  SELECT RAISE(ABORT, 'share-quota-exceeded') WHERE changes() = 0;
 END;
