@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import { expect, test } from 'vite-plus/test';
 import packageJson from '../../package.json' with { type: 'json' };
 import schema from '../config/codiff-config.schema.json' with { type: 'json' };
 import { createDefaultConfig } from '../config/defaults.ts';
+import { createTemporaryDirectorySync, createTemporaryEnvironment } from './helpers/resources.ts';
 
 const require = createRequire(import.meta.url);
 const { createDefaultConfig: createElectronDefaultConfig, readConfig } =
@@ -15,23 +16,12 @@ const { createDefaultConfig: createElectronDefaultConfig, readConfig } =
   };
 
 const readElectronConfig = (raw: unknown) => {
-  const home = mkdtempSync(join(tmpdir(), 'codiff-config-home.'));
-  const configDirectory = join(home, '.codiff');
-  const previousHome = process.env.HOME;
+  using home = createTemporaryDirectorySync('codiff-config-home.');
+  using _environment = createTemporaryEnvironment({ HOME: home.path });
+  const configDirectory = join(home.path, '.codiff');
   mkdirSync(configDirectory);
   writeFileSync(join(configDirectory, 'codiff.jsonc'), `${JSON.stringify(raw)}\n`);
-  process.env.HOME = home;
-
-  try {
-    return readConfig();
-  } finally {
-    if (previousHome == null) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = previousHome;
-    }
-    rmSync(home, { force: true, recursive: true });
-  }
+  return readConfig();
 };
 
 const getSchemaDefaults = (section: 'keymap' | 'settings') =>

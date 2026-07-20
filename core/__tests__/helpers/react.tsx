@@ -11,17 +11,17 @@ export const renderReact = async (element: ReactNode) => {
   });
 
   return {
-    cleanup: async () => {
-      await act(async () => {
-        root.unmount();
-      });
-      container.remove();
-    },
     container,
     rerender: async (nextElement: ReactNode) => {
       await act(async () => {
         root.render(nextElement);
       });
+    },
+    async [Symbol.asyncDispose]() {
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
     },
   };
 };

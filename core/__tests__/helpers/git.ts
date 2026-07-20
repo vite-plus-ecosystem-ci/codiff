@@ -1,4 +1,11 @@
 import { rm } from 'node:fs/promises';
+import { createTemporaryEnvironment } from './resources.ts';
+
+const gitHookIsolation = {
+  GIT_CONFIG_COUNT: '4',
+  GIT_CONFIG_KEY_3: 'core.hooksPath',
+  GIT_CONFIG_VALUE_3: '/dev/null',
+} as const;
 
 export const getGitTestEnvironment = (
   overrides: Readonly<Record<string, string | undefined>> = {},
@@ -18,6 +25,10 @@ export const getGitTestEnvironment = (
   ...overrides,
 });
 
+export const getGitTestEnvironmentForSubprocess = (
+  overrides: Readonly<Record<string, string | undefined>> = {},
+) => getGitTestEnvironment({ ...gitHookIsolation, ...overrides });
+
 export const removeGitTestDirectory = (path: string) =>
   rm(path, {
     force: true,
@@ -30,32 +41,17 @@ export const withGitTestEnvironment = async <T>(
   callback: () => Promise<T>,
   overrides: Readonly<Record<string, string | undefined>> = {},
 ) => {
-  const environment = getGitTestEnvironment(overrides);
+  const environment = getGitTestEnvironmentForSubprocess(overrides);
   const keys = Object.keys(environment).filter(
     (key) =>
       key.startsWith('GIT_AUTHOR_') ||
       key.startsWith('GIT_COMMITTER_') ||
       key.startsWith('GIT_CONFIG_'),
   );
-  const previous = new Map(keys.map((key) => [key, process.env[key]]));
-
+  const scopedEnvironment: Record<string, string | undefined> = {};
   for (const key of keys) {
-    const value = environment[key];
-    if (value == null) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
+    scopedEnvironment[key] = environment[key];
   }
-  try {
-    return await callback();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value == null) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
+  await using _environment = createTemporaryEnvironment(scopedEnvironment);
+  return await callback();
 };

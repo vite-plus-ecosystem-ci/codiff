@@ -16,7 +16,6 @@ export const createFakeOpenLogger = async () => {
   await chmod(openPath, 0o755);
 
   return {
-    cleanup: () => rm(directory, { force: true, recursive: true }),
     directory,
     env: {
       ...process.env,
@@ -25,6 +24,9 @@ export const createFakeOpenLogger = async () => {
     },
     readArgs: async () => (await readFile(logPath, 'utf8')).trim().split('\n'),
     reset: () => writeFile(logPath, ''),
+    async [Symbol.asyncDispose]() {
+      await rm(directory, { force: true, recursive: true });
+    },
   };
 };
 
@@ -37,7 +39,6 @@ export const createFakeCommandLogger = async (prefix: string, commandName: strin
   await chmod(commandPath, 0o755);
 
   return {
-    cleanup: () => rm(directory, { force: true, recursive: true }),
     commandPath,
     directory,
     env: {
@@ -45,5 +46,8 @@ export const createFakeCommandLogger = async (prefix: string, commandName: strin
       OPEN_ARGS_FILE: logPath,
     },
     readArgs: async () => (await readFile(logPath, 'utf8')).trim().split('\n'),
+    async [Symbol.asyncDispose]() {
+      await rm(directory, { force: true, recursive: true });
+    },
   };
 };
