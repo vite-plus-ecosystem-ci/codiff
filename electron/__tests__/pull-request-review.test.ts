@@ -59,7 +59,11 @@ process.stdin.on('end', () => {
     process.env.CODIFF_GITHUB_REVIEW_TEST_CALLS,
     JSON.stringify({ args, input }) + '\\n',
   );
-  process.stdout.write('{}');
+  process.stdout.write(
+    args.includes('repos/nkzw-tech/codiff/pulls/12')
+      ? '{"head":{"sha":"0123456789abcdef0123456789abcdef01234567"}}'
+      : '{}',
+  );
 });
 `,
     );
@@ -115,11 +119,11 @@ process.stdin.on('end', () => {
             input: string;
           },
       );
-    expect(calls).toHaveLength(3);
-    for (const call of calls) {
-      expect(call.args).toContain('repos/nkzw-tech/codiff/pulls/12/reviews');
-    }
-    expect(JSON.parse(calls[0].input)).toEqual({
+    const reviewCalls = calls.filter((call) =>
+      call.args.includes('repos/nkzw-tech/codiff/pulls/12/reviews'),
+    );
+    expect(reviewCalls).toHaveLength(3);
+    expect(JSON.parse(reviewCalls[0].input)).toEqual({
       body: '',
       comments: [
         {
@@ -131,12 +135,12 @@ process.stdin.on('end', () => {
       ],
       event: 'COMMENT',
     });
-    expect(JSON.parse(calls[1].input)).toEqual({
+    expect(JSON.parse(reviewCalls[1].input)).toEqual({
       body: 'General feedback.',
       comments: [],
       event: 'COMMENT',
     });
-    expect(JSON.parse(calls[2].input)).toEqual({
+    expect(JSON.parse(reviewCalls[2].input)).toEqual({
       body: 'Requesting changes.',
       comments: [],
       event: 'REQUEST_CHANGES',
