@@ -43,6 +43,7 @@ const buildReviewAssistantInput = (state, request) => {
 
   return {
     comment: {
+      anchor: comment.anchor,
       body: typeof comment.body === 'string' ? comment.body : '',
       filePath: comment.filePath,
       lineNumber: comment.lineNumber,
@@ -164,10 +165,4 @@ const readReviewAssistantReply = async (state, request, agent, agentOptions) => 
   }
 };
 
-module.exports = {
-  buildReviewAssistantInput,
-  buildReviewAssistantPrompt,
-  normalizeReviewAssistantReply,
-  readReviewAssistantReply,
-  reviewAssistantSchema,
-};
+module.exports = { readReviewAssistantReply };

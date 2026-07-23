@@ -1,3 +1,11 @@
+import { ArrowLeftIcon as ArrowLeft } from '@phosphor-icons/react/ArrowLeft';
+import { ArrowRightIcon as ArrowRight } from '@phosphor-icons/react/ArrowRight';
+import { CaretLeftIcon as CaretLeft } from '@phosphor-icons/react/CaretLeft';
+import { CaretRightIcon as CaretRight } from '@phosphor-icons/react/CaretRight';
+import { CheckIcon as Check } from '@phosphor-icons/react/Check';
+import { GitBranchIcon as GitBranch } from '@phosphor-icons/react/GitBranch';
+import { PathIcon as Path } from '@phosphor-icons/react/Path';
+import { ShareNetworkIcon as ShareNetwork } from '@phosphor-icons/react/ShareNetwork';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ReviewIdentity } from '../../../lib/app-types.ts';
 import type { ReviewScrollBehavior } from '../../../lib/app-types.ts';
@@ -17,17 +25,12 @@ import {
 } from '../../../lib/narrative-walkthrough.ts';
 import type { ChangedFile, NarrativeWalkthrough, WalkthroughHunkGroup } from '../../../types.ts';
 import type { ReviewDiffBlock } from '../ReviewCodeView.tsx';
-import { CommitView, type CommitHandler, type CommitMessageHandler } from './CommitView.tsx';
 import {
-  ArrowLeft,
-  ArrowRight,
-  CaretLeft,
-  CaretRight,
-  Check,
-  GitBranch,
-  Path,
-  ShareNetwork,
-} from './icons.tsx';
+  CommitView,
+  type CommitHandler,
+  type CommitMessageHandler,
+  type CommitOutputSubscriber,
+} from './CommitView.tsx';
 import { ChapterIcon, ImportancePill, Narration } from './parts.tsx';
 import type { NarrativeNavigation } from './useNarrativeNavigation.ts';
 
@@ -47,6 +50,33 @@ export type WalkthroughBlockScrollTarget = {
   blockId: string;
   request: number;
 };
+
+export const getWalkthroughBlockScrollTarget = ({
+  activeBlockId,
+  firstSupportBlockId,
+  mode,
+  stopScrollRequest,
+  supportScrollRequest,
+}: {
+  activeBlockId: string | null | undefined;
+  firstSupportBlockId: string | null;
+  mode: NarrativeNavigation['mode'];
+  stopScrollRequest: number;
+  supportScrollRequest: number;
+}): WalkthroughBlockScrollTarget | null =>
+  mode === 'support' && firstSupportBlockId
+    ? {
+        behavior: 'smooth',
+        blockId: firstSupportBlockId,
+        request: supportScrollRequest,
+      }
+    : mode === 'stop' && activeBlockId && stopScrollRequest > 0
+      ? {
+          behavior: 'smooth',
+          blockId: activeBlockId,
+          request: stopScrollRequest,
+        }
+      : null;
 
 const getFocusedRunDiffs = (
   item: WalkthroughHunkGroup,
@@ -221,7 +251,8 @@ const createSupportBlocks = (
     }
   }
 
-  for (const file of getUncoveredWalkthroughFiles(files, walkthroughView, showWhitespace)) {
+  const uncoveredFiles = getUncoveredWalkthroughFiles(files, walkthroughView, showWhitespace);
+  for (const file of uncoveredFiles) {
     const blockId = `walkthrough:uncovered:${file.path}`;
     const isFirstBlock = blocks.length === 0;
     blocks.push({
@@ -470,6 +501,7 @@ export function NarrativeWalkthroughView({
   navigation,
   onActiveReviewTargetChange,
   onCommit,
+  onCommitOutput,
   onShareWalkthrough,
   onUpdateCommitMessage,
   renderDiffBlocks,
@@ -482,6 +514,7 @@ export function NarrativeWalkthroughView({
   navigation: NarrativeNavigation;
   onActiveReviewTargetChange: (target: WalkthroughReviewTarget | null) => void;
   onCommit: CommitHandler;
+  onCommitOutput?: CommitOutputSubscriber;
   onShareWalkthrough?: () => void;
   onUpdateCommitMessage: CommitMessageHandler;
   renderDiffBlocks: RenderWalkthroughDiffBlocks;
@@ -516,20 +549,13 @@ export function NarrativeWalkthroughView({
     [supportBlocks, walkthroughBlocks.blocks],
   );
   const activeBlockId = walkthroughBlocks.firstBlockIdByStop[navigation.scrollTarget.index];
-  const reviewBlockScrollTarget: WalkthroughBlockScrollTarget | null =
-    navigation.mode === 'support' && firstSupportBlockId
-      ? {
-          behavior: 'smooth',
-          blockId: firstSupportBlockId,
-          request: navigation.supportScrollRequest,
-        }
-      : navigation.mode === 'stop' && activeBlockId
-        ? {
-            behavior: 'smooth',
-            blockId: activeBlockId,
-            request: navigation.scrollTarget.nonce,
-          }
-        : null;
+  const reviewBlockScrollTarget = getWalkthroughBlockScrollTarget({
+    activeBlockId,
+    firstSupportBlockId,
+    mode: navigation.mode,
+    stopScrollRequest: navigation.scrollTarget.nonce,
+    supportScrollRequest: navigation.supportScrollRequest,
+  });
   const handleActiveBlockChange = useCallback(
     (blockId: string) => {
       onActiveReviewTargetChange(getBlockReviewTarget(reviewBlocks, blockId));
@@ -659,6 +685,7 @@ export function NarrativeWalkthroughView({
           draft={navigation}
           model={buildCommitModel(walkthroughView, files)}
           onCommit={onCommit}
+          onCommitOutput={onCommitOutput}
           onUpdateMessage={onUpdateCommitMessage}
         />
       ) : walkthroughView.sequence.length > 0 ? (

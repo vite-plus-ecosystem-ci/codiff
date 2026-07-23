@@ -80,6 +80,10 @@ const isGeneratedWalkthroughPath = (path) => {
   );
 };
 
+/** @param {{generated?: boolean; path: string}} file */
+const isGeneratedWalkthroughFile = (file) =>
+  file.generated ?? isGeneratedWalkthroughPath(file.path);
+
 /** @param {string} path */
 const getGeneratedWalkthroughSummary = (path) => {
   const parts = getPathParts(path).map((part) => part.toLowerCase());
@@ -231,7 +235,7 @@ const shouldCreateSyntheticHunk = (file, section) => {
 };
 
 /**
- * @param {{oldPath?: string; path: string; status: string}} file
+ * @param {{generated?: boolean; oldPath?: string; path: string; status: string}} file
  * @param {{binary?: boolean; id: string; kind: string; loadState?: string; patch?: string; summary?: {reason?: string}}} section
  */
 const createSyntheticSectionHunk = (file, section, lineCount = { added: 0, deleted: 0 }) => ({
@@ -247,7 +251,7 @@ const createSyntheticSectionHunk = (file, section, lineCount = { added: 0, delet
   status: file.status,
   summary:
     section.summary?.reason ??
-    (isGeneratedWalkthroughPath(file.path) ? getGeneratedWalkthroughSummary(file.path) : undefined),
+    (isGeneratedWalkthroughFile(file) ? getGeneratedWalkthroughSummary(file.path) : undefined),
 });
 
 /**
@@ -255,12 +259,12 @@ const createSyntheticSectionHunk = (file, section, lineCount = { added: 0, delet
  * Most are textual patch hunks; non-text or metadata-only sections get one
  * synthetic hunk so walkthroughs remain hunk-based for every visible change.
  *
- * @param {{oldPath?: string; path: string; status: string}} file
+ * @param {{generated?: boolean; oldPath?: string; path: string; status: string}} file
  * @param {{binary?: boolean; id: string; kind: string; loadState?: string; patch?: string; summary?: {reason?: string}}} section
  */
 const getSectionWalkthroughHunks = (file, section) => {
   const patchHunks = extractPatchHunks(section.patch || '');
-  if (patchHunks.length > 0 && isGeneratedWalkthroughPath(file.path)) {
+  if (patchHunks.length > 0 && isGeneratedWalkthroughFile(file)) {
     return [createSyntheticSectionHunk(file, section, sumHunkLineCounts(patchHunks))];
   }
 
@@ -283,88 +287,13 @@ const getSectionWalkthroughHunks = (file, section) => {
     : [];
 };
 
-/** @param {string} sectionId @param {string} hunkId */
-const getHunkOrdinal = (sectionId, hunkId) => {
-  const prefix = `${sectionId}:h`;
-  if (!hunkId.startsWith(prefix)) {
-    return null;
-  }
-  const ordinal = Number(hunkId.slice(prefix.length));
-  return Number.isInteger(ordinal) && ordinal > 0 ? ordinal : null;
-};
-
-/**
- * @param {string} patch
- * @param {string} sectionId
- * @param {ReadonlyArray<string>} hunkIds
- */
-const filterPatchToHunkIds = (patch, sectionId, hunkIds) => {
-  if (typeof patch !== 'string' || patch.trim().length === 0 || hunkIds.length === 0) {
-    return null;
-  }
-
-  const patchLines = patch.split('\n');
-  const headerLines = [];
-  const hunkLinesByOrdinal = new Map();
-  let index = 0;
-  let foundHunk = false;
-  let ordinal = 0;
-
-  while (index < patchLines.length) {
-    const parsedHeader = parseHunkHeader(patchLines[index] ?? '');
-    if (parsedHeader) {
-      foundHunk = true;
-      ordinal += 1;
-      const hunkStart = index;
-      index += 1;
-      while (index < patchLines.length && !parseHunkHeader(patchLines[index] ?? '')) {
-        index += 1;
-      }
-      hunkLinesByOrdinal.set(ordinal, patchLines.slice(hunkStart, index));
-      continue;
-    }
-
-    if (!foundHunk) {
-      headerLines.push(patchLines[index] ?? '');
-    }
-    index += 1;
-  }
-
-  if (!foundHunk) {
-    return null;
-  }
-
-  const selectedHunkLines = [];
-  for (const hunkId of hunkIds) {
-    const ordinal = getHunkOrdinal(sectionId, hunkId);
-    if (ordinal == null) {
-      return null;
-    }
-    const lines = hunkLinesByOrdinal.get(ordinal);
-    if (!lines) {
-      return null;
-    }
-    selectedHunkLines.push(...lines);
-  }
-
-  if (selectedHunkLines.length === 0) {
-    return null;
-  }
-
-  const focused = [...headerLines, ...selectedHunkLines].join('\n');
-  return patch.endsWith('\n') && !focused.endsWith('\n') ? `${focused}\n` : focused;
-};
-
 module.exports = {
   buildAnchorDisplay,
-  extractPatchHunks,
-  filterPatchToHunkIds,
   getSectionWalkthroughHunks,
-  HUNK_HEADER,
   hunkDisplayEnd,
   hunkDisplayStart,
+  isGeneratedWalkthroughFile,
   isGeneratedWalkthroughPath,
   isSyntheticWalkthroughHunk,
-  parseHunkHeader,
   sumHunkLineCounts,
 };

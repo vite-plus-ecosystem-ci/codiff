@@ -2,14 +2,17 @@
 
 const { createHash } = require('node:crypto');
 const { spawn } = require('node:child_process');
+const { homedir } = require('node:os');
+const { join } = require('node:path');
+const { findExecutableOnPath, isExecutableFile } = require('../agent-shared.cjs');
 const {
   getFingerprint,
   git,
   gitOrEmpty,
-  readGitFile,
   readGitImageFile,
   validateRepositoryPath,
 } = require('./common.cjs');
+const { readGitFiles } = require('./git-files.cjs');
 const {
   createPatchFromPullRequestFile,
   createPullRequestSection,
@@ -22,6 +25,49 @@ const { parseReviewUrl, readReviewRemotes } = require('../review-source.cjs');
  * @typedef {import('../../core/types.ts').PullRequestReviewComment} PullRequestReviewComment
  * @typedef {import('../../core/types.ts').ReviewSource} ReviewSource
  */
+
+const GLAB_NOT_FOUND_CODE = 'GLAB_NOT_FOUND';
+const GLAB_NOT_FOUND_MESSAGE =
+  'GitLab support requires glab. Install glab, authenticate it, and verify `glab --version` works in Terminal. Codiff searches PATH, ~/.local/bin/glab, /opt/homebrew/bin/glab, and /usr/local/bin/glab. If glab is installed somewhere else, launch Codiff with `CODIFF_GLAB_PATH=/absolute/path/to/glab codiff -w`.';
+
+/** @param {string} [detail] */
+const createGlabNotFoundError = (detail) =>
+  Object.assign(
+    new Error(detail ? `${GLAB_NOT_FOUND_MESSAGE} ${detail}` : GLAB_NOT_FOUND_MESSAGE),
+    {
+      code: GLAB_NOT_FOUND_CODE,
+    },
+  );
+
+const getGlabCommand = () => {
+  const glabPath = process.env.CODIFF_GLAB_PATH?.trim();
+  if (glabPath) {
+    if (isExecutableFile(glabPath)) {
+      return glabPath;
+    }
+
+    throw createGlabNotFoundError(
+      `CODIFF_GLAB_PATH is set to ${JSON.stringify(glabPath)}, but that file is not executable.`,
+    );
+  }
+
+  const pathCommand = findExecutableOnPath('glab');
+  if (pathCommand) {
+    return pathCommand;
+  }
+
+  for (const path of [
+    join(homedir(), '.local/bin/glab'),
+    '/opt/homebrew/bin/glab',
+    '/usr/local/bin/glab',
+  ]) {
+    if (isExecutableFile(path)) {
+      return path;
+    }
+  }
+
+  throw createGlabNotFoundError();
+};
 
 /** @param {string} value */
 const parseGitLabMergeRequestUrl = (value) => {
@@ -56,7 +102,15 @@ const createGlabApiArgs = (mergeRequest, args, input) => [
  */
 const glabApi = (repoRoot, mergeRequest, args, input) =>
   new Promise((resolve, reject) => {
-    const child = spawn('glab', createGlabApiArgs(mergeRequest, args, input), {
+    let command;
+    try {
+      command = getGlabCommand();
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    const child = spawn(command, createGlabApiArgs(mergeRequest, args, input), {
       cwd: repoRoot,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -65,11 +119,7 @@ const glabApi = (repoRoot, mergeRequest, args, input) =>
     child.stdout.on('data', (chunk) => stdout.push(chunk));
     child.stderr.on('data', (chunk) => stderr.push(chunk));
     child.on('error', (error) => {
-      reject(
-        error.code === 'ENOENT'
-          ? new Error('GitLab support requires glab. Install glab and authenticate it first.')
-          : error,
-      );
+      reject(error.code === 'ENOENT' ? createGlabNotFoundError() : error);
     });
     child.on('close', (code) => {
       if (code === 0) {
@@ -144,6 +194,10 @@ const mergeRequestEndpoint = (mergeRequest, suffix = '') =>
     mergeRequest.number
   }${suffix}`;
 
+/** @param {{number: number; projectPath: string}} mergeRequest @param {string} threadId */
+const getGitLabDiscussionReplyEndpoint = (mergeRequest, threadId) =>
+  mergeRequestEndpoint(mergeRequest, `/discussions/${encodeURIComponent(threadId)}/notes`);
+
 /** @param {string} repoRoot @param {ReturnType<typeof parseGitLabMergeRequestUrl>} mergeRequest */
 const selectMergeRequestRemote = (repoRoot, mergeRequest) => {
   const remote = readReviewRemotes(repoRoot)
@@ -199,12 +253,13 @@ const normalizeGitLabDiffFile = (diff) => ({
 /** @param {any} note @param {string} url */
 const normalizeGitLabReviewComment = (note, url) => {
   const position = note.position || note.original_position;
+  const isFilePosition = position?.position_type === 'file';
   const lineNumber = position?.new_line ?? position?.old_line;
   const filePath = position?.new_path || position?.old_path;
-  if (!note.body || !filePath || typeof lineNumber !== 'number') {
+  if (!note.body || !filePath || (!isFilePosition && typeof lineNumber !== 'number')) {
     return null;
   }
-  const side = position.new_line != null ? 'additions' : 'deletions';
+  const side = position?.new_line != null ? 'additions' : 'deletions';
   const range = position.line_range;
   const start = range?.start;
   const end = range?.end;
@@ -218,14 +273,41 @@ const normalizeGitLabReviewComment = (note, url) => {
     filePath,
     id: `gitlab:${note.id}`,
     ...(!note.position ? { isOutdated: true } : {}),
-    lineNumber: end?.new_line ?? end?.old_line ?? lineNumber,
-    side: end?.type === 'old' ? 'deletions' : side,
+    ...(isFilePosition
+      ? { anchor: 'file' }
+      : {
+          lineNumber: end?.new_line ?? end?.old_line ?? lineNumber,
+          side: end?.type === 'old' ? 'deletions' : side,
+        }),
     ...(start && (start.new_line ?? start.old_line) !== (end?.new_line ?? end?.old_line)
       ? {
           startLineNumber: start.new_line ?? start.old_line,
           startSide: start.type === 'old' ? 'deletions' : 'additions',
         }
       : {}),
+    submittedAt: note.created_at,
+    url: `${url}#note_${note.id}`,
+  };
+};
+
+/** @param {any} note @param {PullRequestReviewComment} submittedComment @param {string} url */
+const normalizeSubmittedGitLabReviewComment = (note, submittedComment, url) => {
+  const normalized = normalizeGitLabReviewComment(note, url);
+  if (normalized) {
+    return normalized;
+  }
+  if (!note?.body || typeof note.id !== 'number') {
+    return null;
+  }
+  return {
+    ...submittedComment,
+    author: {
+      avatarUrl: note.author?.avatar_url,
+      login: note.author?.username || note.author?.name || 'GitLab user',
+      url: note.author?.web_url,
+    },
+    body: note.body,
+    id: `gitlab:${note.id}`,
     submittedAt: note.created_at,
     url: `${url}#note_${note.id}`,
   };
@@ -327,42 +409,54 @@ const readMergeRequestState = async (launchPath, source) => {
   const refs = await resolveMergeRequestContentRefs(repoRoot, mergeRequest, metadata).catch(
     () => null,
   );
-  /** @type {Array<ChangedFile>} */
-  const files = await Promise.all(
-    diffs.map(async (rawDiff) => {
-      const file = normalizeGitLabDiffFile(rawDiff);
-      const patch = createPatchFromPullRequestFile(file);
-      const [oldFile, newFile] = refs
-        ? await Promise.all([
-            readGitFile(repoRoot, refs.base, file.previous_filename || file.filename),
-            readGitFile(repoRoot, refs.head, file.filename),
-          ])
-        : [undefined, undefined];
-      const section = createPullRequestSection(mergeRequest, file, patch, oldFile, newFile);
-      return {
-        fingerprint: getFingerprint(
-          [
-            metadata.sha || '',
-            file.status,
-            file.previous_filename || '',
-            file.filename,
-            patch,
-          ].join('\n'),
+  const reviewFiles = diffs.map((rawDiff) => {
+    const file = normalizeGitLabDiffFile(rawDiff);
+    return {
+      file,
+      oldPath: file.previous_filename || file.filename,
+      patch: createPatchFromPullRequestFile(file),
+    };
+  });
+  const [oldFiles, newFiles] = refs
+    ? await Promise.all([
+        readGitFiles(
+          repoRoot,
+          refs.base,
+          reviewFiles.map(({ oldPath }) => oldPath),
+          { refScopedEmptyCacheKey: true },
         ),
-        oldPath: file.previous_filename,
-        path: file.filename,
-        sections: [section],
-        status:
-          file.status === 'added'
-            ? 'added'
-            : file.status === 'removed'
-              ? 'deleted'
-              : file.status === 'renamed'
-                ? 'renamed'
-                : 'modified',
-      };
-    }),
-  );
+        readGitFiles(
+          repoRoot,
+          refs.head,
+          reviewFiles.map(({ file }) => file.filename),
+          { refScopedEmptyCacheKey: true },
+        ),
+      ])
+    : [new Map(), new Map()];
+  /** @type {Array<ChangedFile>} */
+  const files = reviewFiles.map(({ file, oldPath, patch }) => {
+    const oldFile = refs ? oldFiles.get(oldPath) : null;
+    const newFile = refs ? newFiles.get(file.filename) : null;
+    const section = createPullRequestSection(mergeRequest, file, patch, oldFile, newFile);
+    return {
+      fingerprint: getFingerprint(
+        [metadata.sha || '', file.status, file.previous_filename || '', file.filename, patch].join(
+          '\n',
+        ),
+      ),
+      oldPath: file.previous_filename,
+      path: file.filename,
+      sections: [section],
+      status:
+        file.status === 'added'
+          ? 'added'
+          : file.status === 'removed'
+            ? 'deleted'
+            : file.status === 'renamed'
+              ? 'renamed'
+              : 'modified',
+    };
+  });
   return {
     files: files.sort((left, right) => left.path.localeCompare(right.path)),
     generatedAt: Date.now(),
@@ -472,14 +566,25 @@ const createGitLabDiffLineMap = (diff) => {
 
 /** @param {PullRequestReviewComment} comment @param {any} metadata @param {any} [diff] */
 const createGitLabPosition = (comment, metadata, diff) => {
+  const oldPath = diff?.old_path || comment.filePath;
+  const newPath = diff?.new_path || comment.filePath;
+  if (comment.anchor === 'file' || comment.lineNumber == null || comment.side == null) {
+    return {
+      base_sha: metadata.diff_refs?.base_sha,
+      head_sha: metadata.diff_refs?.head_sha || metadata.sha,
+      new_path: newPath,
+      old_path: oldPath,
+      position_type: 'file',
+      start_sha: metadata.diff_refs?.start_sha,
+    };
+  }
+
   const lineMap = createGitLabDiffLineMap(diff?.diff || '');
   const endLines = lineMap.get(`${comment.side}:${comment.lineNumber}`) || {
     ...(comment.side === 'deletions'
       ? { oldLine: comment.lineNumber }
       : { newLine: comment.lineNumber }),
   };
-  const oldPath = diff?.old_path || comment.filePath;
-  const newPath = diff?.new_path || comment.filePath;
   const position = {
     base_sha: metadata.diff_refs?.base_sha,
     head_sha: metadata.diff_refs?.head_sha || metadata.sha,
@@ -515,15 +620,43 @@ const createGitLabPosition = (comment, metadata, diff) => {
   return position;
 };
 
-/** @param {'APPROVE' | 'REQUEST_CHANGES'} event */
-const getGitLabReviewQuickAction = (event) =>
-  `/submit_review ${event === 'APPROVE' ? 'approve' : 'request_changes'}`;
+/** @param {unknown} event */
+const getGitLabReviewQuickAction = (event) => {
+  if (event === 'APPROVE') {
+    return '/submit_review approve';
+  }
+  if (event === 'REQUEST_CHANGES') {
+    return '/submit_review request_changes';
+  }
+  throw new Error(`GitLab merge request reviews do not support ${String(event)}.`);
+};
 
 /** @param {string} launchPath @param {any} request */
 const submitMergeRequestComment = async (launchPath, request) => {
   const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
   const mergeRequest = parseGitLabMergeRequestUrl(request.source.url);
   selectMergeRequestRemote(repoRoot, mergeRequest);
+  if (request.comment.threadId) {
+    const note = JSON.parse(
+      await glabApi(
+        repoRoot,
+        mergeRequest,
+        [
+          '--method',
+          'POST',
+          '--input',
+          '-',
+          getGitLabDiscussionReplyEndpoint(mergeRequest, request.comment.threadId),
+        ],
+        { body: request.comment.body },
+      ),
+    );
+    const comment = normalizeSubmittedGitLabReviewComment(note, request.comment, mergeRequest.url);
+    if (!comment) {
+      throw new Error('GitLab accepted the reply but did not return comment metadata.');
+    }
+    return comment;
+  }
   const metadata = await readMergeRequestMetadata(repoRoot, mergeRequest);
   const diffs = await readMergeRequestDiffs(repoRoot, mergeRequest);
   const diff = diffs.find((candidate) => candidate.new_path === request.comment.filePath);
@@ -538,15 +671,20 @@ const submitMergeRequestComment = async (launchPath, request) => {
       },
     ),
   );
-  const comment = normalizeGitLabReviewComment(discussion.notes?.[0], mergeRequest.url);
+  const comment = normalizeSubmittedGitLabReviewComment(
+    discussion.notes?.[0],
+    request.comment,
+    mergeRequest.url,
+  );
   if (!comment) {
-    throw new Error('GitLab accepted the comment but did not return line metadata.');
+    throw new Error('GitLab accepted the comment but did not return comment metadata.');
   }
   return comment;
 };
 
 /** @param {string} launchPath @param {any} request */
 const submitMergeRequestReview = async (launchPath, request) => {
+  const quickAction = getGitLabReviewQuickAction(request.event);
   const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
   const mergeRequest = parseGitLabMergeRequestUrl(request.source.url);
   selectMergeRequestRemote(repoRoot, mergeRequest);
@@ -569,9 +707,7 @@ const submitMergeRequestReview = async (launchPath, request) => {
     mergeRequest,
     ['--method', 'POST', '--input', '-', mergeRequestEndpoint(mergeRequest, '/notes')],
     {
-      body: `${request.body ? `${request.body}\n\n` : ''}${getGitLabReviewQuickAction(
-        request.event,
-      )}`,
+      body: `${request.body ? `${request.body}\n\n` : ''}${quickAction}`,
     },
   );
 };
@@ -605,15 +741,10 @@ const readMergeRequestImageContent = async (launchPath, source, requestedPath) =
 };
 
 module.exports = {
-  createGlabApiArgs,
   createGitLabPosition,
-  createGitLabDiffLineMap,
-  createMergeRequestSource,
   createMergeRequestFetchRefspecs,
-  getGitLabReviewQuickAction,
   listMergeRequestHistory,
   normalizeGitLabReviewComment,
-  parseGlabJsonPages,
   parseGitLabMergeRequestUrl,
   readMergeRequestImageContent,
   readMergeRequestState,

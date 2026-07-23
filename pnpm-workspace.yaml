@@ -1,25 +1,31 @@
 packages:
   - core
+  - service
+  - web
 
 allowBuilds:
   '@google/genai': false
   '@nkzw/mdx-editor': true
   '@swc/core': true
+  better-sqlite3: true
   electron: true
   electron-winstaller: true
+  esbuild: true
+  node-pty: true
   protobufjs: false
+  sharp: true
+  workerd: true
 blockExoticSubdeps: false
 minimumReleaseAgeExclude:
   - '@nkzw/*'
 catalog:
-  vite: npm:@voidzero-dev/vite-plus-core@^0.2.1
-  vite-plus: ^0.2.1
-  vitest: 4.1.9
+  vite: npm:@voidzero-dev/vite-plus-core@0.0.0-commit.57939439ddcb16d9f54ebf7d41432893182ee46d
+  vite-plus: 0.0.0-commit.57939439ddcb16d9f54ebf7d41432893182ee46d
+  vitest: 4.1.10
 nodeLinker: hoisted
 onlyBuiltDependencies:
   - '@nkzw/mdx-editor'
   - '@swc/core'
-  - '@tailwindcss/oxide'
   - electron
   - electron-winstaller
   - unrs-resolver

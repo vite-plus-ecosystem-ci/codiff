@@ -1,4 +1,7 @@
-import { getAgentLabel } from '../../../lib/app-constants.ts';
+import { CheckIcon as Check } from '@phosphor-icons/react/Check';
+import { GitBranchIcon as GitBranch } from '@phosphor-icons/react/GitBranch';
+import { PathIcon as Path } from '@phosphor-icons/react/Path';
+import { ShareNetworkIcon as ShareNetwork } from '@phosphor-icons/react/ShareNetwork';
 import { renderInlineMarkdown } from '../../../lib/markdown.tsx';
 import {
   buildCommitModel,
@@ -10,11 +13,8 @@ import {
   type WalkthroughStopView,
 } from '../../../lib/narrative-walkthrough.ts';
 import type { ChangedFile, NarrativeWalkthrough } from '../../../types.ts';
-import { Check, GitBranch, Path, ShareNetwork } from './icons.tsx';
 import { ChapterIcon } from './parts.tsx';
 import type { NarrativeNavigation } from './useNarrativeNavigation.ts';
-
-const agentLabel = (agentId: NarrativeWalkthrough['agent']) => getAgentLabel(agentId);
 
 function TocFileRows({
   files,
@@ -278,5 +278,3 @@ export function NarrativeSidebar({
     </div>
   );
 }
-
-export { agentLabel };

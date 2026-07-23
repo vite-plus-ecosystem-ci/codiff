@@ -1,8 +1,11 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vite-plus/test';
+import {
+  createTemporaryDirectory,
+  createTemporaryEnvironment,
+} from '../../core/__tests__/helpers/resources.ts';
 
 const require = createRequire(import.meta.url);
 const {
@@ -10,22 +13,18 @@ const {
   FALLBACK_PI_MODEL,
   PI_MODELS,
   PI_NOT_FOUND_CODE,
-  PI_NOT_FOUND_MESSAGE,
   getPiCommand,
   isPiNotFoundError,
   normalizePiModel,
-  normalizePiOutput,
   runPi,
 } = require('../pi.cjs') as {
   DEFAULT_PI_MODEL: string;
   FALLBACK_PI_MODEL: string;
   PI_MODELS: ReadonlyArray<{ id: string; label: string }>;
   PI_NOT_FOUND_CODE: string;
-  PI_NOT_FOUND_MESSAGE: string;
   getPiCommand: () => string;
   isPiNotFoundError: (error: unknown) => boolean;
   normalizePiModel: (value: unknown) => string;
-  normalizePiOutput: (output: string, schema: unknown) => string;
   runPi: (
     repoRoot: string,
     prompt: string,
@@ -40,7 +39,6 @@ test('exposes the Pi default model identifier', () => {
   expect(DEFAULT_PI_MODEL).toBe('pi-default');
   expect(FALLBACK_PI_MODEL).toBe('pi-default');
   expect(PI_NOT_FOUND_CODE).toBe('PI_NOT_FOUND');
-  expect(PI_NOT_FOUND_MESSAGE).toContain('Pi CLI was not found');
 });
 
 test('exposes a static Pi model list', () => {
@@ -61,47 +59,29 @@ test('detects Pi-not-found errors by code', () => {
   expect(isPiNotFoundError(null)).toBe(false);
 });
 
-test('rejects invalid explicit Pi CLI overrides', () => {
-  const previousPiPath = process.env.CODIFF_PI_PATH;
-  process.env.CODIFF_PI_PATH = '/tmp/codiff-missing-pi';
+test('rejects invalid explicit Pi CLI overrides', async () => {
+  await using _environment = createTemporaryEnvironment({
+    CODIFF_PI_PATH: '/tmp/codiff-missing-pi',
+  });
 
+  expect(() => getPiCommand()).toThrow('CODIFF_PI_PATH');
   try {
-    expect(() => getPiCommand()).toThrow('CODIFF_PI_PATH');
-    try {
-      getPiCommand();
-    } catch (error) {
-      expect(error).toMatchObject({ code: PI_NOT_FOUND_CODE });
-    }
-  } finally {
-    if (previousPiPath == null) {
-      delete process.env.CODIFF_PI_PATH;
-    } else {
-      process.env.CODIFF_PI_PATH = previousPiPath;
-    }
+    getPiCommand();
+  } catch (error) {
+    expect(error).toMatchObject({ code: PI_NOT_FOUND_CODE });
   }
 });
 
-test('normalizes Pi JSON output from plain, fenced, and prose replies', () => {
-  expect(normalizePiOutput('{"version":1}', { required: ['version'] })).toBe('{"version":1}');
-  expect(normalizePiOutput('```json\n{"reply":"Done."}\n```', { required: ['reply'] })).toBe(
-    '{"reply":"Done."}',
-  );
-  expect(normalizePiOutput('Result:\n{"text":"Done."}', { required: ['reply'] })).toBe(
-    '{"text":"Done.","reply":"Done."}',
-  );
-});
-
 test('runs Pi as an external read-only ephemeral CLI call', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-pi-'));
-  const fakePiPath = join(directory, 'pi');
-  const argsPath = join(directory, 'args.txt');
-  const stdinPath = join(directory, 'stdin.txt');
-  const previousPiPath = process.env.CODIFF_PI_PATH;
+  await using directory = await createTemporaryDirectory('codiff-pi-');
+  const fakePiPath = join(directory.path, 'pi');
+  const argsPath = join(directory.path, 'args.txt');
+  const stdinPath = join(directory.path, 'stdin.txt');
+  await using _environment = createTemporaryEnvironment({ CODIFF_PI_PATH: fakePiPath });
 
-  try {
-    await writeFile(
-      fakePiPath,
-      `#!/usr/bin/env node
+  await writeFile(
+    fakePiPath,
+    `#!/usr/bin/env node
 const { appendFileSync, writeFileSync } = require('node:fs');
 const argsPath = ${JSON.stringify(argsPath)};
 const stdinPath = ${JSON.stringify(stdinPath)};
@@ -117,32 +97,23 @@ process.stdin.on('end', () => {
   process.stdout.write('{"version":1}');
 });
 `,
-    );
-    await chmod(fakePiPath, 0o755);
-    process.env.CODIFF_PI_PATH = fakePiPath;
+  );
+  await chmod(fakePiPath, 0o755);
 
-    await expect(
-      runPi(directory, 'prompt', { required: ['version'], type: 'object' }, 'walkthrough.json'),
-    ).resolves.toBe('{"version":1}');
+  await expect(
+    runPi(directory.path, 'prompt', { required: ['version'], type: 'object' }, 'walkthrough.json'),
+  ).resolves.toBe('{"version":1}');
 
-    const args = (await readFile(argsPath, 'utf8')).trim().split('\n');
-    expect(args).toContain('--print');
-    expect(args).toContain('--no-session');
-    expect(args).toContain('--no-skills');
-    expect(args).toContain('--no-prompt-templates');
-    expect(args).toContain('--no-context-files');
-    expect(args).toContain('--tools');
-    expect(args).toContain('read,grep,find,ls');
-    expect(args).not.toContain('--model');
-    const stdin = await readFile(stdinPath, 'utf8');
-    expect(stdin).toContain('prompt');
-    expect(stdin).toContain('Follow this JSON Schema exactly');
-  } finally {
-    if (previousPiPath == null) {
-      delete process.env.CODIFF_PI_PATH;
-    } else {
-      process.env.CODIFF_PI_PATH = previousPiPath;
-    }
-    await rm(directory, { force: true, recursive: true });
-  }
+  const args = (await readFile(argsPath, 'utf8')).trim().split('\n');
+  expect(args).toContain('--print');
+  expect(args).toContain('--no-session');
+  expect(args).toContain('--no-skills');
+  expect(args).toContain('--no-prompt-templates');
+  expect(args).toContain('--no-context-files');
+  expect(args).toContain('--tools');
+  expect(args).toContain('read,grep,find,ls');
+  expect(args).not.toContain('--model');
+  const stdin = await readFile(stdinPath, 'utf8');
+  expect(stdin).toContain('prompt');
+  expect(stdin).toContain('Follow this JSON Schema exactly');
 });

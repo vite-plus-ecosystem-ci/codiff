@@ -1,7 +1,6 @@
 // @ts-check
 
-const { promises: fs } = require('node:fs');
-const { join } = require('node:path');
+const { readRepositoryChangeSignature } = require('../repository-watcher.cjs');
 const {
   createSection,
   createSummary,
@@ -375,60 +374,6 @@ const readDiffImageContent = async (launchPath, request) => {
   }
 };
 
-/** @param {string} repoRoot @param {string} path */
-const readWorkingTreePathSignature = async (repoRoot, path) => {
-  try {
-    const absolutePath = join(repoRoot, path);
-    const stat = await fs.lstat(absolutePath);
-
-    if (stat.isDirectory()) {
-      return `${path}\0directory\0${stat.mode}\0${stat.size}\0${stat.mtimeMs}`;
-    }
-
-    if (stat.isSymbolicLink()) {
-      return `${path}\0symlink\0${stat.mode}\0${await fs.readlink(absolutePath)}`;
-    }
-
-    if (!stat.isFile()) {
-      return `${path}\0other\0${stat.mode}\0${stat.size}\0${stat.mtimeMs}`;
-    }
-
-    const content =
-      stat.size <= 64 * 1024 * 1024
-        ? getFingerprint(await fs.readFile(absolutePath))
-        : `${stat.size}\0${stat.mtimeMs}`;
-
-    return `${path}\0file\0${stat.mode}\0${stat.size}\0${content}`;
-  } catch {
-    return `${path}\0missing`;
-  }
-};
-
-/** @param {string} repoRoot @param {Iterable<string>} [additionalPaths] */
-const readWorkingTreeChangeSignatures = async (repoRoot, additionalPaths = []) => {
-  const status = parseStatus(await git(repoRoot, ['status', '--porcelain=v1', '-z', '-uall']));
-  const signatures = new Map();
-
-  for (const item of status) {
-    if (
-      item.oldPath &&
-      item.oldPath !== item.path &&
-      !(await readFileStat(repoRoot, item.oldPath))
-    ) {
-      signatures.set(item.oldPath, `${item.oldPath}\0missing`);
-    }
-
-    signatures.set(item.path, await readWorkingTreePathSignature(repoRoot, item.path));
-  }
-  for (const path of additionalPaths) {
-    if (!signatures.has(path)) {
-      signatures.set(path, await readWorkingTreePathSignature(repoRoot, path));
-    }
-  }
-
-  return [...signatures.entries()].sort(([left], [right]) => left.localeCompare(right));
-};
-
 /** @param {string} repoRoot @param {ReadonlyArray<string>} args */
 const gitOrEmpty = async (repoRoot, args) => {
   try {
@@ -440,15 +385,12 @@ const gitOrEmpty = async (repoRoot, args) => {
 
 /** @param {string} launchPath */
 const readGitIdentity = async (launchPath) => {
-  const repoRoot = (await gitOrEmpty(launchPath, ['rev-parse', '--show-toplevel'])).trim();
-  const [configuredName, configuredEmail, commitIdentity] = await Promise.all([
+  const [configuredName, configuredEmail] = await Promise.all([
     gitOrEmpty(launchPath, ['config', '--get', 'user.name']),
     gitOrEmpty(launchPath, ['config', '--get', 'user.email']),
-    repoRoot ? gitOrEmpty(repoRoot, ['log', '-1', '--format=%an%x00%ae', 'HEAD']) : '',
   ]);
-  const [commitName = '', commitEmail = ''] = commitIdentity.trim().split('\0');
-  const email = configuredEmail.trim() || commitEmail.trim();
-  const name = configuredName.trim() || commitName.trim();
+  const email = configuredEmail.trim();
+  const name = configuredName.trim();
 
   return {
     email,
@@ -459,26 +401,7 @@ const readGitIdentity = async (launchPath) => {
   };
 };
 
-/** @param {string} launchPath @param {Iterable<string>} [additionalPaths] */
-const readRepositoryChangeSignature = async (launchPath, additionalPaths = []) => {
-  const repoRoot = (await git(launchPath, ['rev-parse', '--show-toplevel'])).trim();
-  const [head, workingTreeSignatures] = await Promise.all([
-    gitOrEmpty(repoRoot, ['rev-parse', '--verify', 'HEAD']),
-    readWorkingTreeChangeSignatures(repoRoot, additionalPaths),
-  ]);
-  const workingTree = workingTreeSignatures.map(([, signature]) => signature).join('\0');
-
-  return {
-    head,
-    pathSignatures: Object.fromEntries(workingTreeSignatures),
-    root: repoRoot,
-    signature: getFingerprint([head, workingTree].join('\0')),
-  };
-};
-
 module.exports = {
-  getStatusItemForPath,
-  listUntrackedItems,
   readDiffSectionContent,
   readDiffImageContent,
   readGitIdentity,

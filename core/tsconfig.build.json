@@ -1,0 +1,28 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "declaration": true,
+    "declarationMap": false,
+    "emitDeclarationOnly": true,
+    "incremental": false,
+    "noEmit": false,
+    "outDir": "./dist",
+    "rootDir": "."
+  },
+  "include": [
+    "global.d.ts",
+    "defaults.ts",
+    "index.ts",
+    "react.ts",
+    "share.ts",
+    "types.ts",
+    "SharedPlanApp.tsx",
+    "SharedWalkthroughApp.tsx",
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "config/**/*.ts",
+    "lib/**/*.js",
+    "lib/**/*.ts"
+  ]
+}

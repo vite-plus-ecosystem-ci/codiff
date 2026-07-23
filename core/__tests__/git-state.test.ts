@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { chmod, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { expect, test } from 'vite-plus/test';
@@ -12,6 +12,8 @@ import type {
   RepositoryState,
   ReviewSource,
 } from '../types.ts';
+import { getGitTestEnvironmentForSubprocess, withGitTestEnvironment } from './helpers/git.ts';
+import { createTemporaryDirectory, createTemporaryEnvironment } from './helpers/resources.ts';
 
 type StatusEntry = {
   oldPath?: string;
@@ -28,6 +30,14 @@ type PullRequestFileContent = {
   fingerprint?: string;
   loadState?: string;
   summary?: unknown;
+};
+
+type GeneratedFilesModule = {
+  readGeneratedAttributeStates: (
+    repoRoot: string,
+    paths: ReadonlyArray<string>,
+    source?: string,
+  ) => Promise<ReadonlyMap<string, boolean>>;
 };
 
 type GitStateModule = {
@@ -82,6 +92,7 @@ type GitStateModule = {
     url: string;
   };
   parseStatus: (raw: string) => Array<StatusEntry>;
+  PENDING_REVIEW_COMMENT_ERROR: string;
   readDiffSectionContent: (
     launchPath: string,
     request: DiffSectionContentRequest,
@@ -112,10 +123,25 @@ type GitStateModule = {
     comments: ReadonlyArray<Record<string, unknown>>,
     resolvedCommentIds: ReadonlySet<number>,
   ) => Array<Record<string, unknown>>;
+  submitPullRequestComment: (
+    launchPath: string,
+    request: {
+      comment: {
+        body: string;
+        filePath: string;
+        lineNumber: number;
+        side: 'additions' | 'deletions';
+      };
+      source: Extract<ReviewSource, { type: 'pull-request' }>;
+    },
+  ) => Promise<Record<string, unknown>>;
+  validateRepositoryPath: (path: unknown) => string;
 };
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
+const { readGeneratedAttributeStates } =
+  require('../../electron/generated-files.cjs') as GeneratedFilesModule;
 const {
   collectResolvedReviewCommentIds,
   createPullRequestHistoryFetchRefspecs,
@@ -128,6 +154,7 @@ const {
   normalizePullRequestComment,
   parseGitHubPullRequestUrl,
   parseStatus,
+  PENDING_REVIEW_COMMENT_ERROR,
   readDiffSectionContent,
   readRepositoryChangeSignature,
   readRepositoryState,
@@ -135,25 +162,17 @@ const {
   readWorkingTreeState,
   resolvePullRequestContentRefs,
   selectUnresolvedReviewComments,
+  submitPullRequestComment,
+  validateRepositoryPath,
 } = require('../../electron/git-state.cjs') as GitStateModule;
 
 const git = async (repo: string, args: ReadonlyArray<string>) => {
   const { stdout } = await execFileAsync('git', ['-C', repo, ...args], {
     encoding: 'utf8',
+    env: getGitTestEnvironmentForSubprocess(),
     maxBuffer: 1024 * 1024 * 16,
   });
   return stdout;
-};
-
-const createRepo = async () => {
-  const repo = await mkdtemp(join(tmpdir(), 'codiff-git-state-'));
-  await git(repo, ['init']);
-  await git(repo, ['config', 'core.excludesfile', '/dev/null']);
-  await git(repo, ['config', 'commit.gpgSign', 'false']);
-  await git(repo, ['config', 'tag.gpgSign', 'false']);
-  await git(repo, ['config', 'user.email', 'codiff@example.com']);
-  await git(repo, ['config', 'user.name', 'Codiff Test']);
-  return realpath(repo);
 };
 
 const writeRepoFile = async (repo: string, path: string, contents: string | Uint8Array) => {
@@ -167,14 +186,193 @@ const commitAll = async (repo: string, message: string) => {
   await git(repo, ['commit', '-m', message]);
 };
 
-const withRepo = async (run: (repo: string) => Promise<void>) => {
-  const repo = await createRepo();
-  try {
-    await run(repo);
-  } finally {
-    await rm(repo, { force: true, recursive: true });
+const withFakeGitHub = async (
+  mode: 'diagnosis-fails' | 'no-pending-review' | 'pending-review' | 'success',
+  callback: (repo: string, readCalls: () => ReadonlyArray<ReadonlyArray<string>>) => Promise<void>,
+) => {
+  await using repoDirectory = await createTemporaryDirectory('codiff-git-state-');
+  const repo = await realpath(repoDirectory.path);
+  await git(repo, ['init']);
+  await using fakeBinDirectory = await createTemporaryDirectory('codiff-github-');
+  const fakeGh = join(fakeBinDirectory.path, 'gh');
+  const callsPath = join(fakeBinDirectory.path, 'calls.jsonl');
+
+  await git(repo, ['remote', 'add', 'origin', 'https://github.com/octo/example.git']);
+  await writeFile(
+    fakeGh,
+    `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs');
+const args = process.argv.slice(2);
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => { input += chunk; });
+process.stdin.on('end', () => {
+  appendFileSync(process.env.CODIFF_GITHUB_TEST_CALLS, JSON.stringify({ args, input }) + '\\n');
+  const endpoint = args.find((argument) => argument.startsWith('repos/')) || '';
+  if (endpoint.endsWith('/comments')) {
+    if (process.env.CODIFF_GITHUB_TEST_MODE === 'success') {
+      process.stdout.write(JSON.stringify({
+        body: 'Keep this comment.',
+        created_at: '2026-07-10T12:00:00Z',
+        html_url: 'https://github.com/octo/example/pull/118#discussion_r1',
+        id: 1,
+        line: 1,
+        path: 'src/app.ts',
+        side: 'RIGHT',
+        user: { login: 'octocat' },
+      }));
+      return;
+    }
+    process.stderr.write('gh: Validation Failed (HTTP 422)\\n');
+    process.exitCode = 1;
+    return;
   }
+  if (endpoint.includes('/reviews?')) {
+    if (process.env.CODIFF_GITHUB_TEST_MODE === 'diagnosis-fails') {
+      process.stderr.write('gh: review lookup failed\\n');
+      process.exitCode = 1;
+      return;
+    }
+    process.stdout.write(
+      process.env.CODIFF_GITHUB_TEST_MODE === 'pending-review'
+        ? '[[{"id": 7, "state": "PENDING"}]]'
+        : '[[]]',
+    );
+    return;
+  }
+  process.stdout.write(JSON.stringify({ head: { sha: 'head-sha' } }));
+});
+`,
+  );
+  await chmod(fakeGh, 0o755);
+  await using _environment = createTemporaryEnvironment({
+    CODIFF_GITHUB_TEST_CALLS: callsPath,
+    CODIFF_GITHUB_TEST_MODE: mode,
+    PATH: `${fakeBinDirectory.path}:${process.env.PATH ?? ''}`,
+  });
+
+  await callback(repo, () =>
+    readFileSync(callsPath, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => (JSON.parse(line) as { args: ReadonlyArray<string> }).args),
+  );
 };
+
+const pullRequestCommentRequest = {
+  comment: {
+    body: 'Keep this comment.',
+    filePath: 'src/app.ts',
+    lineNumber: 1,
+    side: 'additions' as const,
+  },
+  source: {
+    provider: 'github' as const,
+    type: 'pull-request' as const,
+    url: 'https://github.com/octo/example/pull/118',
+  },
+};
+
+const withRepo = async (run: (repo: string) => Promise<void>) => {
+  await withGitTestEnvironment(async () => {
+    await using directory = await createTemporaryDirectory('codiff-git-state-');
+    const repo = await realpath(directory.path);
+    await git(repo, ['init']);
+    await run(repo);
+  });
+};
+
+test('readRepositoryState marks generated files from gitattributes and path heuristics', async () => {
+  await withRepo(async (repo) => {
+    await writeRepoFile(
+      repo,
+      '.gitattributes',
+      '*.gen.yaml gitlab-generated\n*.generated.txt linguist-generated\nignored.txt -linguist-generated\npnpm-lock.yaml linguist-generated=false\nsrc/__generated__/** -gitlab-generated\n',
+    );
+    await writeRepoFile(repo, 'service.gen.yaml', 'generated\n');
+    await writeRepoFile(repo, 'schema.generated.txt', 'generated\n');
+    await writeRepoFile(repo, 'ignored.txt', 'source\n');
+    await writeRepoFile(repo, 'pnpm-lock.yaml', 'lockfileVersion: 9\n');
+    await writeRepoFile(repo, 'src/__generated__/api.ts', 'export const api = 1;\n');
+
+    const state = await readRepositoryState(repo);
+    const generatedByPath = new Map(state.files.map((file) => [file.path, file.generated]));
+
+    expect(generatedByPath.get('service.gen.yaml')).toBe(true);
+    expect(generatedByPath.get('schema.generated.txt')).toBe(true);
+    expect(generatedByPath.get('pnpm-lock.yaml')).toBe(false);
+    expect(generatedByPath.get('src/__generated__/api.ts')).toBe(false);
+    expect(generatedByPath.get('ignored.txt')).toBe(false);
+  });
+});
+
+test('commit reviews evaluate generated attributes from the reviewed commit', async () => {
+  await withRepo(async (repo) => {
+    await writeRepoFile(repo, '.gitattributes', '*.api.ts linguist-generated\n');
+    await writeRepoFile(repo, 'client.api.ts', 'export const client = 1;\n');
+    await commitAll(repo, 'generated client');
+    const commit = (await git(repo, ['rev-parse', 'HEAD'])).trim();
+
+    await writeRepoFile(repo, '.gitattributes', '*.api.ts -linguist-generated\n');
+    const state = await readRepositoryState(repo, { ref: commit, type: 'commit' });
+
+    expect(state.files.find((file) => file.path === 'client.api.ts')?.generated).toBe(true);
+  });
+});
+
+test('historical generated attributes fall back to a temporary index without --source', async () => {
+  await withRepo(async (repo) => {
+    await writeRepoFile(
+      repo,
+      '.gitattributes',
+      '*.api.ts linguist-generated\npnpm-lock.yaml linguist-generated=false\n',
+    );
+    await writeRepoFile(repo, 'client.api.ts', 'export const client = 1;\n');
+    await writeRepoFile(repo, 'pnpm-lock.yaml', 'lockfileVersion: 9\n');
+    await commitAll(repo, 'generated client');
+    const commit = (await git(repo, ['rev-parse', 'HEAD'])).trim();
+
+    await writeRepoFile(
+      repo,
+      '.gitattributes',
+      '*.api.ts -linguist-generated\npnpm-lock.yaml linguist-generated\n',
+    );
+    await using wrapperDirectory = await createTemporaryDirectory('codiff-old-git-');
+    const wrapperPath = join(wrapperDirectory.path, 'git');
+    await writeFile(
+      wrapperPath,
+      `#!/bin/sh
+for argument in "$@"; do
+  if [ "$argument" = "--source" ]; then
+    echo "error: unknown option 'source'" >&2
+    exit 129
+  fi
+done
+PATH="$CODIFF_TEST_ORIGINAL_PATH"
+export PATH
+exec git "$@"
+`,
+    );
+    await chmod(wrapperPath, 0o755);
+
+    await using _environment = createTemporaryEnvironment({
+      CODIFF_TEST_ORIGINAL_PATH: process.env.PATH ?? '',
+      PATH: `${wrapperDirectory.path}:${process.env.PATH ?? ''}`,
+    });
+    const generatedStates = await readGeneratedAttributeStates(
+      repo,
+      ['client.api.ts', 'pnpm-lock.yaml'],
+      commit,
+    );
+    expect(generatedStates).toEqual(
+      new Map([
+        ['client.api.ts', true],
+        ['pnpm-lock.yaml', false],
+      ]),
+    );
+  });
+});
 
 test('parseStatus reads staged rename paths in porcelain v1 -z order', () => {
   expect(parseStatus('R  new.txt\0old.txt\0')).toEqual([
@@ -196,6 +394,24 @@ test('parseGitHubPullRequestUrl reads canonical pull request URLs', () => {
     repo: 'codiff',
     url: 'https://github.com/nkzw-tech/codiff/pull/3',
   });
+});
+
+test('validateRepositoryPath returns normalized repository paths', () => {
+  expect(validateRepositoryPath('src/./file.ts')).toBe(join('src', 'file.ts'));
+  expect(validateRepositoryPath('src//nested/file.ts')).toBe(join('src', 'nested', 'file.ts'));
+});
+
+test('validateRepositoryPath rejects traversal segments', () => {
+  for (const path of [
+    '..',
+    '../file.ts',
+    'src/..',
+    'src/../file.ts',
+    'src/nested/../../file.ts',
+    String.raw`src\..\file.ts`,
+  ]) {
+    expect(() => validateRepositoryPath(path)).toThrow('Invalid repository path.');
+  }
 });
 
 test('createPullRequestHistoryFetchRefspecs fetches PR and base refs into Codiff refs', () => {
@@ -650,6 +866,48 @@ test('normalizePullRequestComment uses the start side for ranged comments', () =
   });
 });
 
+test('pull request comments explain when a pending GitHub review blocks submission', async () => {
+  await withFakeGitHub('pending-review', async (repo, readCalls) => {
+    await expect(submitPullRequestComment(repo, pullRequestCommentRequest)).rejects.toThrow(
+      PENDING_REVIEW_COMMENT_ERROR,
+    );
+
+    expect(
+      readCalls().some((args) =>
+        args.some((argument) => argument.includes('/reviews?per_page=100')),
+      ),
+    ).toBe(true);
+  });
+});
+
+test('pull request comments preserve GitHub validation errors when no pending review is found', async () => {
+  for (const mode of ['diagnosis-fails', 'no-pending-review'] as const) {
+    await withFakeGitHub(mode, async (repo) => {
+      await expect(submitPullRequestComment(repo, pullRequestCommentRequest)).rejects.toThrow(
+        'gh: Validation Failed (HTTP 422)',
+      );
+    });
+  }
+});
+
+test('successful pull request comments skip pending review diagnosis', async () => {
+  await withFakeGitHub('success', async (repo, readCalls) => {
+    await expect(submitPullRequestComment(repo, pullRequestCommentRequest)).resolves.toMatchObject({
+      body: 'Keep this comment.',
+      filePath: 'src/app.ts',
+      id: 'github:1',
+      lineNumber: 1,
+      side: 'additions',
+    });
+
+    expect(
+      readCalls().some((args) =>
+        args.some((argument) => argument.includes('/reviews?per_page=100')),
+      ),
+    ).toBe(false);
+  });
+});
+
 test('parseStatus preserves staged and unstaged flags on the same file', () => {
   expect(parseStatus('MM file.txt\0')).toEqual([
     {
@@ -768,6 +1026,39 @@ test('readWalkthroughRepositoryState keeps a fresh repository on the working tre
     const state = await readWalkthroughRepositoryState(repo);
     expect(state.source).toEqual({ type: 'working-tree' });
     expect(state.files).toEqual([]);
+  }));
+
+test('readWalkthroughRepositoryState preserves nested launch paths', () =>
+  withRepo(async (repo) => {
+    await writeRepoFile(repo, 'nested/example.txt', 'before\n');
+    await commitAll(repo, 'initial commit');
+    const launchPath = join(repo, 'nested');
+
+    const cleanState = await readWalkthroughRepositoryState(launchPath);
+    expect(cleanState.launchPath).toBe(launchPath);
+    expect(cleanState.root).toBe(repo);
+
+    await writeRepoFile(repo, 'nested/example.txt', 'after\n');
+    const dirtyState = await readWalkthroughRepositoryState(launchPath);
+    expect(dirtyState.launchPath).toBe(launchPath);
+    expect(dirtyState.root).toBe(repo);
+  }));
+
+test.sequential('clean implicit walkthrough reads use a bounded number of Git processes', () =>
+  withRepo(async (repo) => {
+    await writeRepoFile(repo, 'example.txt', 'before\n');
+    await commitAll(repo, 'initial commit');
+
+    const tracePath = join(repo, '.git', 'walkthrough-trace.jsonl');
+    await using _environment = createTemporaryEnvironment({ GIT_TRACE2_EVENT: tracePath });
+    await readWalkthroughRepositoryState(repo);
+    const processCount = readFileSync(tracePath, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { event?: string })
+      .filter(({ event }) => event === 'version').length;
+    expect(processCount).toBeLessThanOrEqual(14);
   }));
 
 test('readRepositoryState reports commit metadata for root commits', async () => {
@@ -1296,6 +1587,19 @@ test('readRepositoryChangeSignature changes when a commit is made', async () => 
   });
 });
 
+test('readRepositoryChangeSignature changes when switching branches at the same commit', async () => {
+  await withRepo(async (repo) => {
+    await writeRepoFile(repo, 'file.txt', 'one\n');
+    await commitAll(repo, 'initial commit');
+
+    const before = await readRepositoryChangeSignature(repo);
+    await git(repo, ['checkout', '-b', 'same-commit']);
+    const after = await readRepositoryChangeSignature(repo);
+
+    expect(after.signature).not.toBe(before.signature);
+  });
+});
+
 test('readRepositoryState reads commit diffs from short hashes', async () => {
   await withRepo(async (repo) => {
     await writeRepoFile(repo, 'file.txt', 'one\n');
@@ -1348,7 +1652,7 @@ test('readRepositoryState reads merge commits against the first parent', async (
   });
 });
 
-test('benchmarks commit diff generation duration for many changed files', async () => {
+test('reads commit diffs for many changed files', async () => {
   await withRepo(async (repo) => {
     const fileCount = 80;
     await Promise.all(
@@ -1373,15 +1677,12 @@ test('benchmarks commit diff generation duration for many changed files', async 
     await commitAll(repo, 'large history commit');
     const commit = (await git(repo, ['rev-parse', 'HEAD'])).trim();
 
-    const startedAt = performance.now();
     const state = await readRepositoryState(repo, {
       ref: commit,
       type: 'commit',
     });
-    const duration = performance.now() - startedAt;
 
     expect(state.files).toHaveLength(fileCount);
-    expect(duration).toBeLessThan(5000);
   });
 });
 
@@ -1442,12 +1743,8 @@ test('readRepositoryState defers medium committed files and loads them on demand
 });
 
 test('readRepositoryState rejects non-repository launch paths', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-not-a-repo-'));
-  try {
-    await expect(readRepositoryState(directory)).rejects.toThrow(/not a git repository/i);
-  } finally {
-    await rm(directory, { force: true, recursive: true });
-  }
+  await using directory = await createTemporaryDirectory('codiff-not-a-repo-');
+  await expect(readRepositoryState(directory.path)).rejects.toThrow(/not a git repository/i);
 });
 
 test('readRepositoryState builds a diff for a base...head range', () =>

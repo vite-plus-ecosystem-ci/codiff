@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,13 +6,23 @@ import { expect, test } from 'vite-plus/test';
 import packageJson from '../../package.json' with { type: 'json' };
 import schema from '../config/codiff-config.schema.json' with { type: 'json' };
 import { createDefaultConfig } from '../config/defaults.ts';
+import { createTemporaryDirectorySync, createTemporaryEnvironment } from './helpers/resources.ts';
 
 const require = createRequire(import.meta.url);
-const { createDefaultConfig: createElectronDefaultConfig, mergeConfig } =
+const { createDefaultConfig: createElectronDefaultConfig, readConfig } =
   require('../../electron/config.cjs') as {
     createDefaultConfig: typeof createDefaultConfig;
-    mergeConfig: (raw: unknown) => ReturnType<typeof createDefaultConfig>;
+    readConfig: () => ReturnType<typeof createDefaultConfig>;
   };
+
+const readElectronConfig = (raw: unknown) => {
+  using home = createTemporaryDirectorySync('codiff-config-home.');
+  using _environment = createTemporaryEnvironment({ HOME: home.path });
+  const configDirectory = join(home.path, '.codiff');
+  mkdirSync(configDirectory);
+  writeFileSync(join(configDirectory, 'codiff.jsonc'), `${JSON.stringify(raw)}\n`);
+  return readConfig();
+};
 
 const getSchemaDefaults = (section: 'keymap' | 'settings') =>
   Object.fromEntries(
@@ -34,11 +44,11 @@ test('electron and renderer defaults match', () => {
 });
 
 test('electron config normalizes code font settings', () => {
-  expect(mergeConfig({}).settings.codeFontFamily).toBe('');
-  expect(mergeConfig({}).settings.codeFontSize).toBe(13);
+  expect(readElectronConfig({}).settings.codeFontFamily).toBe('');
+  expect(readElectronConfig({}).settings.codeFontSize).toBe(13);
 
   expect(
-    mergeConfig({
+    readElectronConfig({
       settings: {
         codeFontFamily: '  JetBrains Mono  ',
         codeFontSize: 14.6,
@@ -50,18 +60,18 @@ test('electron config normalizes code font settings', () => {
   });
 
   expect(
-    mergeConfig({ settings: { codeFontFamily: 42, codeFontSize: 'large' } }).settings,
+    readElectronConfig({ settings: { codeFontFamily: 42, codeFontSize: 'large' } }).settings,
   ).toMatchObject({
     codeFontFamily: '',
     codeFontSize: 13,
   });
-  expect(mergeConfig({ settings: { codeFontSize: 8 } }).settings.codeFontSize).toBe(10);
-  expect(mergeConfig({ settings: { codeFontSize: 99 } }).settings.codeFontSize).toBe(32);
+  expect(readElectronConfig({ settings: { codeFontSize: 8 } }).settings.codeFontSize).toBe(10);
+  expect(readElectronConfig({ settings: { codeFontSize: 99 } }).settings.codeFontSize).toBe(32);
 });
 
 test('electron config keeps custom walkthrough prompt text only when it is a string', () => {
   expect(
-    mergeConfig({
+    readElectronConfig({
       settings: {
         walkthroughPrompt: 'Respond in German with product-review terminology.',
       },
@@ -69,7 +79,7 @@ test('electron config keeps custom walkthrough prompt text only when it is a str
   ).toBe('Respond in German with product-review terminology.');
 
   expect(
-    mergeConfig({
+    readElectronConfig({
       settings: {
         walkthroughPrompt: ['Respond in German'],
       },

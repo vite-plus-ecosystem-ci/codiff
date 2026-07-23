@@ -1,8 +1,14 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vite-plus/test';
+import {
+  createTemporaryDirectory,
+  createTemporaryEnvironment,
+} from '../../core/__tests__/helpers/resources.ts';
+import { createCommandTransport } from './helpers/command-transport.ts';
+
+type CommandTransport = ReturnType<typeof createCommandTransport>['transport'];
 
 const require = createRequire(import.meta.url);
 const {
@@ -12,10 +18,8 @@ const {
   OPENCODE_NOT_FOUND_CODE,
   OPENCODE_TIMEOUT_MS,
   getOpenCodeCommand,
-  isOpenCodeModelAvailabilityError,
   isOpenCodeNotFoundError,
   normalizeOpenCodeModel,
-  normalizeOpenCodeOutput,
   renderOpenCodeCommand,
   runOpenCode,
 } = require('../opencode.cjs') as {
@@ -25,10 +29,8 @@ const {
   OPENCODE_NOT_FOUND_CODE: string;
   OPENCODE_TIMEOUT_MS: number;
   getOpenCodeCommand: () => string;
-  isOpenCodeModelAvailabilityError: (value: unknown) => boolean;
   isOpenCodeNotFoundError: (error: unknown) => boolean;
   normalizeOpenCodeModel: (value: unknown) => string;
-  normalizeOpenCodeOutput: (output: string, schema: unknown) => string;
   renderOpenCodeCommand: (template: string, model: unknown) => string;
   runOpenCode: (
     repoRoot: string,
@@ -37,9 +39,11 @@ const {
     outputName?: string,
     timeoutMessage?: string,
     options?: {
+      commandTransport?: CommandTransport;
       fallbackModel?: string;
       model?: string;
       onModelFallback?: (fallbackModel: string, originalModel: string) => void;
+      onProgress?: (phase: string) => void;
     },
   ) => Promise<string>;
 };
@@ -86,166 +90,269 @@ test('renders the selected model into the managed OpenCode command', () => {
   ).toThrow('exactly one');
 });
 
-test('detects OpenCode model availability errors', () => {
-  expect(isOpenCodeModelAvailabilityError('Model not found: anthropic/missing')).toBe(true);
-  expect(isOpenCodeModelAvailabilityError('ProviderModelNotFoundError')).toBe(true);
-  expect(isOpenCodeModelAvailabilityError('unknown model anthropic/missing')).toBe(true);
-  expect(isOpenCodeModelAvailabilityError('You do not have access to model openai/gpt-5.5')).toBe(
-    true,
-  );
-  expect(isOpenCodeModelAvailabilityError('provider capacity exceeded')).toBe(false);
-  expect(isOpenCodeModelAvailabilityError('repository request returned 404')).toBe(false);
-  expect(isOpenCodeModelAvailabilityError('model request returned status 404')).toBe(true);
-});
-
-test('detects OpenCode-not-found errors and invalid overrides', () => {
+test('detects OpenCode-not-found errors and invalid overrides', async () => {
   expect(isOpenCodeNotFoundError({ code: OPENCODE_NOT_FOUND_CODE })).toBe(true);
   expect(isOpenCodeNotFoundError({ code: 'ENOENT' })).toBe(true);
   expect(isOpenCodeNotFoundError(new Error('other'))).toBe(false);
 
-  const previousOpenCodePath = process.env.CODIFF_OPENCODE_PATH;
-  process.env.CODIFF_OPENCODE_PATH = '/tmp/codiff-missing-opencode';
-  try {
-    expect(() => getOpenCodeCommand()).toThrow('CODIFF_OPENCODE_PATH');
-  } finally {
-    if (previousOpenCodePath == null) {
-      delete process.env.CODIFF_OPENCODE_PATH;
-    } else {
-      process.env.CODIFF_OPENCODE_PATH = previousOpenCodePath;
-    }
-  }
-});
-
-test('normalizes OpenCode JSON text events', () => {
-  const output = [
-    JSON.stringify({ part: { id: 'step', text: 'Working...' }, type: 'text' }),
-    JSON.stringify({ part: { id: 'answer', text: '{"reply":"Done."}' }, type: 'text' }),
-  ].join('\n');
-
-  expect(normalizeOpenCodeOutput(output, { required: ['reply'] })).toBe('{"reply":"Done."}');
+  await using _environment = createTemporaryEnvironment({
+    CODIFF_OPENCODE_PATH: '/tmp/codiff-missing-opencode',
+  });
+  expect(() => getOpenCodeCommand()).toThrow('CODIFF_OPENCODE_PATH');
 });
 
 test('runs OpenCode as an external read-only call', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-opencode-'));
-  const fakeOpenCodePath = join(directory, 'opencode');
-  const argsPath = join(directory, 'args.txt');
-  const envPath = join(directory, 'env.txt');
-  const stdinPath = join(directory, 'stdin.txt');
-  const previousOpenCodePath = process.env.CODIFF_OPENCODE_PATH;
+  let stdin = '';
+  const { calls, transport } = createCommandTransport(({ close, stdin: input, stdout }) => {
+    input.on('data', (chunk) => {
+      stdin += chunk.toString();
+    });
+    input.on('finish', () => {
+      stdout(
+        `${JSON.stringify({
+          part: { id: 'answer', text: '{"version":1}' },
+          type: 'text',
+        })}\n`,
+      );
+      close();
+    });
+  });
 
-  try {
-    await writeFile(
-      fakeOpenCodePath,
-      `#!/usr/bin/env node
-const { writeFileSync } = require('node:fs');
-writeFileSync(${JSON.stringify(argsPath)}, process.argv.slice(2).join('\\n'));
-writeFileSync(${JSON.stringify(envPath)}, process.env.OPENCODE_PERMISSION || '');
-let stdin = '';
-process.stdin.on('data', (chunk) => {
-  stdin += chunk;
+  await expect(
+    runOpenCode(
+      '/repo',
+      'prompt',
+      { required: ['version'], type: 'object' },
+      undefined,
+      undefined,
+      {
+        commandTransport: transport,
+      },
+    ),
+  ).resolves.toBe('{"version":1}');
+
+  expect(calls[0].args).toEqual([
+    'run',
+    '--format',
+    'json',
+    '--pure',
+    '--agent',
+    'build',
+    '--dir',
+    '/repo',
+  ]);
+  expect(JSON.parse(String(calls[0].options.env?.OPENCODE_PERMISSION))).toEqual({ '*': 'deny' });
+  expect(stdin).toContain('prompt');
+  expect(stdin).toContain('Follow this JSON Schema exactly');
+  expect(stdin).toContain('"required":["version"]');
 });
-process.stdin.on('end', () => {
-  writeFileSync(${JSON.stringify(stdinPath)}, stdin);
-  process.stdout.write(JSON.stringify({
-    type: 'text',
-    part: { id: 'answer', text: '{"version":1}' },
-  }) + '\\n');
+
+test('streams semantic progress from the OpenCode event server', async () => {
+  await using directory = await createTemporaryDirectory('codiff-opencode-progress-');
+  const fakeOpenCodePath = join(directory.path, 'opencode');
+  const argsPath = join(directory.path, 'args.txt');
+  const requestPath = join(directory.path, 'request.json');
+  await using _environment = createTemporaryEnvironment({ CODIFF_OPENCODE_PATH: fakeOpenCodePath });
+
+  await writeFile(
+    fakeOpenCodePath,
+    `#!/usr/bin/env node
+const { appendFileSync, writeFileSync } = require('node:fs');
+const http = require('node:http');
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(argsPath)}, JSON.stringify(args) + '\\n');
+if (args[0] !== 'serve') process.exit(2);
+const port = Number(args.find((arg) => arg.startsWith('--port='))?.slice(7));
+const sessionID = 'session-1';
+let events;
+const readBody = (request) => new Promise((resolve) => {
+  let body = '';
+  request.on('data', (chunk) => { body += chunk; });
+  request.on('end', () => resolve(body));
 });
-`,
-    );
-    await chmod(fakeOpenCodePath, 0o755);
-    process.env.CODIFF_OPENCODE_PATH = fakeOpenCodePath;
-
-    await expect(
-      runOpenCode(directory, 'prompt', { required: ['version'], type: 'object' }),
-    ).resolves.toBe('{"version":1}');
-
-    expect((await readFile(argsPath, 'utf8')).split('\n')).toEqual([
-      'run',
-      '--format',
-      'json',
-      '--pure',
-      '--agent',
-      'build',
-      '--dir',
-      directory,
-    ]);
-    expect(JSON.parse(await readFile(envPath, 'utf8'))).toEqual({ '*': 'deny' });
-    const stdin = await readFile(stdinPath, 'utf8');
-    expect(stdin).toContain('prompt');
-    expect(stdin).toContain('Follow this JSON Schema exactly');
-    expect(stdin).toContain('"required":["version"]');
-  } finally {
-    if (previousOpenCodePath == null) {
-      delete process.env.CODIFF_OPENCODE_PATH;
-    } else {
-      process.env.CODIFF_OPENCODE_PATH = previousOpenCodePath;
-    }
-    await rm(directory, { force: true, recursive: true });
+const sendEvent = (event) => {
+  events.write('data: ' + JSON.stringify({ payload: event }) + '\\n\\n');
+};
+const server = http.createServer(async (request, response) => {
+  const url = new URL(request.url, 'http://127.0.0.1');
+  if (request.method === 'POST' && url.pathname === '/session') {
+    const body = JSON.parse(await readBody(request));
+    writeFileSync(${JSON.stringify(requestPath)}, JSON.stringify({ session: body }));
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ id: sessionID }));
+    return;
   }
+  if (request.method === 'GET' && url.pathname === '/event') {
+    events = response;
+    response.writeHead(200, {
+      'cache-control': 'no-cache',
+      'content-type': 'text/event-stream',
+    });
+    response.flushHeaders();
+    return;
+  }
+  if (request.method === 'POST' && url.pathname === '/session/' + sessionID + '/message') {
+    const body = JSON.parse(await readBody(request));
+    writeFileSync(
+      ${JSON.stringify(requestPath)},
+      JSON.stringify({ ...JSON.parse(require('node:fs').readFileSync(${JSON.stringify(requestPath)})), prompt: body }),
+    );
+    sendEvent({
+      properties: {
+        part: { messageID: 'user-1', type: 'text' },
+        sessionID,
+      },
+      type: 'message.part.updated',
+    });
+    sendEvent({
+      properties: {
+        info: { id: 'assistant-1', role: 'assistant' },
+        sessionID,
+      },
+      type: 'message.updated',
+    });
+    sendEvent({
+      properties: {
+        part: { messageID: 'assistant-1', type: 'step-start' },
+        sessionID,
+      },
+      type: 'message.part.updated',
+    });
+    sendEvent({
+      properties: {
+        delta: '{"version":1}',
+        field: 'text',
+        messageID: 'assistant-1',
+        partID: 'answer',
+        sessionID,
+      },
+      type: 'message.part.delta',
+    });
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({
+      info: { role: 'assistant' },
+      parts: [{ id: 'answer', text: '{"version":1}', type: 'text' }],
+    }));
+    return;
+  }
+  if (request.method === 'DELETE' && url.pathname === '/session/' + sessionID) {
+    response.end('{}');
+    return;
+  }
+  response.statusCode = 404;
+  response.end();
+});
+server.listen(port, '127.0.0.1', () => {
+  process.stdout.write('opencode server listening on http://127.0.0.1:' + port + '\\n');
+});
+process.on('SIGTERM', () => server.close(() => process.exit(0)));
+`,
+  );
+  await chmod(fakeOpenCodePath, 0o755);
+  const phases: Array<string> = [];
+
+  await expect(
+    runOpenCode(
+      directory.path,
+      'prompt',
+      { required: ['version'], type: 'object' },
+      undefined,
+      undefined,
+      {
+        onProgress: (phase) => phases.push(phase),
+      },
+    ),
+  ).resolves.toBe('{"version":1}');
+
+  expect(phases).toEqual(['agent-generation', 'response-received']);
+  const calls = (await readFile(argsPath, 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  expect(calls).toEqual([expect.arrayContaining(['serve', '--pure', '--hostname=127.0.0.1'])]);
+  const request = JSON.parse(await readFile(requestPath, 'utf8'));
+  expect(request.session.permission).toEqual([{ action: 'deny', pattern: '*', permission: '*' }]);
+  expect(request.prompt.parts[0].text).toContain('Follow this JSON Schema exactly');
+  expect(request.prompt.tools).toEqual({});
+});
+
+test('falls back to OpenCode CLI JSON mode when event streaming is unavailable', async () => {
+  const { calls, transport } = createCommandTransport((commandProcess) => {
+    if (commandProcess.args[0] === 'serve') {
+      queueMicrotask(() => {
+        commandProcess.stderr('unknown command: serve');
+        commandProcess.close(1);
+      });
+      return;
+    }
+    commandProcess.stdin.on('finish', () => {
+      commandProcess.stdout(
+        `${JSON.stringify({
+          part: { id: 'answer', text: '{"version":1}' },
+          type: 'text',
+        })}\n`,
+      );
+      commandProcess.close();
+    });
+  });
+
+  await expect(
+    runOpenCode(
+      '/repo',
+      'prompt',
+      { required: ['version'], type: 'object' },
+      undefined,
+      undefined,
+      {
+        commandTransport: transport,
+        onProgress: () => {},
+      },
+    ),
+  ).resolves.toBe('{"version":1}');
+
+  expect(calls[0].args[0]).toBe('serve');
+  expect(calls[1].args.slice(0, 3)).toEqual(['run', '--format', 'json']);
 });
 
 test('passes explicit models to OpenCode and falls back when they are unavailable', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codiff-opencode-model-'));
-  const fakeOpenCodePath = join(directory, 'opencode');
-  const argsPath = join(directory, 'args.txt');
-  const previousOpenCodePath = process.env.CODIFF_OPENCODE_PATH;
+  const { calls, transport } = createCommandTransport((commandProcess) => {
+    commandProcess.stdin.on('finish', () => {
+      if (commandProcess.args.includes('--model')) {
+        commandProcess.stderr('Model not found: anthropic/claude-sonnet-4-6');
+        commandProcess.close(1);
+        return;
+      }
+      commandProcess.stdout(
+        `${JSON.stringify({
+          part: { id: 'answer', text: '{"version":1}' },
+          type: 'text',
+        })}\n`,
+      );
+      commandProcess.close();
+    });
+  });
+  const fallbacks: Array<[string, string]> = [];
 
-  try {
-    await writeFile(
-      fakeOpenCodePath,
-      `#!/usr/bin/env node
-const { appendFileSync } = require('node:fs');
-const args = process.argv.slice(2);
-appendFileSync(${JSON.stringify(argsPath)}, JSON.stringify(args) + '\\n');
-if (args.includes('--model')) {
-  process.stderr.write('Model not found: anthropic/claude-sonnet-4-6');
-  process.exit(1);
-}
-process.stdin.resume();
-process.stdin.on('end', () => {
-  process.stdout.write(JSON.stringify({
-    type: 'text',
-    part: { id: 'answer', text: '{"version":1}' },
-  }) + '\\n');
-});
-`,
-    );
-    await chmod(fakeOpenCodePath, 0o755);
-    process.env.CODIFF_OPENCODE_PATH = fakeOpenCodePath;
-    const fallbacks: Array<[string, string]> = [];
-
-    await expect(
-      runOpenCode(
-        directory,
-        'prompt',
-        { required: ['version'], type: 'object' },
-        undefined,
-        undefined,
-        {
-          fallbackModel: DEFAULT_OPENCODE_MODEL,
-          model: 'anthropic/claude-sonnet-4-6',
-          onModelFallback: (fallbackModel, originalModel) => {
-            fallbacks.push([fallbackModel, originalModel]);
-          },
+  await expect(
+    runOpenCode(
+      '/repo',
+      'prompt',
+      { required: ['version'], type: 'object' },
+      undefined,
+      undefined,
+      {
+        commandTransport: transport,
+        fallbackModel: DEFAULT_OPENCODE_MODEL,
+        model: 'anthropic/claude-sonnet-4-6',
+        onModelFallback: (fallbackModel, originalModel) => {
+          fallbacks.push([fallbackModel, originalModel]);
         },
-      ),
-    ).resolves.toBe('{"version":1}');
+      },
+    ),
+  ).resolves.toBe('{"version":1}');
 
-    const calls = (await readFile(argsPath, 'utf8'))
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line));
-    expect(calls).toHaveLength(2);
-    expect(calls[0]).toContain('anthropic/claude-sonnet-4-6');
-    expect(calls[1]).not.toContain('--model');
-    expect(fallbacks).toEqual([[DEFAULT_OPENCODE_MODEL, 'anthropic/claude-sonnet-4-6']]);
-  } finally {
-    if (previousOpenCodePath == null) {
-      delete process.env.CODIFF_OPENCODE_PATH;
-    } else {
-      process.env.CODIFF_OPENCODE_PATH = previousOpenCodePath;
-    }
-    await rm(directory, { force: true, recursive: true });
-  }
+  expect(calls).toHaveLength(2);
+  expect(calls[0].args).toContain('anthropic/claude-sonnet-4-6');
+  expect(calls[1].args).not.toContain('--model');
+  expect(fallbacks).toEqual([[DEFAULT_OPENCODE_MODEL, 'anthropic/claude-sonnet-4-6']]);
 });

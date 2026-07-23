@@ -2,10 +2,10 @@ import type { CodeViewHandle } from '@pierre/diffs/react';
 import type { ReactNode } from 'react';
 import type {
   ChangedFile,
-  CommitMetadata,
   DiffSection,
   NarrativeWalkthrough,
   NarrativeWalkthroughResult,
+  PullRequestCodeQualityFinding,
   PullRequestExistingReviewComment,
   ReviewSource,
 } from '../types.ts';
@@ -15,6 +15,11 @@ export type WalkthroughError = Extract<NarrativeWalkthroughResult, { status: 'un
 export type ReviewCommentAnnotationMetadata = {
   commentIds: ReadonlyArray<string>;
   type: 'review-comment';
+};
+
+export type CodeQualityAnnotationMetadata = {
+  finding: PullRequestCodeQualityFinding;
+  type: 'code-quality';
 };
 
 type MarkdownPreviewAnnotationMetadata = {
@@ -33,18 +38,13 @@ type ImagePreviewAnnotationMetadata = {
   type: 'image-preview';
 };
 
-type CommitDetailsAnnotationMetadata = {
-  metadata: CommitMetadata;
-  type: 'commit-details';
-};
-
 type WalkthroughHeaderAnnotationMetadata = {
   header: ReactNode;
   type: 'walkthrough-header';
 };
 
 export type ReviewAnnotationMetadata =
-  | CommitDetailsAnnotationMetadata
+  | CodeQualityAnnotationMetadata
   | ImagePreviewAnnotationMetadata
   | MarkdownPreviewAnnotationMetadata
   | ReviewCommentAnnotationMetadata
@@ -88,9 +88,12 @@ export type DiffLineCount = {
 };
 
 export type ReviewComment = {
+  anchor?: 'file' | 'line';
   author?: PullRequestExistingReviewComment['author'];
   body: string;
+  canDelete?: boolean;
   canEdit?: boolean;
+  canReplyThread?: boolean;
   canResolveThread?: boolean;
   codexReply?: {
     body?: string;
@@ -102,13 +105,13 @@ export type ReviewComment = {
   isOutdated?: boolean;
   isReadOnly?: boolean;
   isThreadResolved?: boolean;
-  lineNumber: number;
+  lineNumber?: number;
   remoteSubmit?: {
     error?: string;
     status: 'error' | 'submitting';
   };
   sectionId: string;
-  side: 'additions' | 'deletions';
+  side?: 'additions' | 'deletions';
   startLineNumber?: number;
   startSide?: 'additions' | 'deletions';
   submittedAt?: string;
@@ -132,12 +135,18 @@ export type WalkthroughNote = {
 
 export type SourceSession = {
   collapsed: Set<string>;
+  expandedGenerated: Set<string>;
   /** Populated by a generated or pre-authored narrative walkthrough document. */
   narrativeWalkthrough?: NarrativeWalkthrough | null;
   reviewComments: ReadonlyArray<ReviewComment>;
   selectedPath: string | null;
   viewed: Record<string, string>;
   walkthroughError: WalkthroughError | null;
+  walkthroughFiles: ReadonlyArray<{
+    fingerprint: string;
+    path: string;
+    status: ChangedFile['status'];
+  }>;
 };
 
 export type RepositoryLoadError = {

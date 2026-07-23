@@ -10,6 +10,7 @@ import type {
   DiffSection,
   DiffSectionContentRequest,
   GitIdentity,
+  NarrativeWalkthroughRequestOptions,
   NarrativeWalkthroughResult,
   PlanHandoffStatus,
   PlanReview,
@@ -31,6 +32,7 @@ import type {
   WalkthroughCommitMessageResult,
   WalkthroughCommitRequest,
   WalkthroughCommitResult,
+  WalkthroughProgressEvent,
 } from './types.ts';
 
 declare module '*.css';
@@ -55,7 +57,10 @@ declare global {
         kind: CodiffMarkdownDocument['kind'];
         path: string;
       }) => Promise<CodiffMarkdownDocument>;
-      getNarrativeWalkthrough: (source?: ReviewSource) => Promise<NarrativeWalkthroughResult>;
+      getNarrativeWalkthrough: (
+        source?: ReviewSource,
+        options?: NarrativeWalkthroughRequestOptions,
+      ) => Promise<NarrativeWalkthroughResult>;
       getPlanReview: () => Promise<PlanReview | null>;
       getPreferences: () => Promise<CodiffPreferences>;
       getRepositoryHistory: (limit?: number, source?: ReviewSource) => Promise<RepositoryHistory>;
@@ -77,7 +82,10 @@ declare global {
         ) => void,
       ) => () => void;
       onPlanCloseRequested: (callback: () => void) => () => void;
+      onRefreshRequest: (callback: () => void) => () => void;
       onRepositoryChanged: (callback: (change: { root: string }) => void) => () => void;
+      onWalkthroughCommitOutput: (callback: (chunk: string) => void) => () => void;
+      onWalkthroughProgress: (callback: (progress: WalkthroughProgressEvent) => void) => () => void;
       onWindowFullScreenChanged: (callback: (isFullScreen: boolean) => void) => () => void;
       openConfigFile: () => Promise<void>;
       openFile: (path: string) => Promise<void>;

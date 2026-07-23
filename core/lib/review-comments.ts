@@ -1,5 +1,10 @@
-import type { CodeViewLineSelection } from '@pierre/diffs';
-import type { ChangedFile, DiffSection, RepositoryState } from '../types.ts';
+import type {
+  ChangedFile,
+  DiffSection,
+  PullRequestExistingReviewComment,
+  PullRequestReviewComment,
+  RepositoryState,
+} from '../types.ts';
 import type { CodeViewInstance, ReviewComment } from './app-types.ts';
 import { parseSectionDiffWithOptions } from './diff.ts';
 
@@ -17,17 +22,14 @@ export const hasActiveTextSelection = () => {
   return selection != null && selection.rangeCount > 0 && !selection.isCollapsed;
 };
 
-export const getReviewCommentLineSelection = (comment: ReviewComment): CodeViewLineSelection => ({
-  id: `diff:${comment.sectionId}`,
-  range: {
-    end: comment.lineNumber,
-    ...(comment.startSide != null && comment.startSide !== comment.side
-      ? { endSide: comment.side }
-      : {}),
-    side: comment.startSide ?? comment.side,
-    start: comment.startLineNumber ?? comment.lineNumber,
-  },
-});
+export const isFileReviewComment = (
+  comment: Pick<ReviewComment, 'anchor' | 'lineNumber' | 'side'>,
+) => comment.anchor === 'file' || comment.lineNumber == null || comment.side == null;
+
+export const isLineReviewComment = (
+  comment: ReviewComment,
+): comment is ReviewComment & { lineNumber: number; side: 'additions' | 'deletions' } =>
+  !isFileReviewComment(comment);
 
 type ReviewPatchRow = {
   additionLineNumber?: number;
@@ -65,15 +67,17 @@ export function updateStickyHeaderState(viewer: CodeViewInstance) {
   }
 }
 
-export const getReviewSideLabel = (side: ReviewComment['side']) =>
-  side === 'additions' ? 'New' : 'Old';
+const getReviewSideLabel = (side: ReviewComment['side']) => (side === 'additions' ? 'New' : 'Old');
 
-export const getReviewCommentStartSide = (comment: Pick<ReviewComment, 'side' | 'startSide'>) =>
+const getReviewCommentStartSide = (comment: Pick<ReviewComment, 'side' | 'startSide'>) =>
   comment.startSide ?? comment.side;
 
 export const getReviewCommentLineLabel = (
-  comment: Pick<ReviewComment, 'lineNumber' | 'side' | 'startLineNumber' | 'startSide'>,
+  comment: Pick<ReviewComment, 'anchor' | 'lineNumber' | 'side' | 'startLineNumber' | 'startSide'>,
 ) => {
+  if (isFileReviewComment(comment)) {
+    return 'File';
+  }
   const startLineNumber = comment.startLineNumber;
   const startSide = getReviewCommentStartSide(comment);
   if (
@@ -93,8 +97,11 @@ export const getReviewCommentLineLabel = (
 };
 
 export const getReviewCommentRangeProps = (
-  comment: Pick<ReviewComment, 'lineNumber' | 'side' | 'startLineNumber' | 'startSide'>,
+  comment: Pick<ReviewComment, 'anchor' | 'lineNumber' | 'side' | 'startLineNumber' | 'startSide'>,
 ) => {
+  if (isFileReviewComment(comment)) {
+    return { anchor: 'file' as const };
+  }
   const startLineNumber = comment.startLineNumber;
   if (startLineNumber == null) {
     return {};
@@ -109,15 +116,92 @@ export const getReviewCommentRangeProps = (
     : {};
 };
 
+export const toPullRequestReviewComment = (
+  comment: ReviewComment,
+  { includeSectionId = false }: { includeSectionId?: boolean } = {},
+): PullRequestReviewComment => ({
+  body: comment.body,
+  filePath: comment.filePath,
+  ...(comment.lineNumber != null ? { lineNumber: comment.lineNumber } : {}),
+  ...(includeSectionId ? { sectionId: comment.sectionId } : {}),
+  ...(comment.side ? { side: comment.side } : {}),
+  ...getReviewCommentRangeProps(comment),
+  ...(comment.threadId ? { threadId: comment.threadId } : {}),
+});
+
+export const toSubmittedReviewComment = (
+  comment: PullRequestExistingReviewComment,
+  draft: ReviewComment,
+): ReviewComment => ({
+  ...(comment.anchor ? { anchor: comment.anchor } : {}),
+  author: comment.author,
+  body: comment.body,
+  ...(comment.canDelete ? { canDelete: true } : {}),
+  ...(comment.canEdit ? { canEdit: true } : {}),
+  ...(comment.canReplyThread === false ? { canReplyThread: false } : {}),
+  ...(comment.canResolveThread ? { canResolveThread: true } : {}),
+  filePath: comment.filePath,
+  id: comment.id,
+  ...(comment.isOutdated ? { isOutdated: true } : {}),
+  isReadOnly: true,
+  ...(comment.isThreadResolved ? { isThreadResolved: true } : {}),
+  ...(comment.lineNumber != null ? { lineNumber: comment.lineNumber } : {}),
+  sectionId: comment.sectionId ?? draft.sectionId,
+  ...(comment.side ? { side: comment.side } : {}),
+  ...(comment.startLineNumber != null ? { startLineNumber: comment.startLineNumber } : {}),
+  ...(comment.startSide ? { startSide: comment.startSide } : {}),
+  ...(comment.submittedAt ? { submittedAt: comment.submittedAt } : {}),
+  ...(comment.threadId ? { threadId: comment.threadId } : {}),
+  ...(comment.url ? { url: comment.url } : {}),
+});
+
+export const mergeReviewComments = (
+  snapshotComments: ReadonlyArray<ReviewComment>,
+  localComments: ReadonlyArray<ReviewComment>,
+): ReadonlyArray<ReviewComment> => {
+  const snapshotIds = new Set(snapshotComments.map((comment) => comment.id));
+  return [...snapshotComments, ...localComments.filter((comment) => !snapshotIds.has(comment.id))];
+};
+
+const isPendingPullRequestReviewComment = (comment: ReviewComment) =>
+  !comment.isReadOnly &&
+  !comment.threadId &&
+  comment.remoteSubmit?.status !== 'submitting' &&
+  comment.body.trim().length > 0;
+
+export const getPendingPullRequestReviewComments = (
+  comments: ReadonlyArray<ReviewComment>,
+  activeDraft: Pick<ReviewComment, 'body' | 'id'> | null = null,
+) => {
+  return comments.flatMap((comment) => {
+    const candidate =
+      activeDraft?.id === comment.id ? { ...comment, body: activeDraft.body } : comment;
+    return isPendingPullRequestReviewComment(candidate) ? [candidate] : [];
+  });
+};
+
+export const findReusableReviewCommentDraft = (
+  comments: ReadonlyArray<ReviewComment>,
+  activeDraft: Pick<ReviewComment, 'body' | 'id'> | null = null,
+) =>
+  comments.find(
+    (comment) =>
+      !comment.isReadOnly &&
+      comment.body.length === 0 &&
+      !(activeDraft?.id === comment.id && activeDraft.body.trim().length > 0),
+  );
+
 export const getCommentKey = (
   comment: Pick<
     ReviewComment,
-    'lineNumber' | 'sectionId' | 'side' | 'startLineNumber' | 'startSide'
+    'anchor' | 'lineNumber' | 'sectionId' | 'side' | 'startLineNumber' | 'startSide'
   >,
 ) =>
-  `${comment.sectionId}:${comment.side}:${comment.lineNumber}:${comment.startLineNumber ?? comment.lineNumber}:${
-    comment.startSide ?? comment.side
-  }`;
+  isFileReviewComment(comment)
+    ? `${comment.sectionId}:file`
+    : `${comment.sectionId}:${comment.side}:${comment.lineNumber}:${
+        comment.startLineNumber ?? comment.lineNumber
+      }:${comment.startSide ?? comment.side}`;
 
 const getCommentTextDigest = (value: string | null | undefined) =>
   value ? `${value.length},${value.split('\n').length}` : '0,0';
@@ -128,7 +212,7 @@ export const getReviewCommentsDigest = (comments: ReadonlyArray<ReviewComment>) 
       (comment) =>
         `${comment.id}:${comment.sectionId}:${comment.side}:${comment.lineNumber}:${
           comment.startLineNumber ?? ''
-        }:${comment.startSide ?? ''}:${getCommentTextDigest(
+        }:${comment.startSide ?? ''}:${comment.anchor ?? ''}:${getCommentTextDigest(
           comment.body,
         )}:${comment.codexReply?.status ?? ''}:${getCommentTextDigest(
           comment.codexReply?.body,
@@ -162,12 +246,15 @@ const trimReviewPatchLineTerminator = (line: string) =>
 const getReviewPatchText = (lines: ReadonlyArray<string>, index: number) =>
   trimReviewPatchLineTerminator(lines[index] ?? '');
 
-export const getReviewCommentPatchContext = (
+const getReviewCommentPatchContext = (
   file: ChangedFile,
   section: DiffSection,
   comment: ReviewComment,
   showWhitespace: boolean,
 ) => {
+  if (isFileReviewComment(comment)) {
+    return section.summary?.reason || section.patch.trim() || 'No patch context available.';
+  }
   const fileDiff = parseSectionDiffWithOptions(file, section, showWhitespace);
 
   for (const hunk of fileDiff.hunks) {
@@ -215,10 +302,11 @@ export const getReviewCommentPatchContext = (
       additionLineNumber += content.additions;
     }
 
-    const startLine = comment.startLineNumber ?? comment.lineNumber;
-    const startSide = getReviewCommentStartSide(comment);
-    const endLine = comment.lineNumber;
-    const targetIndex = rows.findIndex((row) => matchesReviewPatchLine(row, endLine, comment.side));
+    const side = comment.side ?? 'additions';
+    const startLine = comment.startLineNumber ?? comment.lineNumber ?? 1;
+    const startSide = getReviewCommentStartSide(comment) ?? side;
+    const endLine = comment.lineNumber ?? 1;
+    const targetIndex = rows.findIndex((row) => matchesReviewPatchLine(row, endLine, side));
     const rangeStartIndex = rows.findIndex((row) =>
       matchesReviewPatchLine(row, startLine, startSide),
     );
@@ -262,7 +350,7 @@ export const buildReviewCommentsMarkdown = (
     const rightFileIndex = files.findIndex((file) => file.path === right.filePath);
     return (
       leftFileIndex - rightFileIndex ||
-      left.lineNumber - right.lineNumber ||
+      (left.lineNumber ?? 0) - (right.lineNumber ?? 0) ||
       left.id.localeCompare(right.id)
     );
   });
@@ -293,34 +381,36 @@ export const buildReviewCommentsMarkdown = (
 };
 
 export const getReviewCommentsFromState = (state: RepositoryState): ReadonlyArray<ReviewComment> =>
-  state.source.type === 'pull-request'
-    ? (state.reviewComments ?? []).flatMap((comment) => {
-        const file = state.files.find((candidate) => candidate.path === comment.filePath);
-        const section = file?.sections[0];
-        return section
-          ? [
-              {
-                author: comment.author,
-                body: comment.body,
-                ...(comment.canEdit ? { canEdit: true } : {}),
-                ...(comment.canResolveThread ? { canResolveThread: true } : {}),
-                filePath: comment.filePath,
-                id: comment.id,
-                ...(comment.isOutdated ? { isOutdated: true } : {}),
-                isReadOnly: true,
-                ...(comment.isThreadResolved ? { isThreadResolved: true } : {}),
-                lineNumber: comment.lineNumber,
-                sectionId: section.id,
-                side: comment.side,
-                ...getReviewCommentRangeProps(comment),
-                submittedAt: comment.submittedAt,
-                ...(comment.threadId ? { threadId: comment.threadId } : {}),
-                url: comment.url,
-              },
-            ]
-          : [];
-      })
-    : [];
+  (state.reviewComments ?? []).flatMap((comment) => {
+    const file = state.files.find((candidate) => candidate.path === comment.filePath);
+    const section =
+      file?.sections.find((candidate) => candidate.id === comment.sectionId) ?? file?.sections[0];
+    return section
+      ? [
+          {
+            author: comment.author,
+            body: comment.body,
+            ...(comment.canDelete ? { canDelete: true } : {}),
+            ...(comment.canEdit ? { canEdit: true } : {}),
+            ...(comment.canReplyThread === false ? { canReplyThread: false } : {}),
+            ...(comment.canResolveThread ? { canResolveThread: true } : {}),
+            filePath: comment.filePath,
+            id: comment.id,
+            ...(comment.isOutdated ? { isOutdated: true } : {}),
+            isReadOnly: true,
+            ...(comment.isThreadResolved ? { isThreadResolved: true } : {}),
+            ...(comment.anchor === 'file' ? { anchor: 'file' as const } : {}),
+            ...(comment.lineNumber != null ? { lineNumber: comment.lineNumber } : {}),
+            sectionId: section.id,
+            ...(comment.side ? { side: comment.side } : {}),
+            ...getReviewCommentRangeProps(comment),
+            submittedAt: comment.submittedAt,
+            ...(comment.threadId ? { threadId: comment.threadId } : {}),
+            url: comment.url,
+          },
+        ]
+      : [];
+  });
 
 export const getVisibleReviewComments = (
   comments: ReadonlyArray<ReviewComment>,

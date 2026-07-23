@@ -1,8 +1,8 @@
 // @ts-check
 
-const { spawn } = require('node:child_process');
 const { homedir } = require('node:os');
 const { join } = require('node:path');
+const { resolveAgentCommandTransport } = require('./agent-command.cjs');
 const {
   findExecutableOnPath,
   isExecutableFile,
@@ -23,8 +23,10 @@ const CLAUDE_NOT_LOGGED_IN_MESSAGE =
 /**
  * @typedef {{
  *   fallbackModel?: string;
+ *   commandTransport?: import('./agent-command.cjs').AgentCommandTransport;
  *   model?: string;
  *   onModelFallback?: (fallbackModel: string, originalModel: string) => Promise<void> | void;
+ *   onProgress?: (phase: import('../core/types.ts').WalkthroughProgressPhase) => void;
  *   timeoutMs?: number;
  * }} ClaudeOptions
  */
@@ -127,6 +129,84 @@ const getClaudeLaunchError = (error) => {
 };
 
 /**
+ * Consume Claude Code `stream-json` events. Thinking and text deltas only
+ * update semantic progress; no model text is forwarded outside this process.
+ *
+ * @param {ClaudeOptions['onProgress']} onProgress
+ */
+const createClaudeStreamParser = (onProgress) => {
+  /** @type {any} */
+  let resultEnvelope = null;
+  let lineBuffer = '';
+
+  /** @param {unknown} input */
+  const handleEvent = (input) => {
+    const event = /** @type {any} */ (input);
+    if (!event || typeof event !== 'object') {
+      return;
+    }
+    if (event.type === 'result') {
+      resultEnvelope = event;
+      return;
+    }
+    if (event.type !== 'stream_event') {
+      return;
+    }
+
+    const streamEvent = event.event;
+    if (streamEvent?.type === 'content_block_start') {
+      const blockType = streamEvent.content_block?.type;
+      if (blockType === 'thinking') {
+        onProgress?.('agent-generation');
+      } else if (blockType === 'text' || blockType === 'tool_use') {
+        onProgress?.('response-received');
+      }
+      return;
+    }
+    if (streamEvent?.type !== 'content_block_delta') {
+      return;
+    }
+    const deltaType = streamEvent.delta?.type;
+    if (deltaType === 'thinking_delta') {
+      onProgress?.('agent-generation');
+    } else if (deltaType === 'text_delta' || deltaType === 'input_json_delta') {
+      onProgress?.('response-received');
+    }
+  };
+
+  /** @param {string} text */
+  const push = (text) => {
+    lineBuffer += text;
+    let newlineIndex = lineBuffer.indexOf('\n');
+    while (newlineIndex !== -1) {
+      const line = lineBuffer.slice(0, newlineIndex).trim();
+      lineBuffer = lineBuffer.slice(newlineIndex + 1);
+      if (line) {
+        try {
+          handleEvent(JSON.parse(line));
+        } catch {
+          // Non-JSON diagnostics remain available to the caller on failure.
+        }
+      }
+      newlineIndex = lineBuffer.indexOf('\n');
+    }
+  };
+
+  const flush = () => {
+    const rest = lineBuffer.trim();
+    lineBuffer = '';
+    if (rest) {
+      try {
+        handleEvent(JSON.parse(rest));
+      } catch {}
+    }
+    return resultEnvelope;
+  };
+
+  return { flush, push };
+};
+
+/**
  * Run Claude Code headless as a pure, read-only structured-output call.
  *
  * Mirrors the shape of {@link runCodex}: prompt is sent on stdin, output is a
@@ -163,11 +243,16 @@ const runClaude = async (
         let stdout = '';
         let finished = false;
 
-        const claudeCommand = getClaudeCommand();
+        const commandTransport = resolveAgentCommandTransport(
+          options.commandTransport,
+          getClaudeCommand,
+        );
+        const streamProgress = Boolean(options.onProgress);
         const claudeArgs = [
           '-p',
           '--output-format',
-          'json',
+          streamProgress ? 'stream-json' : 'json',
+          ...(streamProgress ? ['--verbose', '--include-partial-messages'] : []),
           '--json-schema',
           JSON.stringify(schema),
           '--model',
@@ -180,11 +265,12 @@ const runClaude = async (
           '--tools',
           '',
         ];
-        const child = spawn(claudeCommand, claudeArgs, {
+        const child = commandTransport.spawn(commandTransport.command, claudeArgs, {
           cwd: repoRoot,
           env: process.env,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
+        const streamParser = streamProgress ? createClaudeStreamParser(options.onProgress) : null;
 
         const timer = setTimeout(() => {
           if (!finished) {
@@ -195,7 +281,9 @@ const runClaude = async (
         }, timeoutMs);
 
         child.stdout.on('data', (chunk) => {
-          stdout += chunk.toString();
+          const text = chunk.toString();
+          stdout += text;
+          streamParser?.push(text);
         });
         child.stderr.on('data', (chunk) => {
           stderr += chunk.toString();
@@ -228,12 +316,14 @@ const runClaude = async (
           }
 
           /** @type {any} */
-          let envelope;
-          try {
-            envelope = JSON.parse(stdout);
-          } catch {
-            reject(new Error(oneLine(stdout, 'Claude Code did not return JSON.')));
-            return;
+          let envelope = streamParser?.flush();
+          if (!envelope) {
+            try {
+              envelope = JSON.parse(stdout);
+            } catch {
+              reject(new Error(oneLine(stdout, 'Claude Code did not return JSON.')));
+              return;
+            }
           }
 
           const resultText = typeof envelope?.result === 'string' ? envelope.result : '';
@@ -277,14 +367,11 @@ const runClaude = async (
 module.exports = {
   CLAUDE_MODELS,
   CLAUDE_NOT_FOUND_CODE,
-  CLAUDE_NOT_FOUND_MESSAGE,
   CLAUDE_TIMEOUT_MS,
   DEFAULT_CLAUDE_MODEL,
   FALLBACK_CLAUDE_MODEL,
   getClaudeCommand,
-  isClaudeModelAvailabilityError,
   isClaudeNotFoundError,
-  isClaudeNotLoggedInError,
   normalizeClaudeModel,
   runClaude,
 };

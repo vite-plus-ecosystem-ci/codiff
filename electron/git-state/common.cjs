@@ -75,11 +75,13 @@ const gitBuffer = async (repoPath, args) => {
  * @param {string} repoPath
  * @param {ReadonlyArray<string>} args
  * @param {string | Buffer} input
+ * @param {{env?: NodeJS.ProcessEnv}} [options]
  * @returns {Promise<Buffer>}
  */
-const gitBufferWithInput = (repoPath, args, input) =>
+const gitBufferWithInput = (repoPath, args, input, options = {}) =>
   new Promise((resolve, reject) => {
     const child = spawn('git', ['-C', repoPath, ...args], {
+      env: options.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     /** @type {Array<Buffer>} */
@@ -89,6 +91,11 @@ const gitBufferWithInput = (repoPath, args, input) =>
 
     child.stdout.on('data', (chunk) => stdout.push(chunk));
     child.stderr.on('data', (chunk) => stderr.push(chunk));
+    child.stdin.on('error', (error) => {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EPIPE') {
+        reject(error);
+      }
+    });
     child.on('error', reject);
     child.on('close', (code) => {
       if (code === 0) {
@@ -283,12 +290,16 @@ const validateRepositoryPath = (path) => {
     throw new Error('Invalid repository path.');
   }
 
-  const normalized = normalize(path);
-  if (normalized === '..' || normalized.startsWith(`..${sep}`)) {
+  if (path.split(/[\\/]+/u).includes('..')) {
     throw new Error('Invalid repository path.');
   }
 
-  return path;
+  const normalized = normalize(path);
+  if (normalized === '.' || normalized === '..' || normalized.startsWith(`..${sep}`)) {
+    throw new Error('Invalid repository path.');
+  }
+
+  return normalized;
 };
 
 /** @param {string} repoRoot @param {string} path */
@@ -803,41 +814,31 @@ const gitOrEmpty = async (repoRoot, args) => {
 
 module.exports = {
   EAGER_TEXT_FILE_LIMIT,
-  GENERATED_DIRECTORY_NAMES,
   IMAGE_FILE_LIMIT,
   MANUAL_TEXT_FILE_LIMIT,
   MAX_UNTRACKED_INITIAL_ITEMS,
   bufferToTextFile,
   bufferToImageRevision,
-  createPatchForNewFile,
   createSection,
   createSummary,
   fileSort,
   formatBytes,
   generatedDirectoryPathspecExcludes,
   generatedDirectoryPathspecs,
-  getBlobSize,
   getFingerprint,
   getGravatarHash,
   getImageMimeType,
-  getPatch,
   getWhitespaceDiffArgs,
-  getWorkingTreeContents,
   git,
-  gitBuffer,
   gitBufferWithInput,
   gitOrEmpty,
-  isBinaryBuffer,
   normalizeStatus,
   parseStatus,
   readFileStat,
   readGitFile,
   readGitImageFile,
-  readImageSpec,
-  readIndexFile,
   readIndexImageFile,
   readWorkingTreeImageFile,
-  readWorkingTreeFile,
   summarizeContent,
   validateRepositoryPath,
 };

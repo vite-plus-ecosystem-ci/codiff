@@ -1,12 +1,5 @@
 @import '@nkzw/mdx-editor/styles.css';
-@import 'tailwindcss';
 @import './walkthrough.css';
-
-@theme {
-  --font-mono: 'Fira Code', monospace;
-  --font-sans:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-}
 
 @layer base {
   @font-face {
@@ -140,8 +133,58 @@
     color-scheme: dark;
   }
 
-  * {
+  *,
+  *::before,
+  *::after {
+    border: 0 solid;
     box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    line-height: 1.5;
+    tab-size: 4;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-size: inherit;
+    font-weight: inherit;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: inherit;
+  }
+
+  ol,
+  ul,
+  menu {
+    list-style: none;
+  }
+
+  img,
+  svg,
+  video,
+  canvas,
+  audio,
+  iframe,
+  embed,
+  object {
+    display: block;
+    vertical-align: middle;
+  }
+
+  img,
+  video {
+    height: auto;
+    max-width: 100%;
   }
 
   svg,
@@ -170,7 +213,28 @@
   }
 
   button {
+    appearance: button;
+    background: transparent;
+    color: inherit;
     font: inherit;
+  }
+
+  input,
+  select,
+  optgroup,
+  textarea {
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+  }
+
+  textarea {
+    resize: vertical;
+  }
+
+  [hidden]:not([hidden='until-found']) {
+    display: none !important;
   }
 }
 
@@ -182,6 +246,7 @@
 .app-shell {
   display: grid;
   grid-template-columns: 292px 0 minmax(0, 1fr);
+  grid-template-rows: 40px minmax(0, 1fr);
   height: 100%;
   overflow: hidden;
 }
@@ -193,7 +258,7 @@
   overflow: hidden;
 }
 
-.plan-header {
+.workspace-top-bar {
   -webkit-app-region: drag;
   -webkit-backdrop-filter: blur(28px) saturate(1.3);
   align-items: center;
@@ -202,10 +267,13 @@
   border-bottom: 1px solid var(--sidebar-border);
   display: flex;
   height: 40px;
+}
+
+.plan-header {
   padding: 0 14px 0 78px;
 }
 
-html[data-codiff-platform='darwin'] .plan-header {
+html[data-codiff-platform='darwin'] .workspace-top-bar {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
   background: var(--sidebar-vibrancy-tint);
@@ -312,12 +380,34 @@ html[data-codiff-platform='darwin'] .plan-header {
   grid-template-columns: minmax(0, 1fr) max-content;
 }
 
+.plan-file-actions {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+}
+
 .codiff-plan-editor {
   --mdx-editor-annotation-active-bg: color-mix(in srgb, var(--sidebar-ref) 32%, transparent);
   --mdx-editor-annotation-bg: color-mix(in srgb, var(--sidebar-ref) 22%, transparent);
   --mdx-editor-font-size: 14px;
   --mdx-editor-line-height: 1.55;
   --mdx-editor-padding: 8px 12px;
+  --plan-comment-highlight-0: light-dark(rgb(198 125 0 / 0.24), rgb(245 190 66 / 0.24));
+  --plan-comment-highlight-0-active: light-dark(rgb(198 125 0 / 0.4), rgb(245 190 66 / 0.4));
+  --plan-comment-highlight-1: light-dark(rgb(40 112 205 / 0.22), rgb(91 166 255 / 0.24));
+  --plan-comment-highlight-1-active: light-dark(rgb(40 112 205 / 0.38), rgb(91 166 255 / 0.4));
+  --plan-comment-highlight-2: light-dark(rgb(29 135 71 / 0.22), rgb(80 200 120 / 0.22));
+  --plan-comment-highlight-2-active: light-dark(rgb(29 135 71 / 0.38), rgb(80 200 120 / 0.38));
+  --plan-comment-highlight-3: light-dark(rgb(190 48 104 / 0.2), rgb(244 114 182 / 0.22));
+  --plan-comment-highlight-3-active: light-dark(rgb(190 48 104 / 0.36), rgb(244 114 182 / 0.38));
+  --plan-comment-highlight-4: light-dark(rgb(112 70 184 / 0.2), rgb(190 140 255 / 0.22));
+  --plan-comment-highlight-4-active: light-dark(rgb(112 70 184 / 0.36), rgb(190 140 255 / 0.38));
+  --plan-comment-highlight-5: light-dark(rgb(204 73 34 / 0.2), rgb(255 132 92 / 0.22));
+  --plan-comment-highlight-5-active: light-dark(rgb(204 73 34 / 0.36), rgb(255 132 92 / 0.38));
+  --plan-comment-highlight-6: light-dark(rgb(13 130 133 / 0.22), rgb(65 205 200 / 0.22));
+  --plan-comment-highlight-6-active: light-dark(rgb(13 130 133 / 0.38), rgb(65 205 200 / 0.38));
+  --plan-comment-highlight-7: light-dark(rgb(101 113 24 / 0.22), rgb(190 205 80 / 0.22));
+  --plan-comment-highlight-7-active: light-dark(rgb(101 113 24 / 0.38), rgb(190 205 80 / 0.38));
   display: block;
 }
 
@@ -325,6 +415,11 @@ html[data-codiff-platform='darwin'] .plan-header {
   background: var(--code-bg);
   border: 0;
   border-radius: 0 0 var(--codiff-diff-radius) var(--codiff-diff-radius);
+}
+
+.codiff-plan-editor .mdx-editor-content::selection,
+.codiff-plan-editor .mdx-editor-content *::selection {
+  background-color: var(--plan-comment-selection, var(--mdx-editor-selection));
 }
 
 .plan-comment-affordance {
@@ -400,11 +495,34 @@ html[data-codiff-platform='darwin'] .plan-header {
   padding: 0;
 }
 
+.plan-comment-composer {
+  overflow: visible;
+}
+
+.plan-comment-thread > .plan-comment-composer.review-comment-thread {
+  padding: 0;
+}
+
+.plan-comment-composer .review-comment-body,
+.plan-comment-composer .review-comment-input {
+  min-inline-size: 0;
+  width: 100%;
+}
+
+.plan-comment-input.review-comment-input {
+  padding: 8px 12px;
+}
+
 .plan-comment-thread .review-comment-body {
   background: var(--code-bg);
 }
 
 .plan-comment-thread.active .review-comment-body {
+  border-color: color-mix(in srgb, var(--sidebar-ref) 48%, var(--file-border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sidebar-ref) 18%, transparent);
+}
+
+.plan-comment-message.editing > .review-comment-body {
   border-color: color-mix(in srgb, var(--sidebar-ref) 48%, var(--file-border));
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--sidebar-ref) 18%, transparent);
 }
@@ -426,6 +544,10 @@ html[data-codiff-platform='darwin'] .plan-header {
   column-gap: 0;
   grid-template-columns: minmax(0, 1fr) 26px;
   padding-right: 0;
+}
+
+.plan-comment-header .review-comment-action {
+  height: 26px;
 }
 
 .plan-comment-heading {
@@ -583,7 +705,6 @@ html[data-codiff-platform='darwin'] .plan-header {
 
 .app-shell.sidebar-collapsed {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .app-shell.sidebar-collapsed .sidebar {
@@ -594,45 +715,199 @@ html[data-codiff-platform='darwin'] .plan-header {
   display: none;
 }
 
-.collapsed-sidebar-bar {
-  -webkit-app-region: drag;
-  -webkit-backdrop-filter: blur(28px) saturate(1.3);
-  align-items: center;
-  backdrop-filter: blur(28px) saturate(1.3);
-  background: var(--sidebar-bg);
-  border-bottom: 1px solid var(--sidebar-border);
-  border-radius: 0;
-  box-sizing: border-box;
-  corner-shape: initial;
-  display: flex;
-  gap: 8px;
+.review-top-bar {
+  display: grid;
+  gap: 12px;
   grid-column: 1 / -1;
-  height: 40px;
-  margin: 0;
+  grid-row: 1;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  min-width: 0;
   padding: 0 14px 0 78px;
 }
 
-html[data-codiff-platform='darwin'] .collapsed-sidebar-bar {
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-  background: var(--sidebar-vibrancy-tint);
-}
-
-.app-shell.window-fullscreen .collapsed-sidebar-bar {
+.share-shell .review-top-bar {
   padding-left: 14px;
 }
 
-.collapsed-sidebar-label {
+.app-shell.window-fullscreen .review-top-bar {
+  padding-left: 14px;
+}
+
+.review-top-bar-left,
+.review-top-bar-right {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.review-top-bar-left {
+  justify-content: flex-start;
+}
+
+.review-top-bar-right {
+  justify-content: flex-end;
+}
+
+.review-top-bar-repository-slot {
+  align-items: center;
   color: var(--sidebar-text);
+  display: flex;
   flex: 1;
   font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 600;
   line-height: 1.35;
   min-width: 0;
+}
+
+.review-top-bar-repository {
+  -webkit-app-region: no-drag;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.review-top-bar-branch {
+  align-items: center;
+  border-radius: 14px;
+  color: var(--muted);
+  corner-shape: squircle;
+  display: inline-flex;
+  flex: none;
+  font: 600 12px/1 var(--font-sans);
+  max-width: min(240px, 24vw);
+  overflow: hidden;
+  padding: 4px 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+a.review-top-bar-repository,
+a.review-top-bar-source {
+  color: inherit;
+  text-decoration: none;
+}
+
+a.review-top-bar-repository:hover,
+a.review-top-bar-source:hover {
+  color: var(--text);
+}
+
+a.review-top-bar-repository:focus-visible,
+a.review-top-bar-source:focus-visible {
+  border-radius: 3px;
+  outline: 1px solid var(--tree-selection-focus);
+  outline-offset: 2px;
+}
+
+.review-top-bar-source {
+  -webkit-app-region: no-drag;
+  align-items: center;
+  color: var(--sidebar-text);
+  display: inline-flex;
+  flex: none;
+  font: 600 12px/1.35 var(--font-mono);
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.review-top-bar-context {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.review-top-bar-actions {
+  -webkit-app-region: no-drag;
+  align-items: center;
+  display: flex;
+  flex: none;
+  gap: 6px;
+  min-width: 0;
+}
+
+.review-top-bar-settings,
+.review-top-bar-settings > * {
+  align-items: center;
+  display: flex;
+  flex: none;
+  width: auto;
+}
+
+.review-mode-control {
+  -webkit-app-region: no-drag;
+  align-items: center;
+  border-radius: 16px;
+  corner-shape: squircle;
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  height: 30px;
+  padding: 2px;
+}
+
+.review-top-bar-branch,
+.review-mode-control {
+  background: rgb(127 127 127 / 0.08);
+  border: 1px solid rgb(127 127 127 / 0.12);
+}
+
+.review-mode-control button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 14px;
+  color: var(--muted);
+  corner-shape: squircle;
+  cursor: pointer;
+  display: inline-flex;
+  font: 600 11px/1 var(--font-sans);
+  gap: 5px;
+  height: 24px;
+  justify-content: center;
+  min-width: 0;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.review-mode-control button:hover {
+  background: rgb(127 127 127 / 0.09);
+  color: var(--sidebar-text);
+}
+
+.review-mode-control button[aria-selected='true'] {
+  background: var(--hover-wash);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+  color: var(--sidebar-text);
+}
+
+.review-mode-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.review-mode-count {
+  background: rgb(127 127 127 / 0.16);
+  border-radius: 999px;
+  color: inherit;
+  flex: none;
+  font: 700 10px/1 var(--font-mono);
+  min-width: 16px;
+  padding: 3px 5px;
+  text-align: center;
+}
+
+.review-mode-dot {
+  background: var(--sidebar-ref);
+  border-radius: 50%;
+  flex: none;
+  height: 6px;
+  width: 6px;
 }
 
 .sidebar-toggle-button {
@@ -671,6 +946,12 @@ html[data-codiff-platform='darwin'] .collapsed-sidebar-bar {
   position: relative;
   user-select: none;
   z-index: 21;
+}
+
+.app-shell > .sidebar,
+.app-shell > .sidebar-resizer,
+.app-shell > .review {
+  grid-row: 2;
 }
 
 .sidebar-resizer::before {
@@ -944,35 +1225,6 @@ html[data-codiff-platform='darwin'] .sidebar {
   background: var(--sidebar-vibrancy-tint);
 }
 
-.sidebar-header {
-  -webkit-app-region: drag;
-  border-bottom: 1px solid var(--sidebar-border);
-  flex: none;
-  min-width: 0;
-  padding: 0 14px;
-}
-
-.sidebar-path-row {
-  align-items: center;
-  display: flex;
-  gap: 8px;
-  min-height: 38px;
-  min-width: 0;
-  padding-left: 64px;
-}
-
-.app-shell.window-fullscreen .sidebar-path-row {
-  padding-left: 0;
-}
-
-.share-shell .sidebar-path-row {
-  padding-left: 0;
-}
-
-.merge-request-shell .sidebar-path-row {
-  gap: 6px;
-}
-
 .merge-request-nav-button {
   align-items: center;
   background: transparent;
@@ -1007,96 +1259,11 @@ html[data-codiff-platform='darwin'] .sidebar {
   padding: 18px 14px;
 }
 
-.sidebar-path {
-  color: var(--sidebar-text);
-  flex: 1;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.35;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .sidebar-search-row {
   display: grid;
   flex: none;
   gap: 8px;
   padding: 10px 8px;
-}
-
-.sidebar-mode-toggle {
-  border-bottom: 1px solid var(--sidebar-border);
-  display: grid;
-  flex: none;
-  gap: 6px;
-  grid-template-columns: minmax(48px, 0.75fr) minmax(96px, 1.35fr) minmax(68px, 0.9fr);
-  padding: 0 8px;
-}
-
-.share-shell .sidebar-mode-toggle {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.merge-request-shell .sidebar-mode-toggle {
-  grid-template-columns: minmax(42px, 0.65fr) minmax(88px, 1.05fr) minmax(102px, 1.3fr);
-}
-
-.sidebar-mode-toggle button {
-  -webkit-app-region: no-drag;
-  background: transparent;
-  border: 0;
-  border-radius: 24px 24px 0 0;
-  color: var(--muted);
-  corner-shape: squircle;
-  cursor: pointer;
-  display: inline-flex;
-  gap: 5px;
-  font: 600 12px/1.35 var(--font-sans);
-  height: 30px;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  padding: 0 8px;
-}
-
-.sidebar-mode-toggle button span:first-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sidebar-tab-count {
-  background: rgb(127 127 127 / 0.16);
-  border-radius: 999px;
-  color: var(--muted);
-  flex: none;
-  font: 700 10px/1 var(--font-mono);
-  min-width: 16px;
-  padding: 3px 5px;
-  text-align: center;
-}
-
-.sidebar-mode-toggle button[aria-selected='true'] .sidebar-tab-count {
-  background: rgb(127 127 127 / 0.22);
-  color: var(--sidebar-text);
-}
-
-.sidebar-mode-toggle button:hover:not(:disabled) {
-  background: rgb(127 127 127 / 0.1);
-  color: var(--sidebar-text);
-}
-
-.sidebar-mode-toggle button[aria-selected='true'] {
-  background: rgb(127 127 127 / 0.14);
-  color: var(--sidebar-text);
-}
-
-.sidebar-mode-toggle button:disabled {
-  cursor: default;
-  opacity: 0.45;
 }
 
 .sidebar-settings-bar {
@@ -1107,6 +1274,11 @@ html[data-codiff-platform='darwin'] .sidebar {
   height: 38px;
   min-height: 38px;
   padding: 4px 8px;
+}
+
+.sidebar-settings-line-count {
+  font: 600 11px/1 var(--font-mono);
+  margin-left: auto;
 }
 
 .sidebar-search {
@@ -1330,9 +1502,42 @@ html[data-codiff-platform='darwin'] .sidebar {
   font-weight: 700;
 }
 
-.sidebar-walkthrough-status.codex strong {
+.sidebar-walkthrough-status.codex .walkthrough-progress {
   animation: codex-loading-pulse 1600ms ease-in-out infinite;
+  color: var(--sidebar-text);
   user-select: none;
+}
+
+.walkthrough-progress {
+  align-items: baseline;
+  display: flex;
+  font-weight: 400;
+  justify-content: center;
+  min-width: 0;
+  width: 100%;
+}
+
+.walkthrough-progress-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.walkthrough-progress-timer {
+  flex: 0 0 2ch;
+  font-variant-numeric: tabular-nums;
+  margin-left: 0.5ch;
+  text-align: left;
+  visibility: hidden;
+  width: 2ch;
+}
+
+.walkthrough-progress-timer.visible {
+  visibility: visible;
+}
+
+.walkthrough-progress .walkthrough-progress-timer {
+  overflow: visible;
 }
 
 .sidebar-comment-list.history-list {
@@ -1406,12 +1611,13 @@ html[data-codiff-platform='darwin'] .sidebar {
 }
 
 .review-source-loading {
-  background: var(--code-bg);
+  background: var(--app-bg);
   width: 100%;
 }
 
 .code-view {
   --codiff-diff-radius: 28px;
+  background: var(--app-bg);
   contain: strict;
   display: block;
   flex: 1;
@@ -1424,208 +1630,6 @@ html[data-codiff-platform='darwin'] .sidebar {
   will-change: scroll-position;
   width: 100%;
   padding-inline: 12px;
-}
-
-/* Commit details */
-.commit-details-panel {
-  background: transparent;
-  color: var(--text);
-  margin: 0;
-  padding: 14px;
-  white-space: normal;
-}
-
-.codiff-commit-details-header {
-  flex-wrap: wrap;
-  height: auto;
-  min-height: 54px;
-}
-
-.commit-details-copy {
-  -webkit-app-region: no-drag;
-  align-items: center;
-  background: color-mix(in srgb, var(--code-bg) 86%, transparent);
-  border: 1px solid rgb(127 127 127 / 0.18);
-  border-radius: 15px;
-  box-shadow:
-    0 0 0 1px rgb(255 255 255 / 0) inset,
-    0 10px 32px -24px rgb(0 0 0 / 0),
-    0 8px 20px -16px rgb(0 0 0 / 0);
-  color: var(--sidebar-ref);
-  corner-shape: squircle;
-  cursor: pointer;
-  display: inline-flex;
-  font: 700 12px/1 var(--font-mono);
-  gap: 7px;
-  justify-content: center;
-  min-height: 28px;
-  padding: 0 10px;
-  transform: scale(1);
-  transition:
-    background 160ms ease,
-    box-shadow 250ms ease,
-    transform 250ms cubic-bezier(0.34, 1.56, 0.64, 1);
-  white-space: nowrap;
-}
-
-.commit-details-copy:hover {
-  background: rgb(127 127 127 / 0.11);
-  box-shadow:
-    0 10px 32px -24px rgb(0 0 0 / 0.92),
-    0 8px 20px -16px rgb(0 0 0 / 0.82);
-  color: var(--sidebar-ref);
-  transform: scale(1.05);
-}
-
-.commit-details-copy:active {
-  transform: scale(0.95);
-}
-
-.commit-details-copy code {
-  font: inherit;
-}
-
-.commit-details-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0;
-  min-width: 0;
-}
-
-.commit-details-stats span {
-  background: rgb(127 127 127 / 0.11);
-  border-radius: 14px;
-  color: var(--muted);
-  corner-shape: squircle;
-  font: 700 11px/1 var(--font-mono);
-  padding: 6px 8px;
-  white-space: nowrap;
-}
-
-.commit-details-stats .added {
-  color: var(--diff-addition);
-}
-
-.commit-details-stats .deleted {
-  color: var(--diff-deletion);
-}
-
-/* Commit details metadata */
-.commit-details-section {
-  border-top: 1px solid var(--file-border);
-  padding: 12px 0 0;
-}
-
-.commit-details-panel > .commit-details-section:first-child,
-.commit-details-panel > .commit-details-grid:first-child {
-  border-top: 0;
-  padding-top: 0;
-}
-
-.commit-details-section + .commit-details-section,
-.commit-details-grid + .commit-details-section,
-.commit-details-section + .commit-details-grid {
-  margin-top: 12px;
-}
-
-.commit-details-section h3 {
-  color: var(--muted);
-  font: 800 10px/1 var(--font-sans);
-  letter-spacing: 0;
-  margin: 0 0 8px;
-  text-transform: uppercase;
-}
-
-.commit-details-message {
-  background: var(--inline-code-bg);
-  border-radius: 12px;
-  color: var(--text);
-  corner-shape: squircle;
-  font: 12px/1.55 var(--font-mono);
-  margin: 0;
-  padding: 9px 10px;
-  white-space: pre-wrap;
-}
-
-.commit-details-empty,
-.commit-details-signature {
-  color: var(--muted);
-  display: block;
-  font: 13px/1.45 var(--font-sans);
-  margin: 0;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.commit-details-grid {
-  border-top: 1px solid var(--file-border);
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
-  padding-top: 12px;
-}
-
-.commit-details-person {
-  align-items: start;
-  display: grid;
-  gap: 2px 7px;
-  grid-template-columns: auto minmax(0, 1fr);
-  min-width: 0;
-}
-
-.commit-details-cell {
-  min-width: 0;
-}
-
-.commit-details-signature-cell {
-  grid-column: 1 / -1;
-}
-
-.commit-details-person > span:first-child,
-.commit-details-cell h3 {
-  color: var(--muted);
-  font: 800 10px/1 var(--font-sans);
-  grid-column: 1 / -1;
-  letter-spacing: 0;
-  margin: 0 0 8px;
-  text-transform: uppercase;
-}
-
-.commit-details-person-body {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.commit-details-person strong {
-  font: 700 13px/1.25 var(--font-sans);
-  overflow-wrap: anywhere;
-}
-
-.commit-details-person small,
-.commit-details-person time {
-  color: var(--muted);
-  font: 12px/1.25 var(--font-sans);
-  overflow-wrap: anywhere;
-}
-
-.commit-details-token-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.commit-details-token-row code {
-  background: var(--inline-code-bg);
-  border-radius: 8px;
-  color: var(--text);
-  corner-shape: squircle;
-  font: 600 11px/1 var(--font-mono);
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  padding: 5px 7px;
 }
 
 .codiff-header-toggle.codiff-header-toggle-static {
@@ -1728,6 +1732,22 @@ html[data-codiff-platform='darwin'] .sidebar {
   font-size: 14px;
 }
 
+/* The PR/commit description card renders in CodeView's non-virtualized header
+   region at the top of the scroll content; the host div inherits the
+   scroller's inline padding, so only vertical spacing is needed here. */
+.code-view [data-diffs-code-view-header] .codiff-code-view-source-description {
+  margin-top: 11px;
+}
+
+/* The title bar sticks to the top of the scroller while the card is in view
+   and unsticks naturally as the card scrolls past (sticky cannot escape the
+   panel; `overflow: clip` does not create a scroll container). */
+.code-view [data-diffs-code-view-header] .codiff-source-description-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
 .codiff-source-description-panel-body {
   background: var(--code-bg);
 }
@@ -1770,6 +1790,10 @@ html[data-codiff-platform='darwin'] .sidebar {
 .source-description-author-header.review-comment-header {
   font: 14px/1.3 var(--font-sans);
   grid-template-columns: minmax(0, 1fr);
+}
+
+.source-description-author-header.without-description {
+  border-bottom: 0;
 }
 
 .source-description-body.review-comment-body {
@@ -2019,6 +2043,12 @@ html[data-codiff-platform='darwin'] .sidebar {
   min-width: 0;
 }
 
+.general-comment-sign-in {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+}
+
 .general-comment-card.review-comment,
 .general-comment-composer .review-comment {
   padding-right: min(48px, 4vw);
@@ -2120,86 +2150,6 @@ html[data-codiff-platform='darwin'] .sidebar {
   flex: none;
   overflow: visible;
   padding-left: 0;
-}
-
-.commit-details-trailers {
-  display: grid;
-  gap: 6px 10px;
-  grid-template-columns: max-content minmax(0, 1fr);
-  margin: 0;
-}
-
-.commit-details-trailers dt {
-  color: var(--muted);
-  font: 700 12px/1.35 var(--font-sans);
-}
-
-.commit-details-trailers dd {
-  font: 13px/1.35 var(--font-sans);
-  margin: 0;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-/* Commit details files */
-.commit-details-files {
-  display: grid;
-  gap: 4px;
-}
-
-.commit-details-file {
-  -webkit-app-region: no-drag;
-  align-items: center;
-  background: transparent;
-  border: 0;
-  border-radius: 8px;
-  color: var(--text);
-  corner-shape: squircle;
-  cursor: pointer;
-  display: grid;
-  gap: 8px;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  min-width: 0;
-  padding: 4px 6px;
-  text-align: left;
-}
-
-.commit-details-file:hover {
-  background: rgb(127 127 127 / 0.1);
-}
-
-.commit-details-file:disabled {
-  cursor: default;
-  opacity: 0.48;
-}
-
-.commit-details-file:disabled:hover {
-  background: transparent;
-}
-
-.commit-details-file .codiff-status-badge {
-  font-size: 11px;
-  padding: 5px 8px;
-}
-
-.commit-details-file code {
-  font: 12px/1.35 var(--font-mono);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.commit-details-file-meta,
-.commit-details-file-line-count {
-  color: var(--muted);
-  font: 700 12px/1 var(--font-mono);
-  white-space: nowrap;
-}
-
-.commit-details-file-line-count {
-  display: inline-flex;
-  gap: 6px;
 }
 
 .code-view diffs-container {
@@ -2738,8 +2688,9 @@ html[data-codiff-platform='darwin'] .sidebar {
 
 .codiff-header-toggle,
 .codiff-source-description-collapse-button,
+.codiff-file-comment-button,
 .codiff-markdown-button,
-.codiff-open-button,
+.codiff-button,
 .codiff-viewed-button,
 .codiff-copy-path-button {
   -webkit-app-region: no-drag;
@@ -2781,6 +2732,12 @@ html[data-codiff-platform='darwin'] .sidebar {
 
 .codiff-copy-path-button.copied {
   color: var(--viewed);
+}
+
+.codiff-button.plan-download-button {
+  height: 30px;
+  padding: 0;
+  width: 30px;
 }
 
 .codiff-copy-path-icon {
@@ -2826,8 +2783,9 @@ html[data-codiff-platform='darwin'] .sidebar {
 
 .codiff-header-toggle:hover:not(:has(.codiff-copy-path-button:hover)) .codiff-chevron-box,
 .codiff-source-description-collapse-button:hover .codiff-chevron-box,
+.codiff-file-comment-button:hover,
 .codiff-markdown-button:hover,
-.codiff-open-button:hover:not(:disabled),
+.codiff-button:hover:not(:disabled),
 .codiff-viewed-button:hover {
   background: rgb(127 127 127 / 0.11);
 }
@@ -2890,10 +2848,12 @@ html[data-codiff-platform='darwin'] .sidebar {
 
 .codiff-status-badge,
 .codiff-section-badge,
+.codiff-generated-badge,
 .codiff-line-count,
+.codiff-file-comment-button,
 .codiff-load-button,
 .codiff-markdown-button,
-.codiff-open-button,
+.codiff-button,
 .codiff-viewed-button {
   border-radius: 14px;
   corner-shape: squircle;
@@ -2902,11 +2862,17 @@ html[data-codiff-platform='darwin'] .sidebar {
 
 .codiff-status-badge,
 .codiff-section-badge,
+.codiff-generated-badge,
 .codiff-line-count {
   background: rgb(127 127 127 / 0.11);
   color: var(--muted);
   padding: 5px 9px;
   white-space: nowrap;
+}
+
+.codiff-generated-badge {
+  background: color-mix(in srgb, var(--sidebar-ref) 15%, transparent);
+  color: var(--sidebar-ref);
 }
 
 .codiff-line-count {
@@ -2941,7 +2907,7 @@ html[data-codiff-platform='darwin'] .sidebar {
 
 .codiff-markdown-button,
 .codiff-load-button,
-.codiff-open-button,
+.codiff-file-comment-button,
 .codiff-viewed-button {
   border: 1px solid rgb(127 127 127 / 0.18);
   flex: none;
@@ -2949,6 +2915,10 @@ html[data-codiff-platform='darwin'] .sidebar {
   min-height: 30px;
   padding: 0 12px;
   white-space: nowrap;
+}
+
+.codiff-file-comment-button {
+  gap: 5px;
 }
 
 .codiff-markdown-button.active {
@@ -2966,30 +2936,83 @@ html[data-codiff-platform='darwin'] .sidebar {
   opacity: 0.72;
 }
 
-.codiff-open-button {
+.codiff-button {
   box-shadow:
     0 0 0 1px rgb(255 255 255 / 0) inset,
     0 10px 32px -24px rgb(0 0 0 / 0),
     0 8px 20px -16px rgb(0 0 0 / 0);
+  flex: none;
+  gap: 7px;
   transform: scale(1);
   transition:
     background 160ms ease,
     box-shadow 250ms ease,
     transform 250ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  white-space: nowrap;
 }
 
-.codiff-open-button:hover:not(:disabled) {
+.codiff-button-size-default {
+  min-height: 30px;
+  padding: 0 12px;
+}
+
+.codiff-button-size-sm {
+  min-height: 26px;
+  padding: 0 9px;
+}
+
+.codiff-button-size-lg {
+  min-height: 36px;
+  padding: 0 16px;
+}
+
+.codiff-button-size-icon {
+  height: 30px;
+  padding: 0;
+  width: 30px;
+}
+
+.codiff-button-default,
+.codiff-button-outline {
+  border: 1px solid rgb(127 127 127 / 0.18);
+}
+
+.codiff-button-secondary {
+  background: var(--hover-wash);
+  border: 1px solid transparent;
+}
+
+.codiff-button-destructive {
+  border: 1px solid color-mix(in srgb, var(--danger) 38%, transparent);
+  color: var(--danger);
+}
+
+.codiff-button-ghost,
+.codiff-button-link {
+  border: 1px solid transparent;
+}
+
+.codiff-button-link {
+  box-shadow: none;
+  color: var(--codiff-link);
+}
+
+.codiff-button-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.codiff-button:hover:not(:disabled) {
   box-shadow:
     0 10px 32px -24px rgb(0 0 0 / 0.92),
     0 8px 20px -16px rgb(0 0 0 / 0.82);
   transform: scale(1.05);
 }
 
-.codiff-open-button:active:not(:disabled) {
+.codiff-button:active:not(:disabled):not(:has(.review-submit-toggle:active)) {
   transform: scale(0.95);
 }
 
-.codiff-open-button:disabled {
+.codiff-button:disabled {
   color: var(--muted);
   cursor: default;
   opacity: 0.55;
@@ -3082,7 +3105,7 @@ diffs-container .review-comment-thread {
   width: 100%;
 }
 
-.gravatar {
+.avatar {
   background: rgb(127 127 127 / 0.14);
   border-radius: var(--review-avatar-radius, 24px);
   color: var(--muted);
@@ -3093,24 +3116,24 @@ diffs-container .review-comment-thread {
   object-fit: cover;
 }
 
-.review-comment > .gravatar {
+.review-comment > .avatar {
   align-self: start;
   margin-top: 1px;
 }
 
-.gravatar.medium {
+.avatar.medium {
   font: 700 12px/1 var(--font-sans);
   height: 34px;
   width: 34px;
 }
 
-.gravatar.small {
+.avatar.small {
   font: 700 7px/1 var(--font-sans);
   height: 14px;
   width: 14px;
 }
 
-.gravatar.fallback {
+.avatar.fallback {
   align-items: center;
 }
 
@@ -3139,6 +3162,68 @@ diffs-container .review-comment-thread {
 
 .review-comment-body.codex {
   overflow: hidden;
+}
+
+.code-quality-finding {
+  --code-quality-color: var(--muted);
+}
+
+.code-quality-finding[data-severity='blocker'],
+.code-quality-finding[data-severity='critical'] {
+  --code-quality-color: var(--danger);
+}
+
+.code-quality-finding[data-severity='major'],
+.code-quality-finding[data-severity='minor'] {
+  --code-quality-color: var(--sidebar-ref);
+}
+
+.code-quality-finding-header > svg {
+  color: var(--code-quality-color);
+  flex: none;
+}
+
+.code-quality-finding-header .code-quality-finding-severity,
+.code-quality-finding-header .code-quality-finding-new {
+  border-radius: 8px;
+  corner-shape: squircle;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+}
+
+.code-quality-finding-header .code-quality-finding-severity {
+  border: 1px solid color-mix(in srgb, var(--code-quality-color) 55%, var(--file-border));
+  color: var(--code-quality-color);
+}
+
+.code-quality-finding-header .code-quality-finding-new {
+  border: 1px solid var(--file-border);
+  color: var(--muted);
+}
+
+.code-quality-finding-content {
+  color: var(--text);
+  font: 13px/1.45 var(--font-sans);
+  min-height: 76px;
+  min-width: 0;
+  padding: 8px 12px;
+  user-select: text;
+  white-space: normal;
+}
+
+.code-quality-finding-content p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.code-quality-finding-content span {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .review-comment-header {
@@ -3493,11 +3578,148 @@ diffs-container .review-comment-thread {
   color: var(--text);
 }
 
+.review-submit-action {
+  flex: none;
+  position: relative;
+}
+
+.codiff-source-description-header:has(.review-submit-popover) {
+  position: relative;
+  z-index: 13;
+}
+
+.review-submit-button:not(.close) {
+  cursor: default;
+  gap: 0;
+  padding: 0;
+}
+
+.review-submit-primary,
+.review-submit-toggle {
+  align-items: center;
+  align-self: stretch;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0;
+}
+
+.review-submit-primary {
+  gap: 7px;
+  padding: 0 9px 0 11px;
+}
+
+.review-submit-toggle {
+  width: 28px;
+}
+
+.review-submit-primary:focus-visible,
+.review-submit-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--tree-selection-focus) 70%, transparent);
+  outline-offset: -2px;
+}
+
+.review-submit-divider {
+  color: color-mix(in srgb, currentColor 32%, transparent);
+  display: block;
+  font-weight: 400;
+  line-height: 1;
+  user-select: none;
+}
+
+.review-submit-chevron {
+  display: block;
+  transition: transform 160ms ease;
+}
+
+.review-submit-chevron.expanded {
+  transform: rotate(180deg);
+}
+
+.review-submit-button[data-disabled='true'] {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.review-submit-button[data-disabled='true']:hover {
+  background: transparent;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0) inset,
+    0 10px 32px -24px rgb(0 0 0 / 0),
+    0 8px 20px -16px rgb(0 0 0 / 0);
+  transform: none;
+}
+
+.review-submit-primary:disabled,
+.review-submit-toggle:disabled {
+  cursor: default;
+}
+
 .review-submit-button.approve {
   color: var(--viewed);
 }
 
+.review-submit-button.comment {
+  color: var(--text);
+}
+
 .review-submit-button.close {
+  color: var(--text);
+}
+
+.review-submit-popover {
+  animation: review-submit-popover-in 120ms ease;
+  background: var(--code-bg);
+  border: 1px solid var(--file-border);
+  border-radius: 18px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.16);
+  color: var(--text);
+  corner-shape: squircle;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  transform-origin: top right;
+  width: min(380px, calc(100vw - 24px));
+  z-index: 80;
+}
+
+@keyframes review-submit-popover-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+.review-submit-popover-editor.review-comment-markdown-editor,
+.review-submit-popover-editor.review-comment-markdown-editor .mdx-editor-content {
+  min-height: 116px;
+}
+
+.review-submit-popover-editor .review-comment-input {
+  padding: 12px;
+}
+
+.review-submit-popover-footer {
+  align-items: center;
+  border-top: 1px solid var(--file-border);
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px;
+}
+
+.review-submit-popover-submit.approve {
+  color: var(--viewed);
+}
+
+.review-submit-popover-submit.comment {
   color: var(--text);
 }
 
@@ -3556,6 +3778,7 @@ diffs-container .review-comment-thread {
 .loading {
   color: var(--muted);
   font-family: var(--font-mono);
+  font-style: italic;
   font-size: 13px;
   transform: translateY(-12px);
   user-select: none;
@@ -3669,20 +3892,10 @@ diffs-container .review-comment-thread {
 
   .codiff-markdown-button,
   .codiff-load-button,
-  .codiff-open-button,
+  .codiff-file-comment-button,
+  .codiff-button,
   .codiff-viewed-button {
     padding-inline: 9px;
-  }
-
-  .commit-details-panel {
-    padding: 12px;
-  }
-}
-
-@media (max-width: 620px) {
-  .commit-details-grid,
-  .commit-details-file {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -3939,25 +4152,19 @@ diffs-container .review-comment-thread {
   padding: 3px 6px;
 }
 
-@container sidebar (max-width: 260px) {
-  .sidebar-mode-toggle {
-    gap: 4px;
-    grid-template-columns: minmax(42px, 0.75fr) minmax(82px, 1.35fr) minmax(58px, 0.9fr);
-    padding-inline: 8px;
+@media (max-width: 720px) {
+  .review-top-bar-repository-slot,
+  .review-top-bar-context {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .review-mode-control button {
+    padding-inline: 7px;
   }
 
-  .merge-request-shell .sidebar-mode-toggle {
-    grid-template-columns: minmax(40px, 0.65fr) minmax(78px, 1.05fr) minmax(88px, 1.3fr);
-  }
-
-  .sidebar-mode-toggle button {
-    font-size: 11px;
-    gap: 4px;
-    padding-inline: 4px;
-  }
-
-  .sidebar-tab-count {
-    min-width: 14px;
-    padding-inline: 4px;
+  .review-mode-label {
+    display: none;
   }
 }

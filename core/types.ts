@@ -31,6 +31,7 @@ export type GitFileStatus = 'added' | 'deleted' | 'modified' | 'renamed' | 'untr
 
 export type ChangedFile = {
   fingerprint: string;
+  generated?: boolean;
   oldPath?: string;
   path: string;
   sections: ReadonlyArray<DiffSection>;
@@ -57,6 +58,7 @@ export type PullRequestReviewActionStatus = {
 export type PullRequestReviewStatus = {
   approve?: PullRequestReviewActionStatus;
   close?: PullRequestReviewActionStatus;
+  comment?: PullRequestReviewActionStatus;
   requestChanges?: PullRequestReviewActionStatus;
 };
 
@@ -72,6 +74,17 @@ export type PullRequestMergeCheck = {
 export type PullRequestMergeOptions = {
   removeSourceBranch: boolean;
   squash: boolean;
+};
+
+export type PullRequestCodeQualityFinding = {
+  description: string;
+  engineName?: string;
+  filePath: string;
+  fingerprint: string;
+  lineNumber: number;
+  severity: 'blocker' | 'critical' | 'info' | 'major' | 'minor' | 'unknown';
+  status: 'existing' | 'new' | 'resolved';
+  url?: string;
 };
 
 export type PullRequestMergeState = {
@@ -110,6 +123,20 @@ export type ReviewSource =
       /** Target branch the current branch was compared against. */
       ref: string;
       type: 'branch-diff';
+    }
+  | {
+      /**
+       * Resolved base commit for the branch part of the comparison. Optional
+       * because the CLI can construct this source from just a branch name
+       * (`codiff main`), before merge-base resolution happens; the resolved
+       * state's `source` always carries a concrete value.
+       */
+      baseRef?: string;
+      /** Resolved head commit for the branch part of the comparison. See {@link baseRef}. */
+      headRef?: string;
+      /** Target branch the current branch was compared against. */
+      ref: string;
+      type: 'branch-working-tree';
     }
   | {
       /** Base ref (left side). For symmetric ranges the diff starts at its merge-base with head. */
@@ -202,6 +229,7 @@ export type RepositoryHistory = {
 
 export type RepositoryState = {
   branch: string | null;
+  codeQualityFindings?: ReadonlyArray<PullRequestCodeQualityFinding>;
   commitMetadata?: CommitMetadata;
   files: ReadonlyArray<ChangedFile>;
   generalComments?: ReadonlyArray<PullRequestGeneralCommentThread>;
@@ -215,6 +243,12 @@ export type RepositoryState = {
 export type CodiffFeatureFlags = {
   planSharing: boolean;
   walkthroughSharing: boolean;
+};
+
+export type WalkthroughProgressPhase = 'agent-generation' | 'response-received';
+
+export type WalkthroughProgressEvent = {
+  phase: WalkthroughProgressPhase;
 };
 
 export type CodiffMarkdownDocument = {
@@ -247,11 +281,14 @@ export type PlanCommentAuthor = {
   email?: string;
   id: string;
   name: string;
+  username?: string;
 };
 
 export type PlanCommentMessage = {
   author: PlanCommentAuthor;
   body: string;
+  canDelete?: boolean;
+  canEdit?: boolean;
   createdAt: string;
   id: string;
   updatedAt: string;
@@ -259,6 +296,8 @@ export type PlanCommentMessage = {
 
 export type PlanCommentThread = {
   anchor: MarkdownAnnotationAnchor;
+  canReply?: boolean;
+  canResolve?: boolean;
   createdAt: string;
   createdBy: PlanCommentAuthor;
   id: string;
@@ -285,6 +324,7 @@ export type PlanHandoffStatus = 'closed' | 'done';
 
 export type SharedWalkthroughSnapshot = {
   branch: string | null;
+  codeQualityFindings?: ReadonlyArray<PullRequestCodeQualityFinding>;
   codiffVersion: string;
   exportedAt: string;
   files: ReadonlyArray<ChangedFile>;
@@ -324,6 +364,8 @@ export type SharedPlanSnapshot = {
   };
   version: 1;
 };
+
+export type WalkthroughShareManifestV1 = SharedWalkthroughSnapshot;
 
 export type ShareResult =
   | {
@@ -560,6 +602,16 @@ export type NarrativeWalkthroughResult =
       status: 'unavailable';
     };
 
+export type NarrativeWalkthroughRequestOptions = {
+  /** Ignore an exact cache hit and replace it with a newly generated result. */
+  force?: boolean;
+  /**
+   * The walkthrough currently shown. Regeneration uses its prose as continuity
+   * while re-anchoring every stop against the current diff.
+   */
+  previousWalkthrough?: NarrativeWalkthrough;
+};
+
 /** Commit the selected files from a walkthrough's staging set. */
 export type WalkthroughCommitRequest = {
   /** Body of the commit message (everything after the subject line). */
@@ -610,11 +662,12 @@ export type WalkthroughCommitMessageResult =
 
 export type ReviewAssistantRequest = {
   comment: {
+    anchor?: 'file' | 'line';
     body: string;
     filePath: string;
-    lineNumber: number;
+    lineNumber?: number;
     sectionId: string;
-    side: 'additions' | 'deletions';
+    side?: 'additions' | 'deletions';
     startLineNumber?: number;
     startSide?: 'additions' | 'deletions';
   };
@@ -644,6 +697,7 @@ export type GitIdentity = {
   email: string;
   gravatarUrl?: string;
   name: string;
+  username?: string;
 };
 
 export type DiffSectionContentRequest = {
@@ -700,11 +754,18 @@ export type CodiffPreferences = {
   wordWrap: boolean;
 };
 
+export type ReviewPreferences = Pick<
+  CodiffPreferences,
+  'codeFontFamily' | 'codeFontSize' | 'diffStyle' | 'showWhitespace' | 'theme' | 'wordWrap'
+>;
+
 export type PullRequestReviewComment = {
+  anchor?: 'file' | 'line';
   body: string;
   filePath: string;
-  lineNumber: number;
-  side: 'additions' | 'deletions';
+  lineNumber?: number;
+  sectionId?: string;
+  side?: 'additions' | 'deletions';
   startLineNumber?: number;
   startSide?: 'additions' | 'deletions';
   threadId?: string;
@@ -712,7 +773,9 @@ export type PullRequestReviewComment = {
 
 export type PullRequestExistingReviewComment = PullRequestReviewComment & {
   author: ReviewAuthor;
+  canDelete?: boolean;
   canEdit?: boolean;
+  canReplyThread?: boolean;
   canResolveThread?: boolean;
   id: string;
   isOutdated?: boolean;
@@ -724,6 +787,7 @@ export type PullRequestExistingReviewComment = PullRequestReviewComment & {
 export type PullRequestGeneralComment = {
   author: ReviewAuthor;
   body: string;
+  canDelete?: boolean;
   canEdit?: boolean;
   id: string;
   submittedAt?: string;
@@ -731,12 +795,14 @@ export type PullRequestGeneralComment = {
 };
 
 export type PullRequestGeneralCommentThread = {
+  canReply?: boolean;
+  canResolve?: boolean;
   comments: ReadonlyArray<PullRequestGeneralComment>;
   id: string;
   isResolved?: boolean;
 };
 
-export type PullRequestReviewEvent = 'APPROVE' | 'REQUEST_CHANGES';
+export type PullRequestReviewEvent = 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES';
 
 export type SubmitPullRequestCommentRequest = {
   comment: PullRequestReviewComment;

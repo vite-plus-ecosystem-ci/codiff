@@ -51,8 +51,12 @@ Review a GitHub pull request or GitLab merge request using the current repositor
 
 ```bash
 codiff pr 75
+codiff pr owner:my-feature-branch
 codiff mr 23
 ```
+
+Branch lookup uses `gh` and selects an open GitHub pull request. Include `owner:` for pull
+requests from forks.
 
 Full GitHub and GitLab review URLs are also supported. GitLab hosts and nested project paths are
 derived from the URL or local Git remote and authenticated through `glab`; Codiff does not require
@@ -126,7 +130,7 @@ counts; when it is `false`, Codiff hides those changes from the working-tree rev
     "diffStyle": "split",
     "editorCommand": "",
     "lastRepositoryPath": "",
-    "openAIModel": "gpt-5.3-codex-spark",
+    "openAIModel": "gpt-5.6-terra",
     "opencodeModel": "opencode-default",
     "showWhitespace": false,
     "theme": "system",
@@ -143,7 +147,7 @@ counts; when it is `false`, Codiff hides those changes from the working-tree rev
     "closeSearch": "Escape",
     "submitComment": "Mod+Enter",
     "discardComment": "Escape",
-    "toggleSidebar": "Mod+b",
+    "toggleSidebar": "Mod+Shift+b",
   },
 }
 ```
@@ -178,6 +182,12 @@ application menu:
 - `opencode` — the [OpenCode](https://opencode.ai/) CLI, configured with
   `settings.opencodeModel`.
 - `pi` — the Pi CLI, using its configured default model.
+
+Codex walkthroughs default to GPT-5.6 Terra with low reasoning. The Model menu also offers Sol
+with medium reasoning for deeper analysis and Luna with medium reasoning for faster work. If a
+selected GPT-5.6 model is unavailable, Codiff retries with Terra when applicable and then GPT-5.5,
+persisting the first model that succeeds. Walkthroughs with at least 100 reviewable hunks use
+GPT-5.5 with low reasoning when Terra is the configured default.
 
 Install the backend you want and verify it is available before using `codiff -w`:
 
@@ -255,3 +265,9 @@ vp check
 vp test
 vp build
 ```
+
+## Contributing
+
+Found an issue, or want to improve something? See the
+[contributing guide](CONTRIBUTING.md) for local application and public web
+service setup.

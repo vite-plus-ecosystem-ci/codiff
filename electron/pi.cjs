@@ -1,8 +1,8 @@
 // @ts-check
 
-const { spawn } = require('node:child_process');
 const { homedir } = require('node:os');
 const { join } = require('node:path');
+const { resolveAgentCommandTransport } = require('./agent-command.cjs');
 const {
   buildSchemaReminder,
   findExecutableOnPath,
@@ -24,6 +24,7 @@ const PI_NOT_FOUND_MESSAGE =
 /**
  * @typedef {{
  *   fallbackModel?: string;
+ *   commandTransport?: import('./agent-command.cjs').AgentCommandTransport;
  *   model?: string;
  *   onModelFallback?: (fallbackModel: string, originalModel: string) => Promise<void> | void;
  *   onPartialText?: (delta: string) => void;
@@ -133,7 +134,7 @@ const runPi = async (
       let stdout = '';
       let finished = false;
 
-      const piCommand = getPiCommand();
+      const commandTransport = resolveAgentCommandTransport(options.commandTransport, getPiCommand);
       const piArgs = [
         '--print',
         '--no-session',
@@ -144,7 +145,7 @@ const runPi = async (
         'read,grep,find,ls',
         ...(model === DEFAULT_PI_MODEL ? [] : ['--model', model]),
       ];
-      const child = spawn(piCommand, piArgs, {
+      const child = commandTransport.spawn(commandTransport.command, piArgs, {
         cwd: repoRoot,
         env: process.env,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -208,11 +209,9 @@ module.exports = {
   FALLBACK_PI_MODEL,
   PI_MODELS,
   PI_NOT_FOUND_CODE,
-  PI_NOT_FOUND_MESSAGE,
   PI_TIMEOUT_MS,
   getPiCommand,
   isPiNotFoundError,
   normalizePiModel,
-  normalizePiOutput,
   runPi,
 };

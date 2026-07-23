@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import process from 'node:process';
 import packageJson from '../package.json' with { type: 'json' };
-import { parseArguments, resolvePullRequestUrl } from './arguments.js';
+import { getReviewSource, parseArguments, resolvePullRequestTargetUrl } from './arguments.js';
 
 const require = createRequire(import.meta.url);
 const { shareWalkthroughFile } = require('../electron/headless-walkthrough-share.cjs');
@@ -80,32 +80,28 @@ if (planFilePath && (!existsSync(planFilePath) || !/\.md$/i.test(planFilePath)))
 
 const parsed = parseArguments(forwardedArgs);
 let pullRequestUrl = parsed.pullRequestUrl;
-if (!pullRequestUrl && parsed.pullRequestNumber != null) {
-  pullRequestUrl = resolvePullRequestUrl(
-    parsed.requestedPath,
-    parsed.pullRequestNumber,
-    parsed.pullRequestProvider,
-  );
+if (!pullRequestUrl && (parsed.pullRequestBranch || parsed.pullRequestNumber != null)) {
+  try {
+    pullRequestUrl = resolvePullRequestTargetUrl({
+      branch: parsed.pullRequestBranch,
+      number: parsed.pullRequestNumber,
+      provider: parsed.pullRequestProvider,
+      repositoryPath: parsed.requestedPath,
+      url: pullRequestUrl,
+    });
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
 }
 
-const source = parsed.range
-  ? {
-      base: parsed.range.base,
-      head: parsed.range.head,
-      symmetric: parsed.range.symmetric,
-      type: 'range',
-    }
-  : pullRequestUrl
-    ? {
-        ...(parsed.pullRequestProvider ? { provider: parsed.pullRequestProvider } : {}),
-        type: 'pull-request',
-        url: pullRequestUrl,
-      }
-    : parsed.commitRef
-      ? { ref: parsed.commitRef, type: 'commit' }
-      : parsed.branchRef
-        ? { ref: parsed.branchRef, type: 'branch' }
-        : { type: 'working-tree' };
+const source = getReviewSource({
+  branchRef: parsed.branchRef,
+  commitRef: parsed.commitRef,
+  pullRequestProvider: parsed.pullRequestProvider,
+  pullRequestUrl,
+  range: parsed.range,
+}) ?? { type: 'working-tree' };
 
 try {
   const sessionId =
@@ -120,14 +116,17 @@ try {
     ? await sharePlanFile({
         agent: parsed.agentBackend ?? undefined,
         codiffVersion: packageJson.version,
+        forcePublic: parsed.public,
         openExternal,
         planFile: planFilePath,
+        repositoryPath: parsed.requestedPath,
         serviceUrlOverride: process.env.CODIFF_SHARE_SERVER_URL,
         sessionId: sessionId ?? undefined,
       })
     : await shareWalkthroughFile({
         agent: parsed.agentBackend ?? undefined,
         codiffVersion: packageJson.version,
+        forcePublic: parsed.public,
         openExternal,
         repositoryPath: parsed.requestedPath,
         serviceUrlOverride: process.env.CODIFF_SHARE_SERVER_URL,

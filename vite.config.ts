@@ -1,21 +1,23 @@
+import { availableParallelism } from 'node:os';
 import { resolve } from 'node:path';
 import nkzw from '@nkzw/oxlint-config';
 import babel from '@rolldown/plugin-babel';
-import tailwindcss from '@tailwindcss/vite';
 import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import { defineConfig } from 'vite-plus';
 
+const testWorkers = Math.max(1, Math.min(4, Math.floor(availableParallelism() / 6)));
+
 export default defineConfig({
   base: './',
+  build: {
+    chunkSizeWarningLimit: 10 * 1024,
+  },
   fmt: {
     experimentalSortImports: {
       newlinesBetween: false,
     },
     experimentalSortPackageJson: {
       sortScripts: true,
-    },
-    experimentalTailwindcss: {
-      stylesheet: 'core/App.css',
     },
     ignorePatterns: [
       'coverage/',
@@ -24,7 +26,12 @@ export default defineConfig({
       'pnpm-lock.yaml',
       'core/__generated__/',
       'core/node_modules/',
-      'core/translations/',
+      'service/node_modules/',
+      'service/dist/',
+      'web/.fate/',
+      'web/.void/',
+      'web/.wrangler/',
+      'web/node_modules/',
     ],
     singleQuote: true,
   },
@@ -35,6 +42,12 @@ export default defineConfig({
       'dist/',
       'electron/',
       'core/node_modules/',
+      'service/node_modules/',
+      'service/dist/',
+      'web/.fate/',
+      'web/.void/',
+      'web/.wrangler/',
+      'web/node_modules/',
       'vite.config.ts.timestamp-*',
     ],
     options: { typeAware: true, typeCheck: true },
@@ -47,11 +60,25 @@ export default defineConfig({
       },
     ],
   },
+  optimizeDeps: {
+    // ghostty-web inlines its WASM binary as a huge base64 data URL, which
+    // stalls the dep optimizer; it ships as plain ESM, so skip prebundling.
+    exclude: ['ghostty-web'],
+  },
+  pack: {
+    copy: [
+      { from: 'fonts', to: 'dist' },
+      { from: 'App.css.d.ts', rename: 'styles.css.d.ts', to: 'dist' },
+    ],
+    dts: false,
+    loader: {
+      '.svg': 'dataurl',
+    },
+  },
   plugins: [
     babel({
       presets: [reactCompilerPreset()],
     }),
-    tailwindcss(),
     react(),
   ],
   resolve: {
@@ -64,6 +91,7 @@ export default defineConfig({
         replacement: `${resolve(__dirname, 'node_modules/react-dom')}/$1`,
       },
     ],
+    conditions: ['@nkzw/codiff-source', 'module', 'browser', 'development|production'],
     dedupe: ['react', 'react-dom'],
   },
   run: {
@@ -77,7 +105,13 @@ export default defineConfig({
     '*': 'vp check --fix',
   },
   test: {
-    include: ['core/**/*.test.{ts,tsx}', 'electron/**/*.test.ts'],
+    include: [
+      'core/**/*.test.{ts,tsx}',
+      'electron/**/*.test.ts',
+      'service/**/*.test.ts',
+      'web/**/*.test.{ts,tsx}',
+    ],
+    maxWorkers: testWorkers,
     setupFiles: ['./core/__tests__/setup.ts'],
   },
   worker: {

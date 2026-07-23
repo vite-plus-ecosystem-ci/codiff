@@ -31,6 +31,14 @@ const sourceCapabilitiesByType = {
     startInHistoryWhenEmpty: true,
     viewedFileState: false,
   },
+  'branch-working-tree': {
+    emptyTitle: 'No changes',
+    historySource: true,
+    lazyDiffContent: true,
+    preloadDiffSearchContent: true,
+    startInHistoryWhenEmpty: true,
+    viewedFileState: true,
+  },
   commit: {
     emptyTitle: 'No changes in commit',
     historySource: false,
@@ -65,21 +73,22 @@ const sourceCapabilitiesByType = {
   },
 } satisfies Record<ReviewSource['type'], SourceCapabilities>;
 
-export const getSourceCapabilities = (source: ReviewSource) =>
-  sourceCapabilitiesByType[source.type];
+const getSourceCapabilities = (source: ReviewSource) => sourceCapabilitiesByType[source.type];
 
 export const getSourceKey = (source: ReviewSource) =>
   source.type === 'commit'
     ? `commit:${source.ref}`
     : source.type === 'branch-diff'
       ? `branch-diff:${source.ref}:${source.baseRef}:${source.headRef}`
-      : source.type === 'branch'
-        ? `branch:${source.ref}`
-        : source.type === 'range'
-          ? `range:${rangeLabel(source)}`
-          : source.type === 'pull-request'
-            ? `pull-request:${source.provider ?? ''}:${source.host ?? ''}:${source.projectPath ?? `${source.owner ?? ''}/${source.repo ?? ''}`}#${source.number ?? source.url}`
-            : 'working-tree';
+      : source.type === 'branch-working-tree'
+        ? `branch-working-tree:${source.ref}:${source.baseRef}:${source.headRef}`
+        : source.type === 'branch'
+          ? `branch:${source.ref}`
+          : source.type === 'range'
+            ? `range:${rangeLabel(source)}`
+            : source.type === 'pull-request'
+              ? `pull-request:${source.provider ?? ''}:${source.host ?? ''}:${source.projectPath ?? `${source.owner ?? ''}/${source.repo ?? ''}`}#${source.number ?? source.url}`
+              : 'working-tree';
 
 const getErrorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
@@ -105,18 +114,28 @@ export const getSourceLabel = (source: ReviewSource) =>
     ? getShortRef(source.ref)
     : source.type === 'branch' || source.type === 'branch-diff'
       ? `Branch vs ${source.ref}`
-      : source.type === 'range'
-        ? rangeLabel(source)
-        : source.type === 'pull-request'
-          ? source.number
-            ? `${source.provider === 'gitlab' ? 'MR' : 'PR'} #${source.number}`
-            : source.provider === 'gitlab'
-              ? 'Merge request'
-              : 'Pull request'
-          : 'Uncommitted';
+      : source.type === 'branch-working-tree'
+        ? `Local + branch vs ${source.ref}`
+        : source.type === 'range'
+          ? rangeLabel(source)
+          : source.type === 'pull-request'
+            ? source.number
+              ? `${source.provider === 'gitlab' ? 'MR' : 'PR'} #${source.number}`
+              : source.provider === 'gitlab'
+                ? 'Merge request'
+                : 'Pull request'
+            : 'Uncommitted';
 
 export const getHistorySource = (source: ReviewSource): ReviewSource | undefined =>
   getSourceCapabilities(source).historySource ? source : undefined;
+
+export const getRefreshSource = (source: ReviewSource): ReviewSource =>
+  source.type === 'branch-working-tree'
+    ? {
+        ref: source.ref,
+        type: 'branch-working-tree',
+      }
+    : source;
 
 export const supportsLazyDiffContent = (source: ReviewSource) =>
   getSourceCapabilities(source).lazyDiffContent;
@@ -139,6 +158,8 @@ export const getEmptySourceDetail = (
 ): { kind: 'code' | 'text'; text: string; title?: string } =>
   source.type === 'commit'
     ? { kind: 'text', text: getShortRef(source.ref) }
-    : source.type === 'branch' || source.type === 'branch-diff'
+    : source.type === 'branch' ||
+        source.type === 'branch-diff' ||
+        source.type === 'branch-working-tree'
       ? { kind: 'text', text: source.ref }
       : { kind: 'code', text: compactPath(root), title: root };
