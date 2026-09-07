@@ -19,9 +19,19 @@ allowBuilds:
 blockExoticSubdeps: false
 minimumReleaseAgeExclude:
   - '@nkzw/*'
+  - '@voidzero-dev/vite-plus-core@0.0.0-commit.6d65e1780791e2b24b27cf7deb63f57a420e78de'
+  - '@voidzero-dev/vite-plus-darwin-arm64@0.0.0-commit.6d65e1780791e2b24b27cf7deb63f57a420e78de'
+  - '@voidzero-dev/vite-plus-darwin-x64@0.0.0-commit.6d65e1780791e2b24b27cf7deb63f57a420e78de'
+  - '@voidzero-dev/vite-plus-linux-arm64-gnu@0.0.0-commit.6d65e1780791e2b24b27cf7deb63f57a420e78de'
+  - '@voidzero-dev/vite-plus-linux-arm64-musl@0.0.0-commit.6d65e1780791e2b24b27cf7deb63f57a420e78de'
+  - '@voidzero-dev/vite-plus-linux-x64-gnu@0.0.0-commit.6d65e1780791e2b24b27cf7deb63f57a420e78de'
+  - '@voidzero-dev/vite-plus-linux-x64-musl@0.0.0-commit.6d65e1780791e2b24b27cf7deb63f57a420e78de'
+  - '@voidzero-dev/vite-plus-win32-arm64-msvc@0.0.0-commit.6d65e1780791e2b24b27cf7deb63f57a420e78de'
+  - '@voidzero-dev/vite-plus-win32-x64-msvc@0.0.0-commit.6d65e1780791e2b24b27cf7deb63f57a420e78de'
+  - vite-plus@0.0.0-commit.6d65e1780791e2b24b27cf7deb63f57a420e78de
 catalog:
-  vite: npm:@voidzero-dev/vite-plus-core@^0.3.0
-  vite-plus: ^0.3.0
+  vite: npm:@voidzero-dev/vite-plus-core@0.0.0-commit.6d65e1780791e2b24b27cf7deb63f57a420e78de
+  vite-plus: 0.0.0-commit.6d65e1780791e2b24b27cf7deb63f57a420e78de
   vitest: 4.1.11
 nodeLinker: hoisted
 onlyBuiltDependencies:
@@ -32,8 +42,8 @@ onlyBuiltDependencies:
   - unrs-resolver
 overrides:
   extract-zip>yauzl: ^3.4.0
-  vite: 'catalog:'
-  vitest: 'catalog:'
+  vite@*: 'catalog:'
+  vitest@*: 'catalog:'
 patchedDependencies:
   native-keymap@3.3.9: patches/native-keymap@3.3.9.patch
 peerDependencyRules:
