@@ -1,5 +1,5 @@
 import { defineConfig } from 'vite-plus';
 
 export default defineConfig({
-  pack: { deps: { resolveDepSubpath: true }, copy: [], dts: false },
+  pack: { copy: [], deps: { resolveDepSubpath: true }, dts: false },
 });
