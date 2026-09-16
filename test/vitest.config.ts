@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-plugin';
-import { defineConfig } from 'vitest/config';
+import { defineConfig } from 'vite-plus';
 
 export default defineConfig({
   plugins: [
@@ -26,6 +26,7 @@ export default defineConfig({
     })),
   ],
   test: {
+    clearMocks: false,
     include: ['**/*.integration.ts'],
     setupFiles: ['./setup.cloudflare.ts'],
   },
