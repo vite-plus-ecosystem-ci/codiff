@@ -24,10 +24,19 @@ minimumReleaseAgeExclude:
   - '@void/*'
   - react-fate
   - void
+  - '@voidzero-dev/vite-plus-core@0.0.0-commit.7cb75b46f7a73413ee0803eaac3f6a6b6763f158'
+  - '@voidzero-dev/vite-plus-darwin-arm64@0.0.0-commit.7cb75b46f7a73413ee0803eaac3f6a6b6763f158'
+  - '@voidzero-dev/vite-plus-darwin-x64@0.0.0-commit.7cb75b46f7a73413ee0803eaac3f6a6b6763f158'
+  - '@voidzero-dev/vite-plus-linux-arm64-gnu@0.0.0-commit.7cb75b46f7a73413ee0803eaac3f6a6b6763f158'
+  - '@voidzero-dev/vite-plus-linux-arm64-musl@0.0.0-commit.7cb75b46f7a73413ee0803eaac3f6a6b6763f158'
+  - '@voidzero-dev/vite-plus-linux-x64-gnu@0.0.0-commit.7cb75b46f7a73413ee0803eaac3f6a6b6763f158'
+  - '@voidzero-dev/vite-plus-linux-x64-musl@0.0.0-commit.7cb75b46f7a73413ee0803eaac3f6a6b6763f158'
+  - '@voidzero-dev/vite-plus-win32-arm64-msvc@0.0.0-commit.7cb75b46f7a73413ee0803eaac3f6a6b6763f158'
+  - '@voidzero-dev/vite-plus-win32-x64-msvc@0.0.0-commit.7cb75b46f7a73413ee0803eaac3f6a6b6763f158'
+  - vite-plus@0.0.0-commit.7cb75b46f7a73413ee0803eaac3f6a6b6763f158
 catalog:
-  vite: npm:@voidzero-dev/vite-plus-core@1.0.0
-  vite-plus: 1.0.0
-  vitest: 5.0.2
+  vite: npm:@voidzero-dev/vite-plus-core@0.0.0-commit.7cb75b46f7a73413ee0803eaac3f6a6b6763f158
+  vite-plus: 0.0.0-commit.7cb75b46f7a73413ee0803eaac3f6a6b6763f158
 nodeLinker: hoisted
 onlyBuiltDependencies:
   - '@nkzw/mdx-editor'
@@ -44,7 +53,5 @@ patchedDependencies:
 peerDependencyRules:
   allowAny:
     - vite
-    - vitest
   allowedVersions:
     vite: '*'
-    vitest: '*'

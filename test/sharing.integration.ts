@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
-import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, test } from 'vite-plus/test';
 import { handleSharingApiRequest, type SharingBucket, type SharingEnv } from '../service/api.ts';
 import { hashUploadIntentSecret } from '../service/upload-intent.ts';
 
