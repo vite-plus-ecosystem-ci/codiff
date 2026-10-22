@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { expect, test } from 'vitest';
+import { expect, test } from 'vite-plus/test';
 
 const readBuildFile = (path: string) =>
   readFile(new URL(`../web/dist/${path}`, import.meta.url), 'utf8');
