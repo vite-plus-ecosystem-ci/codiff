@@ -42,10 +42,18 @@ minimumReleaseAgeExclude:
   - react-fate
   - void
   - '@pierre/*'
+  - '@tsrs/darwin-arm64@7.1.0-beta.tsrs2'
+  - '@tsrs/darwin-x64@7.1.0-beta.tsrs2'
+  - '@tsrs/linux-arm64-gnu@7.1.0-beta.tsrs2'
+  - '@tsrs/linux-arm64-musl@7.1.0-beta.tsrs2'
+  - '@tsrs/linux-x64-gnu@7.1.0-beta.tsrs2'
+  - '@tsrs/linux-x64-musl@7.1.0-beta.tsrs2'
+  - '@tsrs/win32-arm64@7.1.0-beta.tsrs2'
+  - '@tsrs/win32-x64@7.1.0-beta.tsrs2'
+  - tsrs@7.1.0-beta.tsrs2
 catalog:
-  vite: npm:@voidzero-dev/vite-plus-core@1.6.0
-  vite-plus: 1.6.0
-  vitest: 5.1.0
+  vite: npm:@voidzero-dev/vite-plus-core@0.0.0-commit.309b96aaf065d95452ca218076c666671cf36440
+  vite-plus: 0.0.0-commit.309b96aaf065d95452ca218076c666671cf36440
 nodeLinker: hoisted
 onlyBuiltDependencies:
   - '@nkzw/mdx-editor'
@@ -62,7 +70,5 @@ patchedDependencies:
 peerDependencyRules:
   allowAny:
     - vite
-    - vitest
   allowedVersions:
     vite: '*'
-    vitest: '*'
